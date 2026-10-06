@@ -2,6 +2,7 @@
   "name": "open-runner",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "Open Runner — web UI for the OpenCode coding agent on open-weight models via SCX",
   "workspaces": [
     "server",

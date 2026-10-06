@@ -11,6 +11,20 @@ chatbot designer.
 - **Playground** — chat with any SCX model directly (no agent), with tool-calling, JSON mode,
   an embeddings-backed knowledge base and browser voice.
 
+## Screenshots
+
+The agent working in a project — live tool calls, reasoning, and a markdown summary:
+
+![Open Runner — the agent reading a project and summarising it](docs/images/runner.jpg)
+
+Point it at any folder; resume past sessions; approve edits and commands as they happen:
+
+![Open Runner — Runner landing view](docs/images/landing.jpg)
+
+Playground — compare SCX models directly with full generation controls:
+
+![Open Runner — Playground](docs/images/playground.jpg)
+
 ## Requirements
 
 - Node 22+
@@ -125,3 +139,10 @@ you run this in — Docker's bridge NAT doesn't restrict outbound on its own.
 | `web/src/AgentPanel.tsx` | Runner transcript, approvals, model picker, Changes view |
 | `web/src/Sidebar.tsx` | Project folder picker (Runner) and model/prompt settings (Playground) |
 | `web/src/styles.css`, `brand.tsx` | Theme tokens and logo |
+
+## License
+
+[MIT](LICENSE) © Cintelis.
+
+> Open Runner ships a security-testing toolchain for **authorised** testing only (your own
+> systems, labs, CTFs). You are responsible for how you use it.
