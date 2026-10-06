@@ -1,0 +1,93 @@
+# Open Runner in Docker: UI + login in `runner`, the agent in `agent`.
+#
+#   powershell -File docker/setup.ps1   # once: writes .env (password, tokens, SCX key)
+#   docker compose up -d --build
+#   open http://localhost:8790
+#
+# Isolation model (direct-egress — no network approval gate):
+#   - `agent` has DIRECT internet so scan tools run at full speed (nmap, ping and
+#     raw DNS work too via NET_RAW). There is no per-site approval prompt.
+#   - `agent` still holds NO SCX key: model calls go to runner's /scx/v1 proxy,
+#     which injects the key, so the key never enters the sandbox.
+#   - No host folders are mounted: projects live in the `workspace` volume.
+#   - Both run as non-root with no-new-privileges; the agent drops all caps
+#     except NET_RAW, and bash/edit actions are still approved in the UI.
+#
+# ⚠ The agent has ungated outbound. Only point it at targets you are authorised
+#   to test, and run this on a trusted machine/VM.
+
+name: open-runner
+
+services:
+  runner:
+    build:
+      context: .
+      dockerfile: docker/runner.Dockerfile
+    environment:
+      SCX_API: ${SCX_API:?run docker/setup.ps1 first}
+      OPEN_RUNNER_PASSWORD: ${OPEN_RUNNER_PASSWORD:?run docker/setup.ps1 first}
+      OPEN_RUNNER_SECRET: ${OPEN_RUNNER_SECRET:-}
+      SCX_PROXY_TOKEN: ${SCX_PROXY_TOKEN:?run docker/setup.ps1 first}
+      OPENCODE_URL: http://agent:4096
+      OPEN_RUNNER_WORKSPACE: /workspace
+      OPEN_RUNNER_LOG_DIR: /workspace/logs   # audit log, one JSONL file per day
+    volumes:
+      - runner-data:/data
+      - workspace:/workspace               # same volume as the agent: attachments + audit log
+    ports:
+      - "127.0.0.1:${OPEN_RUNNER_PORT:-8790}:8790"   # localhost only; put TLS in front before exposing
+    networks: [net]
+    depends_on: [agent]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  agent:
+    build:
+      context: .
+      dockerfile: docker/agent.Dockerfile
+    environment:
+      SCX_PROXY_TOKEN: ${SCX_PROXY_TOKEN:?run docker/setup.ps1 first}
+      OPENCODE_ENABLE_EXA: "1"           # turns on OpenCode's websearch tool (Exa)
+    networks: [net]
+    volumes:
+      - workspace:/workspace
+      - agent-data:/home/node/.local/share/opencode
+    cap_drop: [ALL]
+    cap_add: [NET_RAW]                   # raw sockets for nmap / ping / traceroute
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 512
+    mem_limit: 4g
+    cpus: 2
+    restart: unless-stopped
+
+  # Passive egress logger: shares the agent's network namespace and sniffs its
+  # outbound traffic (tcpdump), recording distinct destinations + DNS lookups to
+  # /workspace/logs/egress-<date>.jsonl. Log-only — it never blocks traffic and
+  # is not in the data path, so scans keep full speed.
+  egress-logger:
+    image: open-runner-agent
+    command: ["node", "/usr/local/lib/egress-logger.mjs"]
+    network_mode: "service:agent"        # see the agent's connections
+    user: root                           # needs CAP_NET_RAW effective (agent image defaults to non-root)
+    environment:
+      OPEN_RUNNER_LOG_DIR: /workspace/logs
+    volumes:
+      - workspace:/workspace
+    cap_drop: [ALL]
+    # NET_RAW: capture; SETUID/SETGID: tcpdump drops to its own user;
+    # DAC_OVERRIDE: write the log into /workspace/logs (owned by the agent's user).
+    cap_add: [NET_RAW, SETUID, SETGID, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    depends_on: [agent]
+    restart: unless-stopped
+
+networks:
+  net: {}   # normal bridge: agent + runner share it, agent reaches the internet via NAT
+
+volumes:
+  workspace: {}
+  agent-data: {}
+  runner-data: {}

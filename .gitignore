@@ -1,0 +1,17 @@
+# dependencies / build
+node_modules/
+dist/
+
+# secrets & local config — never commit
+.env
+.env.*
+!.env.example
+*.local
+auth.json
+*.pem
+*.key
+
+# os / logs
+.DS_Store
+npm-debug.log*
+*.log

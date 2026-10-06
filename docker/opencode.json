@@ -1,0 +1,239 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "scx/GLM-5.3",
+  "small_model": "scx/GLM-5.3-Flash",
+  "disabled_providers": [
+    "opencode"
+  ],
+  "autoupdate": false,
+  "share": "disabled",
+  "permission": {
+    "edit": "ask",
+    "bash": "ask",
+    "webfetch": "allow",
+    "websearch": "allow"
+  },
+  "agent": {
+    "build": {
+      "model": "scx/GLM-5.3"
+    },
+    "plan": {
+      "model": "scx/GLM-5.3"
+    }
+  },
+  "provider": {
+    "scx": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "SCX.ai",
+      "options": {
+        "baseURL": "http://runner:8790/scx/v1",
+        "apiKey": "{env:SCX_PROXY_TOKEN}"
+      },
+      "models": {
+        "GLM-5.3": {
+          "name": "GLM-5.3",
+          "limit": {
+            "context": 1048576,
+            "output": 131072
+          }
+        },
+        "GLM-5.3-Flash": {
+          "name": "GLM-5.3-Flash",
+          "limit": {
+            "context": 1048576,
+            "output": 131072
+          },
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          }
+        },
+        "coder": {
+          "name": "coder",
+          "limit": {
+            "context": 196608,
+            "output": 4096
+          }
+        },
+        "DeepSeek-V3.1": {
+          "name": "DeepSeek-V3.1",
+          "limit": {
+            "context": 131072,
+            "output": 7168
+          }
+        },
+        "DeepSeek-V4-flash": {
+          "name": "DeepSeek-V4-flash",
+          "limit": {
+            "context": 1048576,
+            "output": 4096
+          }
+        },
+        "DeepSeek-V4-pro": {
+          "name": "DeepSeek-V4-pro",
+          "limit": {
+            "context": 1048576,
+            "output": 4096
+          }
+        },
+        "DeepSeek-V4.1-flash": {
+          "name": "DeepSeek-V4.1-flash",
+          "limit": {
+            "context": 1048576,
+            "output": 384000
+          },
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          }
+        },
+        "gemma-4-31B-it": {
+          "name": "gemma-4-31B-it",
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          },
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          }
+        },
+        "GLM-5.2": {
+          "name": "GLM-5.2",
+          "limit": {
+            "context": 1048576,
+            "output": 4096
+          }
+        },
+        "GLM-5.2-Fast": {
+          "name": "GLM-5.2-Fast",
+          "limit": {
+            "context": 1048576,
+            "output": 4096
+          }
+        },
+        "gpt-oss-120b": {
+          "name": "gpt-oss-120b",
+          "limit": {
+            "context": 131072,
+            "output": 131072
+          }
+        },
+        "Kimi-K2.7-Code": {
+          "name": "Kimi-K2.7-Code",
+          "limit": {
+            "context": 262144,
+            "output": 262144
+          },
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          }
+        },
+        "Kimi-K3": {
+          "name": "Kimi-K3",
+          "limit": {
+            "context": 1048576,
+            "output": 1048576
+          },
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          }
+        },
+        "Llama-4-Maverick-17B-128E-Instruct": {
+          "name": "Llama-4-Maverick-17B-128E-Instruct",
+          "limit": {
+            "context": 131072,
+            "output": 4096
+          },
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          }
+        },
+        "MAGPiE": {
+          "name": "MAGPiE",
+          "limit": {
+            "context": 131072,
+            "output": 131072
+          }
+        },
+        "Meta-Llama-3.3-70B-Instruct": {
+          "name": "Meta-Llama-3.3-70B-Instruct",
+          "limit": {
+            "context": 131072,
+            "output": 3072
+          }
+        },
+        "MiniMax-M2.7": {
+          "name": "MiniMax-M2.7",
+          "limit": {
+            "context": 192000,
+            "output": 8192
+          }
+        },
+        "Qwen3-32B": {
+          "name": "Qwen3-32B",
+          "limit": {
+            "context": 32768,
+            "output": 4096
+          }
+        },
+        "Qwen3.8-Max": {
+          "name": "Qwen3.8-Max",
+          "limit": {
+            "context": 1000000,
+            "output": 131072
+          },
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
