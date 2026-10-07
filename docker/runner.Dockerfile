@@ -3,7 +3,7 @@
 #
 # Stage 1 compiles both workspaces; stage 2 ships only the compiled output and
 # production dependencies (no TypeScript, tsx or Vite at runtime).
-FROM node:22-bookworm-slim AS build
+FROM node:25-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY server/package.json server/
@@ -14,7 +14,7 @@ COPY server server
 COPY web web
 RUN npm run build
 
-FROM node:22-bookworm-slim
+FROM node:25-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=8790
 COPY package.json package-lock.json ./

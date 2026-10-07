@@ -3,7 +3,7 @@
 # key: model calls go through the key-injecting proxy in the runner container.
 # It has direct internet (see docker-compose.yml); outbound is logged by the
 # egress-logger sidecar, not gated.
-FROM node:22-bookworm-slim
+FROM node:25-bookworm-slim
 
 # Tools the agent commonly reaches for. Add your own (nmap, semgrep, …) here.
 RUN apt-get update \
