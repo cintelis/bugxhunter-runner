@@ -264,8 +264,10 @@ function UnlockDialog({ status, onClose }: { status: VaultStatus; onClose: () =>
               <input id="v-unlock-pass" type="password" autoFocus autoComplete="current-password" value={pass} onChange={(e) => setPass(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && pass) withPasskey(); }} />
             </>
           )}
-          <div className="perm-actions">
-            <button className="btn primary sm" autoFocus={!legacy} disabled={busy || !passkey || (legacy && !pass)} onClick={withPasskey}>{busy ? "waiting for the authenticator…" : "unlock with passkey"}</button>
+          <div className="perm-actions center">
+            <button className="btn primary wide" autoFocus={!legacy} disabled={busy || !passkey || (legacy && !pass)} onClick={withPasskey}>{busy ? "waiting for the authenticator…" : "unlock with passkey →"}</button>
+          </div>
+          <div className="login-links">
             {password && <button className="link-btn" disabled={busy} onClick={() => { setMode("password"); setError(null); }}>use the backup passphrase</button>}
             {recovery && <button className="link-btn" disabled={busy} onClick={() => { setMode("recovery"); setError(null); }}>use the recovery code</button>}
           </div>
@@ -275,9 +277,12 @@ function UnlockDialog({ status, onClose }: { status: VaultStatus; onClose: () =>
         <>
           <label htmlFor="v-unlock-pw">Backup passphrase</label>
           <input id="v-unlock-pw" type="password" autoFocus autoComplete="current-password" value={pass} onChange={(e) => setPass(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && pass) withPassword(); }} />
-          <div className="perm-actions">
-            <button className="btn primary sm" disabled={busy || !pass} onClick={withPassword}>{busy ? "unlocking…" : "unlock"}</button>
+          <div className="perm-actions center">
+            <button className="btn primary wide" disabled={busy || !pass} onClick={withPassword}>{busy ? "unlocking…" : "unlock →"}</button>
+          </div>
+          <div className="login-links">
             <button className="link-btn" disabled={busy} onClick={() => { setMode("passkey"); setError(null); }}>use the passkey instead</button>
+            {recovery && <button className="link-btn" disabled={busy} onClick={() => { setMode("recovery"); setError(null); }}>use the recovery code</button>}
           </div>
         </>
       )}
@@ -287,9 +292,12 @@ function UnlockDialog({ status, onClose }: { status: VaultStatus; onClose: () =>
           <label htmlFor="v-code">Recovery code</label>
           <input id="v-code" type="text" className="mono" autoFocus autoComplete="off" spellCheck={false} placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-X"
             value={code} onChange={(e) => setCode(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && looksLikeRecoveryCode(code)) withRecovery(); }} />
-          <div className="perm-actions">
-            <button className="btn primary sm" disabled={busy || !looksLikeRecoveryCode(code)} onClick={withRecovery}>{busy ? "unlocking…" : "unlock"}</button>
+          <div className="perm-actions center">
+            <button className="btn primary wide" disabled={busy || !looksLikeRecoveryCode(code)} onClick={withRecovery}>{busy ? "unlocking…" : "unlock →"}</button>
+          </div>
+          <div className="login-links">
             <button className="link-btn" disabled={busy} onClick={() => { setMode("passkey"); setError(null); }}>use the passkey instead</button>
+            {password && <button className="link-btn" disabled={busy} onClick={() => { setMode("password"); setError(null); }}>use the backup passphrase</button>}
           </div>
         </>
       )}
