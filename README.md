@@ -82,8 +82,9 @@ docker compose up -d --build          # build locally, or `docker compose pull &
                                       # for the published images (set BXH_VERSION in .env to pin a signed release)
 ```
 
-Open **http://localhost:8790** and set up the [vault](#key-vault) in the sidebar: it seals your
-SCX key and turns on passkey sign-in. (`setup.ps1 -CopyScxKey` copies
+The images are multi-arch (linux/amd64 and linux/arm64, so Apple Silicon and Graviton run them
+natively). Open **http://localhost:8790** and set up the [vault](#key-vault) in the sidebar: it
+seals your SCX key and turns on passkey sign-in. (`setup.ps1 -CopyScxKey` copies
 the key into `.env` instead, in the clear.)
 
 Two containers:
