@@ -1,41 +1,22 @@
-export interface SCXModel {
-  id: string;
-  name: string;
-  context_length: number | null;
-  max_output_length: number | null;
-  input_modalities: string[];
-  output_modalities: string[];
-  supported_features: string[];
-  supported_sampling_parameters: string[];
-  pricing: Record<string, string>;
-  description?: string;
-  datacenters?: { country_code: string }[];
-}
+import type { ToolDef as WireToolDef } from "../../shared/scx";
 
-export interface ToolDef {
-  type: "function";
-  function: {
-    name: string;
-    description?: string;
-    parameters?: Record<string, unknown>;
-  };
-}
-
-export interface ToolCall {
-  id: string;
-  type: "function";
-  function: { name: string; arguments: string };
-}
+export type { SCXModel, ToolCall } from "../../shared/scx";
 
 export interface RagSource {
   doc: string;
   score: number;
 }
 
+/** A tool definition as edited in the Playground: the wire shape plus a UI-only key. */
+export interface ToolDef extends WireToolDef {
+  /** UI-only stable key for the editor (see tools.ts); stripped before sending. */
+  id?: string;
+}
+
 export interface ChatMsg {
   role: "system" | "user" | "assistant" | "tool";
   content: string | null;
-  tool_calls?: ToolCall[];
+  tool_calls?: import("../../shared/scx").ToolCall[];
   tool_call_id?: string;
   /** UI-only: live token usage attached to assistant turns. */
   usage?: { prompt?: number; completion?: number; reasoning?: number };

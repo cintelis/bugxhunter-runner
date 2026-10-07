@@ -2,66 +2,44 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   agentCreateSession, agentPrompt, agentReplyPermission, agentAbort, agentDiff, openAgentEvents, agentAnswerQuestion,
   agentLoadSession, agentCommands, agentRunCommand, agentCompact, agentPending,
-  type AgentEvent, type AgentStatus, type AgentQuestion, type FileDiff, type Tokens, type Todo, type SlashCommand,
-  type FileUpload, type StoredMessage,
+  type AgentEvent, type AgentStatus, type FileDiff, type Todo, type SlashCommand, type FileUpload, type StoredMessage,
 } from "./agentApi";
+import type { FilePart, MessagePart, PermissionRequest, ToolPart } from "../../shared/agent";
 import { Markdown } from "./Markdown";
-import { lineDiff, withContext } from "./diff";
-import { EgressPrompts } from "./EgressPrompts";
-import type { EgressRequest } from "./egress";
-import { Composer, LOCAL_COMMANDS, formatTokens, formatBytes, type AgentName } from "./Composer";
+import { Composer, LOCAL_COMMANDS, type AgentName } from "./Composer";
+import { formatBytes, formatTokens } from "./format";
 import { TodoPanel } from "./TodoPanel";
+import { BootSequence, TerminalBar, type BootLine } from "./Terminal";
+import { DiffModal } from "./DiffModal";
+import { QuestionCard, type QuestionReq } from "./QuestionCard";
 
-interface ToolPart {
-  type: "tool";
-  callID: string;
-  tool: string;
-  status: string;
-  title?: string;
-  input?: Record<string, unknown>;
-  output?: string;
-  error?: string;
-}
-interface FilePart {
-  type: "file";
-  id: string;
-  filename?: string;
-  mime?: string;
-  /** Inline image (data: URL) for a thumbnail. */
-  url?: string;
-  size?: number;
-}
-type Part =
-  | { type: "text"; id: string; text: string }
-  | { type: "reasoning"; id: string; text: string }
-  | ToolPart
-  | FilePart;
+type Part = MessagePart;
 
 interface AgentMessage {
   id: string;
   role: "user" | "assistant";
   parts: Part[];
-  tokens?: Tokens;
+  tokens?: StoredMessage["tokens"];
   cost?: number;
   model?: string;
   error?: string;
 }
-interface PermReq {
-  permissionID: string;
-  sessionID: string;
-  permType?: string;
-  title?: string;
-  pattern?: string | string[];
-}
-interface QuestionReq {
-  requestID: string;
-  questions: AgentQuestion[];
-}
+type PermReq = PermissionRequest;
 
 const AGENT_BLURB: Record<AgentName, string> = {
   build: "Edits files and runs commands. You approve each change.",
   plan: "Read-only. Explores the code and writes a plan.",
 };
+
+/** The typed boot sequence shown on an empty session (the site's hero terminal). */
+function bootLines(project: string, agent: AgentName): BootLine[] {
+  return [
+    { kind: "p", text: `./bxh --project ${project} --agent ${agent}`, pace: 26 },
+    { kind: "out", text: "Loading project context..." },
+    { kind: "out", text: AGENT_BLURB[agent], pace: 18 },
+    { kind: "ok", text: "Agent ready ", ok: "OK" },
+  ];
+}
 
 const SUGGESTIONS = [
   "Summarise the architecture of this project.",
@@ -78,7 +56,6 @@ interface Props {
   directory: string;
   model: string;
   setModel: (m: string) => void;
-  egressPending: EgressRequest[];
   /** Session to open (from the session list); `n` changes on every request. */
   resume: { id: string | null; n: number } | null;
   /** Tell the shell which session is showing, and when the list may have changed. */
@@ -87,7 +64,7 @@ interface Props {
 }
 
 export function AgentPanel({
-  status, statusError, directory, model, setModel, egressPending, resume, onActiveSession, onSessionsChanged,
+  status, statusError, directory, model, setModel, resume, onActiveSession, onSessionsChanged,
 }: Props) {
   const [agent, setAgent] = useState<AgentName>("build");
   const [sessionID, setSessionID] = useState<string | null>(null);
@@ -141,7 +118,7 @@ export function AgentPanel({
   }
   useEffect(() => {
     if (stick.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [messages, perms, questions, egressPending]);
+  }, [messages, perms, questions]);
 
   // --- transcript mutation helpers ----------------------------------------
   const upsert = useCallback((id: string, patch: (m: AgentMessage) => void) => {
@@ -244,12 +221,20 @@ export function AgentPanel({
     streamAbort.current?.abort();
     const ctrl = new AbortController();
     streamAbort.current = ctrl;
-    // Fire-and-forget; the stream lives as long as the session is shown.
-    openAgentEvents(id, directory, onEvent, ctrl.signal).catch((err) => {
+    // Fire-and-forget; the stream lives (reconnecting as needed) as long as
+    // the session is shown. After a reconnect, re-check what is waiting on us.
+    openAgentEvents(id, directory, onEvent, ctrl.signal, () => restorePending(id, ctrl)).catch((err) => {
       if (err?.name !== "AbortError") setError(String(err?.message ?? err));
     });
-    // Catch up on approvals/questions raised before this stream attached (e.g.
-    // after a page reload) — otherwise the agent sits blocked with no visible card.
+    restorePending(id, ctrl);
+  }
+
+  /**
+   * Catch up on approvals/questions raised while no stream was attached (page
+   * reload, dropped connection) — otherwise the agent sits blocked with no
+   * visible card.
+   */
+  function restorePending(id: string, ctrl: AbortController) {
     agentPending(id, directory).then(({ permissions, questions: qs }) => {
       if (ctrl.signal.aborted) return;
       if (permissions.length) {
@@ -479,33 +464,25 @@ export function AgentPanel({
     () => messages.reduce((n, m) => n + (m.tokens?.input ?? 0) + (m.tokens?.output ?? 0), 0),
     [messages],
   );
-  const waiting = perms.length > 0 || questions.length > 0 || egressPending.length > 0;
+  const waiting = perms.length > 0 || questions.length > 0;
 
   return (
     <main className="main">
-      <header className="chat-head">
-        <div className="ch-left">
-          <div className="ch-title">{projectName}</div>
-          <div className="ch-sub mono" title={directory}>{directory}</div>
-        </div>
-        <div className="head-actions">
-          <span className={"status-pill" + (busy ? " live" : "")}>
-            <span className="dot" />{busy ? (waiting ? "waiting for you" : "running") : sessionID ? "idle" : "ready"}
-          </span>
-          {turnTokens > 0 && <span className="token-pill">{formatTokens(turnTokens)} tokens</span>}
-          <button className="btn ghost sm" onClick={viewDiff} disabled={!sessionID}>Changes</button>
-          <button className="btn ghost sm" onClick={newSession} disabled={busy}>New session</button>
-        </div>
-      </header>
+      <TerminalBar title={`bugxhunter@redteam: ~/${projectName}`} tooltip={directory}>
+        <span className={"status-pill" + (busy ? " live" : "")}>
+          <span className="dot" />{busy ? (waiting ? "waiting for you" : "running") : sessionID ? "idle" : "ready"}
+        </span>
+        {turnTokens > 0 && <span className="token-pill">{formatTokens(turnTokens)} tokens</span>}
+        <button className="btn ghost sm" onClick={viewDiff} disabled={!sessionID}>changes</button>
+        <button className="btn ghost sm" onClick={newSession} disabled={busy}>new_session</button>
+      </TerminalBar>
 
-      <div className="transcript" ref={scrollRef} onScroll={onScroll}>
+      <div className="transcript grid-bg" ref={scrollRef} onScroll={onScroll}>
         <div className="transcript-inner">
-          {loading && <p className="muted center">Loading session…</p>}
+          {loading && <p className="muted center mono">Loading session…</p>}
           {!loading && messages.length === 0 && (
             <div className="empty-state">
-              <div className="empty-mark" aria-hidden>▶</div>
-              <h2>What should we run in <span className="grad">{projectName}</span>?</h2>
-              <p>{AGENT_BLURB[agent]}</p>
+              <BootSequence key={`${projectName}:${agent}`} lines={bootLines(projectName, agent)} />
               <div className="suggestions">
                 {SUGGESTIONS.map((s) => (
                   <button className="chip" key={s} onClick={() => (s.startsWith("/") ? send(s) : setDraft(s))}>
@@ -557,11 +534,10 @@ export function AgentPanel({
       </div>
 
       {!atBottom && (
-        <button className="jump-btn" onClick={() => scrollToBottom()} aria-label="Scroll to latest">↓ Latest</button>
+        <button className="jump-btn" onClick={() => scrollToBottom()} aria-label="Scroll to latest">↓ latest</button>
       )}
 
       <div className="composer">
-        <EgressPrompts pending={egressPending} />
         <TodoPanel todos={todos} />
         <Composer
           agent={agent}
@@ -668,150 +644,4 @@ function ToolCard({ t }: { t: ToolPart }) {
       {open && hasBody && <pre className="tool-output">{t.error ? "error: " + t.error : t.output}</pre>}
     </div>
   );
-}
-
-/** The agent's multiple-choice question(s): pick options and/or type an answer, then send. */
-function QuestionCard({ req, onAnswer, onDismiss }: {
-  req: QuestionReq; onAnswer: (answers: string[][]) => void; onDismiss: () => void;
-}) {
-  const [picked, setPicked] = useState<string[][]>(() => req.questions.map(() => []));
-  const [typed, setTyped] = useState<string[]>(() => req.questions.map(() => ""));
-
-  function toggle(qi: number, label: string, multiple?: boolean) {
-    setPicked((cur) => cur.map((sel, i) => {
-      if (i !== qi) return sel;
-      if (!multiple) return sel[0] === label ? [] : [label];
-      return sel.includes(label) ? sel.filter((l) => l !== label) : [...sel, label];
-    }));
-    // A single-choice pick replaces a typed answer.
-    if (!multiple) setTyped((cur) => cur.map((t, i) => (i === qi ? "" : t)));
-  }
-
-  const answers = req.questions.map((q, i) => {
-    const own = typed[i].trim();
-    if (!q.multiple && own) return [own];
-    return own ? [...picked[i], own] : picked[i];
-  });
-  const complete = answers.every((a) => a.length > 0);
-
-  return (
-    <div className="question-card">
-      <div className="perm-title">The agent has a question</div>
-      {req.questions.map((q, qi) => (
-        <div className="q-block" key={qi}>
-          {q.header && <span className="q-header">{q.header}</span>}
-          <div className="q-text">{q.question}</div>
-          {q.multiple && <div className="hint" style={{ marginTop: 0 }}>Choose any that apply.</div>}
-          <div className="q-options" role={q.multiple ? "group" : "radiogroup"}>
-            {q.options.map((o) => {
-              const on = picked[qi].includes(o.label);
-              return (
-                <button
-                  key={o.label}
-                  className={"q-option" + (on ? " on" : "")}
-                  role={q.multiple ? "checkbox" : "radio"}
-                  aria-checked={on}
-                  onClick={() => toggle(qi, o.label, q.multiple)}
-                >
-                  <span className={"q-mark" + (q.multiple ? " box" : "")} aria-hidden>{on ? "✓" : ""}</span>
-                  <span className="q-label">{o.label}</span>
-                  {o.description && <span className="q-desc">{o.description}</span>}
-                </button>
-              );
-            })}
-          </div>
-          {q.custom !== false && (
-            <input
-              type="text"
-              className="q-custom"
-              placeholder="Or type your own answer…"
-              value={typed[qi]}
-              onChange={(e) => {
-                const v = e.target.value;
-                setTyped((cur) => cur.map((t, i) => (i === qi ? v : t)));
-                if (!q.multiple && v.trim()) setPicked((cur) => cur.map((s, i) => (i === qi ? [] : s)));
-              }}
-              onKeyDown={(e) => { if (e.key === "Enter" && complete) onAnswer(answers); }}
-            />
-          )}
-        </div>
-      ))}
-      <div className="perm-actions">
-        <button className="btn primary sm" disabled={!complete} onClick={() => onAnswer(answers)}>Send answer</button>
-        <button className="btn sm" onClick={onDismiss}>Dismiss</button>
-      </div>
-    </div>
-  );
-}
-
-function DiffModal({ diff, onClose }: { diff: FileDiff[] | string; onClose: () => void }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <span>Changes this session</span>
-          <button className="btn ghost sm" onClick={onClose}>Close</button>
-        </div>
-        <div className="modal-body">
-          {typeof diff === "string" ? <pre className="diff-raw">{diff}</pre>
-            : diff.length === 0 ? (
-              <p className="muted">
-                No changes recorded. OpenCode tracks changes only in git repositories — run <code className="mono">git init</code> in
-                the project folder to see them here.
-              </p>
-            )
-            : diff.map((f, i) => <FileDiffView key={`${f.turn ?? 0}-${f.file}-${i}`} f={f} />)}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function FileDiffView({ f }: { f: FileDiff }) {
-  const [open, setOpen] = useState(true);
-  const lines = useMemo(
-    () => (f.patch !== undefined ? patchLines(f.patch) : withContext(lineDiff(f.before ?? "", f.after ?? ""))),
-    [f.patch, f.before, f.after],
-  );
-  return (
-    <div className="file-diff">
-      <button className="file-diff-head" onClick={() => setOpen((v) => !v)}>
-        <span className={"chev" + (open ? " open" : "")}>›</span>
-        <span className="mono">{f.file}</span>
-        {f.turn ? <span className="muted turn">prompt {f.turn}</span> : null}
-        <span className="adds">+{f.additions ?? 0}</span>
-        <span className="dels">−{f.deletions ?? 0}</span>
-      </button>
-      {open && (
-        <pre className="diff-lines">
-          {lines.map((l, i) =>
-            l === null ? <div key={i} className="dl gap">⋯</div>
-            : <div key={i} className={"dl " + l.kind}>{l.kind === "add" ? "+ " : l.kind === "del" ? "- " : "  "}{l.text}</div>,
-          )}
-        </pre>
-      )}
-    </div>
-  );
-}
-
-/** Unified patch -> display lines; hunk headers become gaps, file headers are dropped. */
-function patchLines(patch: string) {
-  const out: ({ kind: "same" | "add" | "del"; text: string } | null)[] = [];
-  let inHunk = false;
-  for (const raw of patch.split("\n")) {
-    const line = raw.replace(/\r$/, "");
-    if (line.startsWith("@@")) { out.push(null); inHunk = true; continue; }
-    if (!inHunk || line.startsWith("\\")) continue;
-    if (line.startsWith("+")) out.push({ kind: "add", text: line.slice(1) });
-    else if (line.startsWith("-")) out.push({ kind: "del", text: line.slice(1) });
-    else out.push({ kind: "same", text: line.slice(1) });
-  }
-  if (out[0] === null) out.shift();
-  if (out.length && out[out.length - 1]?.kind === "same" && out[out.length - 1]?.text === "") out.pop();
-  return out;
 }

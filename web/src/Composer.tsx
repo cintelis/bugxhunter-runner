@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentModel, FileUpload, SlashCommand } from "./agentApi";
+import { formatBytes, formatTokens } from "./format";
 
 export type AgentName = "build" | "plan";
 
@@ -14,6 +15,8 @@ export const LOCAL_COMMANDS: SlashCommand[] = [
 ];
 
 const MAX_FILE = 25 * 1024 * 1024;
+/** Per message, before base64 (the server's body limit is 40 MB after it). */
+const MAX_TOTAL = 30 * 1024 * 1024;
 
 // Terminal-style command history (shared across sessions, survives reloads).
 const HISTORY_KEY = "or_cmd_history";
@@ -112,23 +115,30 @@ export function Composer({ agent, setAgent, model, setModel, models, commands, b
     inputRef.current?.focus();
   }, [draft, onDraftUsed]);
 
-  // Grow the box with its content.
+  // Grow the box with its content (CSS min/max-height bound it).
   useEffect(() => {
     const el = inputRef.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 220) + "px";
+    el.style.height = Math.min(el.scrollHeight, 260) + "px";
   }, [input]);
+
+  /** A click or tap on the card's padding (not on a control) focuses the input. */
+  function focusInput(e: React.MouseEvent) {
+    const t = e.target as HTMLElement;
+    if (t.closest("button, select, input, textarea, a")) return;
+    inputRef.current?.focus();
+  }
 
   // --- slash command menu: open while typing the command name ---
   const allCommands = useMemo(() => {
     const seen = new Set(LOCAL_COMMANDS.map((c) => c.name));
     return [...LOCAL_COMMANDS, ...commands.filter((c) => !seen.has(c.name))];
   }, [commands]);
-  const slash = /^\/(\S*)$/.exec(input);
-  const matches = slash ? allCommands.filter((c) => c.name.startsWith(slash[1].toLowerCase())) : [];
+  const slashQuery = /^\/(\S*)$/.exec(input)?.[1];
+  const matches = slashQuery !== undefined ? allCommands.filter((c) => c.name.startsWith(slashQuery.toLowerCase())) : [];
   const menuOpen = matches.length > 0;
-  useEffect(() => setSel(0), [slash?.[1]]);
+  useEffect(() => setSel(0), [slashQuery]);
 
   function pick(c: SlashCommand) {
     if (!c.hint) {
@@ -144,11 +154,17 @@ export function Composer({ agent, setAgent, model, setModel, models, commands, b
   async function addFiles(list: FileList | File[]) {
     setFileError(null);
     const next: FileUpload[] = [];
+    let total = files.reduce((n, f) => n + f.size, 0);
     for (const f of Array.from(list)) {
       if (f.size > MAX_FILE) {
         setFileError(`${f.name} is over 25 MB.`);
         continue;
       }
+      if (total + f.size > MAX_TOTAL) {
+        setFileError(`Attachments are limited to ${formatBytes(MAX_TOTAL)} per message; ${f.name} doesn't fit.`);
+        continue;
+      }
+      total += f.size;
       const dataUrl = await readAsDataUrl(f);
       next.push({
         name: f.name || `pasted-${Date.now()}.${(f.type.split("/")[1] || "bin").replace(/\W/g, "")}`,
@@ -226,6 +242,7 @@ export function Composer({ agent, setAgent, model, setModel, models, commands, b
 
       <div
         className={"composer-box" + (dragging ? " dragging" : "")}
+        onClick={focusInput}
         onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragging(true); } }}
         onDragLeave={() => setDragging(false)}
         onDrop={(e) => { e.preventDefault(); setDragging(false); if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files); }}
@@ -247,12 +264,14 @@ export function Composer({ agent, setAgent, model, setModel, models, commands, b
           onChange={(e) => { setInput(e.target.value); histIndex.current = -1; }}
           onKeyDown={onKey}
           onPaste={onPaste}
-          rows={1}
-          placeholder={agent === "build" ? "Ask Open Runner to change something…  (/ for commands)" : "Ask Open Runner to plan or explain…  (/ for commands)"}
+          rows={3}
+          placeholder={agent === "build" ? "Ask BugXHunter to change something…  (/ for commands)" : "Ask BugXHunter to plan or explain…  (/ for commands)"}
         />
         <div className="composer-bar">
-          <button className="icon-btn" onClick={() => fileRef.current?.click()} title="Attach files (or paste / drop them)" aria-label="Attach files">
-            📎
+          <button className="icon-btn attach-btn" onClick={() => fileRef.current?.click()} title="Attach files (or paste / drop them)" aria-label="Attach files">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+            </svg>
           </button>
           <input ref={fileRef} type="file" multiple hidden onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }} />
           <div className="agent-switch" role="tablist">
@@ -299,16 +318,4 @@ function readAsDataUrl(f: File): Promise<string> {
     r.onerror = () => reject(r.error);
     r.readAsDataURL(f);
   });
-}
-
-export function formatBytes(n: number) {
-  if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + " MB";
-  if (n >= 1024) return Math.round(n / 1024) + " KB";
-  return n + " B";
-}
-
-export function formatTokens(n: number) {
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(n % 1_000_000 ? 1 : 0) + "M";
-  if (n >= 1000) return Math.round(n / 1000) + "k";
-  return String(n);
 }

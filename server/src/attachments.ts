@@ -29,7 +29,8 @@ const TEXT_EXT = /\.(txt|md|markdown|json|jsonl|ya?ml|toml|ini|cfg|conf|csv|tsv|
 const isText = (name: string, mime: string) =>
   mime.startsWith("text/") || /json|xml|yaml|javascript|typescript|x-sh|x-python|sql/.test(mime) || TEXT_EXT.test(name);
 
-function safeName(name: string) {
+/** A file name that is safe to create inside the project: basename only, no odd characters. */
+export function safeName(name: string) {
   const base = path.basename(name).replace(/[^\w.\- ()]+/g, "_").replace(/^\.+/, "").slice(0, 120);
   return base || "file";
 }

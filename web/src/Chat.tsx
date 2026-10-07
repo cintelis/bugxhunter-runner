@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { BotConfig, ChatMsg, SCXModel, ToolCall } from "./types";
 import { dictate, speechSupported } from "./voice";
 import { Markdown } from "./Markdown";
+import { BootSequence, TerminalBar } from "./Terminal";
 
 interface Props {
   config: BotConfig;
@@ -27,6 +28,22 @@ export function Chat({ config, activeModel, messages, busy, error, onSend, onSto
   const [listening, setListening] = useState(false);
   const dictationRef = useRef<{ stop: () => void } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Grow the box with its content (CSS min/max-height bound it).
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 260) + "px";
+  }, [input]);
+
+  /** A click or tap on the card's padding (not on a control) focuses the input. */
+  function focusInput(e: React.MouseEvent) {
+    const t = e.target as HTMLElement;
+    if (t.closest("button, select, input, textarea, a")) return;
+    inputRef.current?.focus();
+  }
 
   function toggleMic() {
     if (listening) {
@@ -62,28 +79,30 @@ export function Chat({ config, activeModel, messages, busy, error, onSend, onSto
   }
 
   const visible = messages.filter((m) => m.role !== "system");
+  const modelName = activeModel?.name ?? config.model;
 
   return (
     <main className="main">
-      <header className="chat-head">
-        <div className="ch-left">
-          <div className="ch-title">Playground</div>
-          <div className="ch-sub mono">{activeModel?.name ?? config.model}</div>
-        </div>
-        <div className="head-actions">
-          <span className={"status-pill" + (busy ? " live" : "")}>
-            <span className="dot" />{busy ? "streaming" : "ready"}
-          </span>
-          <button className="btn ghost sm" onClick={onReset} disabled={busy}>Clear</button>
-        </div>
-      </header>
+      <TerminalBar title={`bugxhunter@playground: ~/${modelName}`}>
+        <span className={"status-pill" + (busy ? " live" : "")}>
+          <span className="dot" />{busy ? (config.stream ? "streaming" : "thinking") : "ready"}
+        </span>
+        <button className="btn ghost sm" onClick={onReset} disabled={busy}>clear</button>
+      </TerminalBar>
 
-      <div className="transcript" ref={scrollRef}>
+      <div className="transcript grid-bg" ref={scrollRef}>
         <div className="transcript-inner">
         {visible.length === 0 && (
           <div className="empty-state">
-            <h2>Try a model</h2>
-            <p>Pick a model and tune the prompt on the left, then chat with it directly on SCX.</p>
+            <BootSequence
+              key={modelName}
+              lines={[
+                { kind: "p", text: `./bxh --playground --model ${modelName}`, pace: 26 },
+                { kind: "out", text: "Direct model access: no agent, no file system." },
+                { kind: "out", text: "Tune the prompt and generation settings on the left.", pace: 18 },
+                { kind: "ok", text: "Model ready ", ok: "OK" },
+              ]}
+            />
             <div className="suggestions">
               {SUGGESTIONS.map((s) => (
                 <button className="chip" key={s} onClick={() => onSend(s)}>{s}</button>
@@ -101,13 +120,14 @@ export function Chat({ config, activeModel, messages, busy, error, onSend, onSto
       </div>
 
       <div className="composer">
-        <div className="composer-box">
+        <div className="composer-box" onClick={focusInput}>
           <textarea
+            ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKey}
-            rows={1}
-            placeholder={listening ? "Listening…" : `Message ${activeModel?.name ?? config.model}…`}
+            rows={3}
+            placeholder={listening ? "Listening…" : `Message ${modelName}…`}
           />
           <div className="composer-bar">
             <div className="spacer" />

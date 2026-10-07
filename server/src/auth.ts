@@ -52,10 +52,15 @@ function setCookie(req: express.Request, res: express.Response, value: string, m
 }
 
 // Basic brute-force brake: at most 5 failed attempts per IP per 5 minutes.
+// `req.ip` is the real client only if `trust proxy` is set when a reverse
+// proxy sits in front (TRUST_PROXY in index.ts); otherwise every visitor
+// shares the proxy's address and one bucket.
+const WINDOW_MS = 5 * 60_000;
 const failures = new Map<string, number[]>();
 function tooManyFailures(ip: string) {
   const now = Date.now();
-  const recent = (failures.get(ip) ?? []).filter((t) => now - t < 5 * 60_000);
+  for (const [k, ts] of failures) if (!ts.some((t) => now - t < WINDOW_MS)) failures.delete(k);
+  const recent = (failures.get(ip) ?? []).filter((t) => now - t < WINDOW_MS);
   failures.set(ip, recent);
   return recent.length >= 5;
 }

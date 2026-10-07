@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { fetchModels, streamChat } from "./api";
-import { agentStatus, type AgentStatus } from "./agentApi";
+import { fetchModels, runChat } from "./api";
+import { agentStatus, agentCheckDirectory, type AgentStatus } from "./agentApi";
 import type { BotConfig, ChatMsg, SCXModel, ToolCall } from "./types";
+import { stripToolIds, withToolIds } from "./tools";
 import { Sidebar, type Mode } from "./Sidebar";
 import { Chat } from "./Chat";
 import { AgentPanel } from "./AgentPanel";
 import { speak, stopSpeaking } from "./voice";
-import { useEgress } from "./egress";
 
 const STORAGE_KEY = "or_playground_config";
 const RUNNER_KEY = "or_runner";
@@ -69,11 +69,16 @@ export default function App() {
 
   useEffect(() => {
     agentStatus()
-      .then((s) => {
+      .then(async (s) => {
         setStatus(s);
+        // The remembered folder may not exist for this backend (e.g. a Windows
+        // path saved in local mode, now talking to the Docker agent): fall back
+        // to the server's default rather than opening something that can't load.
+        const remembered = load<RunnerSettings>(RUNNER_KEY, { directory: "", model: "", recent: [] }).directory;
+        const directory = remembered ? await agentCheckDirectory(remembered).catch(() => s.directory) : s.directory;
         setRunner((r) => ({
           ...r,
-          directory: r.directory || s.directory,
+          directory,
           model: s.models.some((m) => m.id === r.model) ? r.model : s.defaultModel,
         }));
       })
@@ -87,8 +92,6 @@ export default function App() {
       /* ignore */
     }
   }, [mode]);
-
-  const egress = useEgress();
 
   // --- Sessions: which one is showing, which one to open, list refresh ---
   const [activeSession, setActiveSession] = useState<string | null>(null);
@@ -135,7 +138,10 @@ export default function App() {
   }
 
   // --- Playground (direct SCX chat) ---
-  const [config, setConfig] = useState<BotConfig>(() => load(STORAGE_KEY, DEFAULT_CONFIG));
+  const [config, setConfig] = useState<BotConfig>(() => {
+    const c = load(STORAGE_KEY, DEFAULT_CONFIG);
+    return { ...c, tools: withToolIds(c.tools ?? []) };
+  });
   const [models, setModels] = useState<SCXModel[]>([]);
   const [modelError, setModelError] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMsg[]>([]);
@@ -183,10 +189,10 @@ export default function App() {
     const assistantIndex = history.length;
     setMessages([...history, { role: "assistant", content: "" }]);
 
-    const enabledTools = config.tools.length ? config.tools : undefined;
+    const enabledTools = config.tools.length ? stripToolIds(config.tools) : undefined;
     let spoken = "";
 
-    await streamChat(
+    await runChat(
       {
         model: config.model,
         messages: buildWireMessages(history),
@@ -196,6 +202,7 @@ export default function App() {
         tools: enabledTools,
         response_format: config.jsonMode ? { type: "json_object" } : undefined,
         rag: config.useKnowledge,
+        stream: config.stream,
       },
       {
         signal: ctrl.signal,
@@ -277,7 +284,6 @@ export default function App() {
       )}
       <Sidebar
         onCollapse={toggleSidebar}
-        egress={egress}
         sessions={{ active: activeSession, version: sessionsVersion, open: openSession }}
         mode={mode}
         setMode={setMode}
@@ -310,16 +316,15 @@ export default function App() {
             directory={runner.directory}
             model={runner.model || status?.defaultModel || ""}
             setModel={(model) => setRunner((r) => ({ ...r, model }))}
-            egressPending={egress.pending}
             resume={resume}
             onActiveSession={setActiveSession}
             onSessionsChanged={bumpSessions}
           />
         ) : (
           <main className="main">
-            <div className="transcript">
-              <div className="empty-state">
-                {statusError ? <div className="error-banner">{statusError}</div> : <p className="muted">Starting OpenCode…</p>}
+            <div className="transcript grid-bg">
+              <div className="empty-state center">
+                {statusError ? <div className="error-banner">{statusError}</div> : <p className="muted mono">Starting OpenCode…</p>}
               </div>
             </div>
           </main>

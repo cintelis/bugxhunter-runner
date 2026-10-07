@@ -6,7 +6,7 @@ import { speechSupported } from "./voice";
 import type { BotConfig, KBDoc, SCXModel, ToolDef } from "./types";
 import type { RunnerSettings } from "./App";
 import { logout } from "./Login";
-import { egressRemoveRule, type EgressState } from "./egress";
+import { newToolId } from "./tools";
 
 export type Mode = "runner" | "playground";
 
@@ -19,7 +19,6 @@ export interface SessionNav {
 
 interface Props {
   onCollapse: () => void;
-  egress: EgressState;
   sessions: SessionNav;
   mode: Mode;
   setMode: (m: Mode) => void;
@@ -49,7 +48,7 @@ const EXAMPLE_TOOL: ToolDef = {
 };
 
 export function Sidebar({
-  onCollapse, egress, sessions, mode, setMode, runner, status, statusError, onOpenDirectory,
+  onCollapse, sessions, mode, setMode, runner, status, statusError, onOpenDirectory,
   config, setConfig, models, modelError, activeModel, onReset,
 }: Props) {
   const set = <K extends keyof BotConfig>(k: K, v: BotConfig[K]) => setConfig((c) => ({ ...c, [k]: v }));
@@ -120,7 +119,7 @@ export function Sidebar({
     if (!raw) return null;
     const fn = raw.function ?? raw;
     if (!fn?.name) return null;
-    return { type: "function", function: { name: fn.name, description: fn.description, parameters: fn.parameters ?? fn.schema } };
+    return { type: "function", id: newToolId(), function: { name: fn.name, description: fn.description, parameters: fn.parameters ?? fn.schema } };
   }
 
   /** Import the agent-authored tool schemas from web/public/example-tools.json. */
@@ -166,15 +165,12 @@ export function Sidebar({
           {(["runner", "playground"] as const).map((m) => (
             <button key={m} className={"seg" + (mode === m ? " on" : "")} onClick={() => setMode(m)}>
               {m === "runner" ? "Runner" : "Playground"}
-              {m === "runner" && mode !== "runner" && egress.pending.length > 0 && (
-                <span className="tab-badge" title="The agent is waiting for network approval">{egress.pending.length}</span>
-              )}
             </button>
           ))}
         </div>
       </div>
       {mode === "runner" ? (
-        <RunnerSidebar runner={runner} status={status} statusError={statusError} onOpen={onOpenDirectory} egress={egress} sessions={sessions} />
+        <RunnerSidebar runner={runner} status={status} statusError={statusError} onOpen={onOpenDirectory} sessions={sessions} />
       ) : (
       <div className="sidebar-body">
         <p className="hint" style={{ marginTop: 0 }}>
@@ -265,7 +261,10 @@ export function Sidebar({
 
         <div className="section-title">Tools {supportsTools ? "" : "(model has no tool support)"}</div>
         {config.tools.map((t, i) => (
-          <div className="tool-card" key={i}>
+          // Keyed by the tool's own id, not its index: the schema textarea below
+          // is uncontrolled, so an index key would show the wrong schema after
+          // deleting a tool above it.
+          <div className="tool-card" key={t.id ?? i}>
             <div className="tc-head">
               <input type="text" value={t.function.name} placeholder="function_name"
                 onChange={(e) => updateTool(i, { name: e.target.value })} />
@@ -280,7 +279,7 @@ export function Sidebar({
         ))}
         <div className="btn-row">
           <button className="btn block ghost mini" disabled={!supportsTools}
-            onClick={() => setConfig((c) => ({ ...c, tools: [...c.tools, structuredClone(EXAMPLE_TOOL)] }))}>
+            onClick={() => setConfig((c) => ({ ...c, tools: [...c.tools, { ...structuredClone(EXAMPLE_TOOL), id: newToolId() }] }))}>
             + Add tool
           </button>
           <button className="btn block ghost mini" onClick={loadExampleTools} title="Import tools from web/public/example-tools.json">
@@ -346,9 +345,9 @@ export function Sidebar({
 }
 
 /** Left rail for Runner mode: project folder + what the agents can do. */
-function RunnerSidebar({ runner, status, statusError, onOpen, egress, sessions }: {
+function RunnerSidebar({ runner, status, statusError, onOpen, sessions }: {
   runner: RunnerSettings; status: AgentStatus | null; statusError: string | null; onOpen: (dir: string) => void;
-  egress: EgressState; sessions: SessionNav;
+  sessions: SessionNav;
 }) {
   const [draft, setDraft] = useState(runner.directory);
   const [err, setErr] = useState<string | null>(null);
@@ -408,28 +407,6 @@ function RunnerSidebar({ runner, status, statusError, onOpen, egress, sessions }
         <div className="ai-row"><span className="ai-name">plan</span><span className="hint">read-only</span></div>
         <div className="hint" style={{ margin: "2px 0 0" }}>Explores and reasons without changing anything.</div>
       </div>
-
-      {egress.enabled && (
-        <>
-          <div className="section-title">Network</div>
-          <div className="hint" style={{ marginTop: 0, marginBottom: 10 }}>
-            The agent asks before reaching any new site. Allowed for this session, always, or denied:
-          </div>
-          {egress.rules.length === 0 ? (
-            <div className="hint" style={{ marginTop: 0 }}>No sites approved yet.</div>
-          ) : (
-            <div className="rule-list">
-              {egress.rules.map((r) => (
-                <div className="rule" key={r.host}>
-                  <span className={"rule-tag " + r.decision}>{r.decision === "session" ? "session" : r.decision === "always" ? "always" : "denied"}</span>
-                  <span className="rule-host mono" title={r.host}>{r.host}</span>
-                  <button className="btn danger" onClick={() => egressRemoveRule(r.host)} title="Remove — the agent will ask again">✕</button>
-                </div>
-              ))}
-            </div>
-          )}
-        </>
-      )}
 
       <div className="section-title">Engine</div>
       {statusError ? (

@@ -1,11 +1,15 @@
-# Open Runner — web UI + API container. Holds the SCX key, serves the login and
+# BugXHunter — web UI + API container. Holds the SCX key, serves the login and
 # the built web app, and proxies the agent's model calls to SCX.
+#
+# Stage 1 compiles both workspaces; stage 2 ships only the compiled output and
+# production dependencies (no TypeScript, tsx or Vite at runtime).
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY server/package.json server/
 COPY web/package.json web/
 RUN npm ci
+COPY shared shared
 COPY server server
 COPY web web
 RUN npm run build
@@ -13,9 +17,14 @@ RUN npm run build
 FROM node:22-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=8790
-COPY --from=build --chown=node:node /app /app
-# /data holds the saved internet-access rules (a volume in docker-compose.yml).
-RUN mkdir -p /data && chown node:node /data
+COPY package.json package-lock.json ./
+COPY server/package.json server/
+COPY web/package.json web/
+RUN npm ci --omit=dev && npm cache clean --force
+COPY --from=build --chown=node:node /app/server/dist server/dist
+COPY --from=build --chown=node:node /app/web/dist web/dist
+# /logs holds the audit log (its own volume in docker-compose.yml, not visible to the agent).
+RUN mkdir -p /logs && chown node:node /logs
 USER node
 EXPOSE 8790
-CMD ["node", "--import", "tsx", "server/src/index.ts"]
+CMD ["node", "server/dist/index.js"]

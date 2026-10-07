@@ -28,45 +28,8 @@ export class SCXError extends Error {
 // Types (a pragmatic subset of the OpenAI/Anthropic-compatible shapes)
 // ---------------------------------------------------------------------------
 
-export interface SCXModel {
-  id: string;
-  name: string;
-  hugging_face_id?: string;
-  created: number;
-  input_modalities: string[];
-  output_modalities: string[];
-  quantization?: string;
-  context_length: number | null;
-  max_output_length: number | null;
-  pricing: Record<string, string>;
-  supported_sampling_parameters: string[];
-  supported_features: string[]; // e.g. "tools", "reasoning", "json_mode"
-  description?: string;
-  datacenters?: { country_code: string }[];
-}
-
-export interface ChatMessage {
-  role: "system" | "user" | "assistant" | "tool";
-  content: string | unknown[] | null;
-  name?: string;
-  tool_calls?: ToolCall[];
-  tool_call_id?: string;
-}
-
-export interface ToolCall {
-  id: string;
-  type: "function";
-  function: { name: string; arguments: string };
-}
-
-export interface ToolDef {
-  type: "function";
-  function: {
-    name: string;
-    description?: string;
-    parameters?: Record<string, unknown>;
-  };
-}
+import type { ChatMessage, SCXModel, ToolDef } from "../../shared/scx.js";
+export type { ChatMessage, SCXModel, ToolCall, ToolDef } from "../../shared/scx.js";
 
 export interface ChatParams {
   model: string;
@@ -194,8 +157,8 @@ export class SCXClient {
 
   /**
    * Streaming chat. Returns the raw `Response` so callers can pipe the SSE
-   * body straight through (e.g. an Express proxy). Use `streamChat` for an
-   * async iterator of parsed text deltas.
+   * body straight through (e.g. an Express proxy); `parseSSE` turns it into
+   * an iterator of data payloads.
    */
   async chatStreamResponse(params: ChatParams): Promise<Response> {
     const res = await this.request("/chat/completions", {
@@ -206,28 +169,6 @@ export class SCXClient {
     return res;
   }
 
-  /** Async generator yielding incremental content + tool-call deltas. */
-  async *streamChat(
-    params: ChatParams,
-  ): AsyncGenerator<{ content?: string; finish_reason?: string; raw: any }> {
-    const res = await this.chatStreamResponse(params);
-    for await (const evt of parseSSE(res)) {
-      if (evt === "[DONE]") return;
-      let data: any;
-      try {
-        data = JSON.parse(evt);
-      } catch {
-        continue;
-      }
-      const choice = data.choices?.[0];
-      yield {
-        content: choice?.delta?.content ?? undefined,
-        finish_reason: choice?.finish_reason ?? undefined,
-        raw: data,
-      };
-    }
-  }
-
   // --- Embeddings -----------------------------------------------------------
 
   async embeddings(params: {
@@ -235,38 +176,6 @@ export class SCXClient {
     input: string | string[];
   }): Promise<{ data: { embedding: number[]; index: number }[]; usage?: any }> {
     const res = await this.request("/embeddings", { method: "POST", json: params });
-    return this.json(res);
-  }
-
-  // --- OpenAI "Responses" API ----------------------------------------------
-
-  async responses(params: {
-    model: string;
-    input: string | unknown[];
-    max_output_tokens?: number;
-    [key: string]: unknown;
-  }): Promise<any> {
-    const res = await this.request("/responses", { method: "POST", json: params });
-    return this.json(res);
-  }
-
-  // --- Anthropic-compatible "Messages" API ----------------------------------
-
-  async messages(params: {
-    model: string;
-    max_tokens: number;
-    messages: { role: "user" | "assistant"; content: unknown }[];
-    system?: string;
-    [key: string]: unknown;
-  }): Promise<any> {
-    const res = await this.request("/messages", { method: "POST", json: params });
-    return this.json(res);
-  }
-
-  // --- Batches --------------------------------------------------------------
-
-  async listBatches(): Promise<{ object: string; data: any[]; has_more: boolean }> {
-    const res = await this.request("/batches", { method: "GET" });
     return this.json(res);
   }
 }

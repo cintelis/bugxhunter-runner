@@ -1,9 +1,9 @@
 {
-  "name": "open-runner",
+  "name": "bugxhunter",
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
-  "description": "Open Runner — web UI for the OpenCode coding agent on open-weight models via SCX",
+  "description": "BugXHunter \u2014 security-testing agent runner: a web UI for the OpenCode agent on open-weight models via SCX",
   "workspaces": [
     "server",
     "web"
@@ -12,9 +12,22 @@
     "dev": "concurrently -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "npm -w server run dev",
     "dev:web": "npm -w web run dev",
-    "build": "npm -w web run build"
+    "build": "npm -w web run build && npm -w server run build",
+    "typecheck": "tsc --noEmit -p server && tsc --noEmit -p web",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run lint && npm test"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
-  }
+    "concurrently": "^9.1.2",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "typescript-eslint": "^8.71.1",
+    "vitest": "^3.2.7"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cintelis/bugxhunter-runner.git"
+  },
+  "homepage": "https://bugxhunter.com"
 }

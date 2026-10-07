@@ -1,8 +1,10 @@
-# Open Runner
+# BugXHunter
 
-A web UI for the [OpenCode](https://opencode.ai) coding agent, running on open-weight models
-(GLM-5.3 by default) through [SCX.ai](https://platform.scx.ai). Started from the `sovgov-poc`
-chatbot designer.
+The [BugXHunter](https://bugxhunter.com) security-testing agent runner: a web UI for the
+[OpenCode](https://opencode.ai) coding agent, running on open-weight models (GLM-5.3 by default)
+through [SCX.ai](https://platform.scx.ai). The UI follows bugxhunter.com's design system — a
+macOS-style terminal window, the red-team palette (GitHub-dark surfaces with red, amber, cyan and
+green accents) and Fira Code throughout. Started from the `sovgov-poc` chatbot designer.
 
 - **Runner** — point it at a project folder and drive OpenCode's `build` (edits + shell) or
   `plan` (read-only) agent. Every file edit and shell command waits for your approval.
@@ -15,22 +17,22 @@ chatbot designer.
 
 The agent working in a project — live tool calls, reasoning, and a markdown summary:
 
-![Open Runner — the agent reading a project and summarising it](docs/images/runner.jpg)
+![BugXHunter — the agent reading a project and summarising it](docs/images/runner.jpg)
 
 Point it at any folder; resume past sessions; approve edits and commands as they happen:
 
-![Open Runner — Runner landing view](docs/images/landing.jpg)
+![BugXHunter — Runner landing view](docs/images/landing.jpg)
 
 Playground — compare SCX models directly with full generation controls:
 
-![Open Runner — Playground](docs/images/playground.jpg)
+![BugXHunter — Playground](docs/images/playground.jpg)
 
 ## Requirements
 
 - Node 22+
 - OpenCode installed and on `PATH`: `npm i -g opencode-ai`
 - The SCX provider set up in `~/.config/opencode/opencode.jsonc` and its key stored with
-  `opencode auth login` (choose **Other**, provider id `scx`). Open Runner reads the same key, so
+  `opencode auth login` (choose **Other**, provider id `scx`). BugXHunter reads the same key, so
   the CLI and the web UI always agree. Alternatively set `SCX_API=...` in a `.env` here.
 
 ## Run
@@ -77,15 +79,18 @@ Two containers:
   ```
 
   (Plain `docker compose cp` also copies in, but leaves files owned by root, so the agent can't edit them.)
-- **The agent has direct, ungated internet** so scan tools run at full speed (no per-site approval,
-  and `nmap`/`ping`/raw DNS work via `NET_RAW`). There is no network approval gate — **only point
-  the agent at targets you are authorised to test, and run this on a trusted machine/VM.**
+- **The agent has direct internet** so scan tools run at full speed (`nmap`/`ping`/raw DNS work
+  via `NET_RAW`). Outbound connections are logged, not restricted — **only point the agent at targets you are authorised to test, and run this on a
+  trusted machine/VM.**
 - Both containers run as non-root with `no-new-privileges`; the agent drops all capabilities except
   `NET_RAW` and is limited to 2 CPUs, 4 GB RAM, 512 processes. Shell commands and file edits are
-  still approved in the UI — that, plus the container/VM boundary and the isolated SCX key, is what
-  contains the agent. The network is not gated.
+  approved in the UI — that, plus the container/VM boundary and the isolated SCX key, is what
+  contains the agent.
+- **Logs** (the audit log of prompts, tool calls and approvals, plus the egress log of hosts the
+  agent connected to) live in the `logs` volume, which the agent container can't see. Read them with
+  `docker compose cp runner:/logs ./logs`.
 - Port 8790 is published on localhost only. Put TLS (a reverse proxy) in front and set
-  `COOKIE_SECURE=1` before exposing it to anyone else.
+  `COOKIE_SECURE=1`, `TRUST_PROXY=1` and `ALLOWED_HOSTS=<your domain>` before exposing it to anyone else.
 
 ## Security-testing tools (authorised use only)
 
@@ -98,8 +103,8 @@ labs, CTFs). Build with `--build-arg SECTOOLS=0` to leave them out.
 - **Secrets (local, no network):** `gitleaks` — scan copied-in repos and JS bundles for leaked keys.
 - **Raw-socket:** `nmap`, `ping`, `traceroute`, `dig`/`host` (incl. zone transfer).
 
-All tools run directly against targets — no proxy, no per-site approval. The agent's `AGENTS.md`
-tells it to confirm authorisation before scanning and to scan only hosts you name.
+All tools run directly against targets. The agent's `AGENTS.md` tells it to confirm authorisation
+before scanning and to scan only hosts you name.
 
 **Making scans fast** (they're slow if done naively):
 - **Scope nuclei templates** — the biggest lever. `-tags cve,exposure` or `-severity
@@ -125,9 +130,33 @@ you run this in — Docker's bridge NAT doesn't restrict outbound on its own.
 | `SCX_API` | key from `opencode auth login` | SCX key for the Playground (and the agent proxy in Docker) |
 | `OPEN_RUNNER_PASSWORD` | unset (no login) | Enables the login screen |
 | `OPEN_RUNNER_SECRET` | random per start | Signs session cookies; set it to keep sessions across restarts |
+| `COOKIE_SECURE` | unset | `1` marks the session cookie `Secure` (behind TLS) |
+| `TRUST_PROXY` | unset | Behind a reverse proxy: `1` (hop count), `loopback`, or a CIDR list — so the login rate limit sees real client IPs |
+| `OPEN_RUNNER_LOG_DIR` | unset (off) | Folder for the JSONL audit log (Docker sets `/logs`) |
+| `ALLOWED_HOSTS` | localhost only | Extra `Host` header values to accept (comma list), e.g. the domain a reverse proxy serves. Everything else gets 403, which blocks DNS-rebinding attacks |
+| `OPEN_RUNNER_ALLOWED_ROOTS` | any folder | Local mode: folders the UI may open, PATH-style list (`;` on Windows, `:` elsewhere). Set it before sharing the app |
 | `OPENCODE_URL` | unset (spawn locally) | Use a remote OpenCode server (Docker sets `http://agent:4096`) |
 | `OPEN_RUNNER_WORKSPACE` | `/workspace` | Remote mode: projects must live under this folder |
 | `SCX_PROXY_TOKEN` | unset | Enables the `/scx/v1` key proxy for the sandboxed agent |
+
+## Development
+
+```bash
+npm run check        # typecheck + lint + unit tests (what CI runs)
+npm run typecheck    # tsc, both workspaces
+npm run lint         # eslint (typescript-eslint + react-hooks), warnings fail
+npm test             # vitest: the pure logic in server/src and web/src
+npm run build        # web -> web/dist, server -> server/dist (what the Docker image ships)
+```
+
+GitHub Actions: `ci.yml` runs the checks and builds both Docker images on every push and PR,
+`codeql.yml` scans for security issues weekly and on PRs, `docker-publish.yml` pushes the images to
+GHCR (`ghcr.io/cintelis/bugxhunter-runner` and `bugxhunter-agent`) on `master` and on `v*` tags, and Dependabot
+keeps npm, Actions and base images current.
+
+Server and browser share one type contract in `shared/` (`agent.d.ts`, `scx.d.ts`): the server's
+event mapping must produce those shapes and the client consumes them, so a change on either side
+fails the other's type-check.
 
 ## Layout
 
@@ -136,13 +165,14 @@ you run this in — Docker's bridge NAT doesn't restrict outbound on its own.
 | `server/src/opencode.ts` | Starts/stops the OpenCode server, one SDK client per project folder, event mapping |
 | `server/src/index.ts` | Express: `/api/agent/*` (OpenCode) and `/api/chat`, `/api/models`, `/api/kb` (SCX) |
 | `server/src/scx.ts`, `rag.ts` | SCX client and in-memory knowledge base (Playground) |
-| `web/src/AgentPanel.tsx` | Runner transcript, approvals, model picker, Changes view |
+| `shared/` | Type contract between server and browser |
+| `web/src/AgentPanel.tsx` | Runner transcript, approvals and session flow; `DiffModal.tsx` and `QuestionCard.tsx` hold the Changes view and agent questions |
 | `web/src/Sidebar.tsx` | Project folder picker (Runner) and model/prompt settings (Playground) |
-| `web/src/styles.css`, `brand.tsx` | Theme tokens and logo |
+| `web/src/styles.css`, `brand.tsx`, `Terminal.tsx` | bugxhunter.com theme tokens, the `>_ BugXHunter` wordmark, terminal title bar and typed boot sequence |
 
 ## License
 
 [MIT](LICENSE) © Cintelis.
 
-> Open Runner ships a security-testing toolchain for **authorised** testing only (your own
+> BugXHunter ships a security-testing toolchain for **authorised** testing only (your own
 > systems, labs, CTFs). You are responsible for how you use it.

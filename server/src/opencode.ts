@@ -3,10 +3,10 @@
  * -----------------------------------------------------------------------------
  * Boots one OpenCode server via the official SDK and drives it on behalf of the
  * browser. The SCX provider, its models and the API key come from the user's
- * global OpenCode setup (~/.config/opencode + `opencode auth login`), so Open
- * Runner and the `opencode` CLI always agree on what's available.
+ * global OpenCode setup (~/.config/opencode + `opencode auth login`), so
+ * BugXHunter and the `opencode` CLI always agree on what's available.
  *
- * Inline config layered on top sets the Open Runner defaults: GLM-5.3 for both
+ * Inline config layered on top sets the BugXHunter defaults: GLM-5.3 for both
  * agents and `ask` permissions for edits and shell commands, so every change
  * the build agent makes is approved in the UI rather than running blind.
  *
@@ -18,9 +18,12 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createOpencodeServer, createOpencodeClient } from "@opencode-ai/sdk";
+import type { AgentEvent, AgentModel, MessagePart, StoredMessage } from "../../shared/agent.js";
+
+export type { AgentEvent, AgentModel, StoredMessage };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-/** Open Runner's own folder: the default project when none is chosen. */
+/** BugXHunter's own folder: the default project when none is chosen. */
 export const REPO_ROOT = path.resolve(__dirname, "../..");
 
 /**
@@ -141,7 +144,23 @@ function getServer() {
   return server;
 }
 
-const notFound = (dir: string) => Object.assign(new Error(`Folder not found: ${dir}`), { status: 400 });
+/** An Error that sendError() turns into an HTTP status. */
+export const httpError = (status: number, message: string) => Object.assign(new Error(message), { status });
+const notFound = (dir: string) => httpError(400, `Folder not found: ${dir}`);
+
+/**
+ * Local mode: folders the browser may open, from OPEN_RUNNER_ALLOWED_ROOTS
+ * (a PATH-style list). Unset means any folder on this machine, which is fine
+ * for a single user on localhost but not once a password + reverse proxy
+ * expose the app to others.
+ */
+export const ALLOWED_ROOTS = (process.env.OPEN_RUNNER_ALLOWED_ROOTS ?? "")
+  .split(path.delimiter).map((s) => s.trim()).filter(Boolean).map((r) => path.resolve(r));
+
+const isInside = (abs: string, root: string) => {
+  const [a, r] = process.platform === "win32" ? [abs.toLowerCase(), root.toLowerCase()] : [abs, root];
+  return a === r || a.startsWith(r.endsWith(path.sep) ? r : r + path.sep);
+};
 
 /** Normalise and validate a project folder from the browser. */
 export async function resolveDirectory(dir?: unknown): Promise<string> {
@@ -151,13 +170,16 @@ export async function resolveDirectory(dir?: unknown): Promise<string> {
     // and ask OpenCode whether it exists (listing a missing folder fails).
     const abs = path.posix.resolve(WORKSPACE_ROOT, raw.replace(/\\/g, "/"));
     if (abs !== WORKSPACE_ROOT && !abs.startsWith(WORKSPACE_ROOT + "/")) {
-      throw Object.assign(new Error(`Projects must be inside ${WORKSPACE_ROOT}`), { status: 400 });
+      throw httpError(400, `Projects must be inside ${WORKSPACE_ROOT}`);
     }
     const r = await fetch(`${REMOTE_URL}/file?path=.&directory=${encodeURIComponent(abs)}`).catch(() => null);
     if (!r?.ok) throw notFound(abs);
     return abs;
   }
   const abs = path.resolve(raw);
+  if (ALLOWED_ROOTS.length && !ALLOWED_ROOTS.some((root) => isInside(abs, root))) {
+    throw httpError(400, `Projects must be inside: ${ALLOWED_ROOTS.join(", ")}`);
+  }
   if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) throw notFound(abs);
   return abs;
 }
@@ -177,22 +199,36 @@ export async function serverUrl() {
   return (await getServer()).url;
 }
 
+/** Query string from an object, skipping undefined values. */
+export function query(params: Record<string, string | number | boolean | undefined>): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v !== undefined) q.set(k, String(v));
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+
+/**
+ * Call an OpenCode route the SDK doesn't wrap (or wraps awkwardly). A non-2xx
+ * reply becomes an error carrying the status, which sendError() forwards.
+ */
+export async function oc<T = unknown>(path: string, init: RequestInit & { json?: unknown } = {}): Promise<T> {
+  const { json, headers, ...rest } = init;
+  const r = await fetch(`${await serverUrl()}${path}`, {
+    ...rest,
+    headers: { ...(json !== undefined ? { "Content-Type": "application/json" } : {}), ...(headers as Record<string, string> | undefined) },
+    body: json !== undefined ? JSON.stringify(json) : rest.body,
+  });
+  const text = await r.text().catch(() => "");
+  if (!r.ok) throw httpError(r.status, text.slice(0, 500) || `OpenCode replied ${r.status}`);
+  return (text ? JSON.parse(text) : undefined) as T;
+}
+
 /** "scx/GLM-5.3" -> { providerID: "scx", modelID: "GLM-5.3" }. */
 export function parseModelId(id?: string): { providerID: string; modelID: string } | undefined {
   if (!id) return undefined;
   const i = id.indexOf("/");
   if (i === -1) return undefined;
   return { providerID: id.slice(0, i), modelID: id.slice(i + 1) };
-}
-
-export interface AgentModel {
-  id: string;
-  name: string;
-  provider: string;
-  context?: number;
-  output?: number;
-  /** Accepts image input. */
-  images?: boolean;
 }
 
 /** Every model OpenCode can use, as "provider/model" ids. */
@@ -219,7 +255,7 @@ export async function listAgentModels(client: Client): Promise<AgentModel[]> {
  * Collapse a raw OpenCode event into the compact shape the browser renders.
  * Returns null for events the UI doesn't care about.
  */
-export function toUiEvent(evt: any): Record<string, unknown> | null {
+export function toUiEvent(evt: any): AgentEvent | null {
   const type: string = evt?.type;
   const p = evt?.properties;
   if (!type) return null;
@@ -315,10 +351,10 @@ export function toUiEvent(evt: any): Record<string, unknown> | null {
  * Stored messages (GET /session/:id/message) -> the same shape the browser
  * builds from live events, so a resumed chat renders like a live one.
  */
-export function toUiMessages(raw: any[]): Record<string, unknown>[] {
+export function toUiMessages(raw: any[]): StoredMessage[] {
   return raw.map((m) => {
     const info = m.info ?? {};
-    const parts: Record<string, unknown>[] = [];
+    const parts: MessagePart[] = [];
     for (const p of m.parts ?? []) {
       if (p.type === "text" && p.text && !p.synthetic) parts.push({ type: "text", id: p.id, text: p.text });
       else if (p.type === "reasoning" && p.text) parts.push({ type: "reasoning", id: p.id, text: p.text });

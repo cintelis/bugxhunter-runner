@@ -34,7 +34,7 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "Copy failed (exit $LASTEXITCODE)." }
   $count = docker compose exec -T agent sh -c "find '$dest' -type f | wc -l"
   Write-Host "Copied $src -> $dest ($($count.Trim()) files; skipped: $($Exclude -join ', '))"
-  Write-Host "In Open Runner, set Project to $dest and click Open."
+  Write-Host "In BugXHunter, set Project to $dest and click Open."
 } finally {
   Pop-Location
 }

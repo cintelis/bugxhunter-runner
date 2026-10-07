@@ -5,48 +5,11 @@
  * permission flow.
  */
 
-export interface AgentModel {
-  id: string;
-  name: string;
-  provider: string;
-  context?: number;
-  output?: number;
-  /** Accepts image input. */
-  images?: boolean;
-}
-
-export interface Todo {
-  content: string;
-  status: "pending" | "in_progress" | "completed" | "cancelled" | string;
-  priority?: string;
-}
-
-export interface SessionSummary {
-  id: string;
-  title?: string;
-  created?: number;
-  updated?: number;
-  files: number;
-  additions: number;
-  deletions: number;
-}
-
-/** A message as stored by OpenCode, already mapped to the UI's part shapes. */
-export interface StoredMessage {
-  id: string;
-  role: "user" | "assistant";
-  parts: Record<string, any>[];
-  tokens?: Tokens;
-  cost?: number;
-  model?: string;
-  error?: string;
-}
-
-export interface SlashCommand {
-  name: string;
-  description: string;
-  hint: string;
-}
+import type {
+  AgentEvent, AgentModel, AgentQuestion, AgentStatus, FileDiff, PendingRequests, SessionSummary, SlashCommand,
+  StoredMessage, Todo, Tokens,
+} from "../../shared/agent";
+export type { AgentEvent, AgentModel, AgentQuestion, AgentStatus, FileDiff, PendingRequests, SessionSummary, SlashCommand, StoredMessage, Todo, Tokens };
 
 export interface FileUpload {
   name: string;
@@ -92,55 +55,6 @@ export async function agentCompact(sessionID: string, directory: string, model?:
   if (!r.ok) throw new Error((await errMsg(r)) || `Compact failed (${r.status})`);
 }
 
-export interface AgentStatus {
-  ready: boolean;
-  url: string;
-  directory: string;
-  defaultModel: string;
-  models: AgentModel[];
-}
-
-export interface Tokens {
-  input?: number;
-  output?: number;
-  reasoning?: number;
-  cache?: { read?: number; write?: number };
-}
-
-/** Compact events emitted by GET /api/agent/events (see server/opencode.ts). */
-export type AgentEvent =
-  | { kind: "open" }
-  | { kind: "message"; messageID: string; role: "user" | "assistant" | string; tokens?: Tokens; cost?: number; model?: string }
-  | { kind: "text"; messageID: string; partID?: string; text: string }
-  | { kind: "reasoning"; messageID: string; partID?: string; text: string }
-  | {
-      kind: "tool";
-      messageID: string;
-      callID: string;
-      tool: string;
-      status: "pending" | "running" | "completed" | "error" | string;
-      title?: string;
-      input?: Record<string, unknown>;
-      output?: string;
-      error?: string;
-    }
-  | {
-      kind: "permission";
-      sessionID: string;
-      permissionID: string;
-      permType?: string;
-      title?: string;
-      pattern?: string | string[];
-      callID?: string;
-    }
-  | { kind: "permission-replied"; permissionID: string }
-  | { kind: "todo"; sessionID?: string; todos: Todo[] }
-  | { kind: "session"; sessionID: string; title?: string }
-  | { kind: "question"; sessionID: string; requestID: string; questions: AgentQuestion[]; callID?: string }
-  | { kind: "question-closed"; requestID: string }
-  | { kind: "idle"; sessionID?: string }
-  | { kind: "error"; message: string };
-
 export async function agentStatus(): Promise<AgentStatus> {
   const r = await fetch("/api/agent/status");
   if (!r.ok) throw new Error((await errMsg(r)) || `Agent server not ready (${r.status})`);
@@ -158,7 +72,7 @@ export async function agentCheckDirectory(directory: string): Promise<string> {
 export async function agentPending(
   sessionID: string,
   directory: string,
-): Promise<{ permissions: Extract<AgentEvent, { kind: "permission" }>[]; questions: Extract<AgentEvent, { kind: "question" }>[] }> {
+): Promise<PendingRequests> {
   const r = await fetch(`/api/agent/pending?sessionID=${encodeURIComponent(sessionID)}&directory=${encodeURIComponent(directory)}`);
   if (!r.ok) return { permissions: [], questions: [] };
   return r.json();
@@ -194,16 +108,6 @@ export async function agentReplyPermission(body: {
   if (!r.ok) throw new Error((await errMsg(r)) || `Permission reply failed (${r.status})`);
 }
 
-export interface AgentQuestion {
-  question: string;
-  header: string;
-  options: { label: string; description?: string }[];
-  /** Allow picking several options. */
-  multiple?: boolean;
-  /** Allow a typed answer (default true). */
-  custom?: boolean;
-}
-
 /** Answer a question (one array of labels/text per question), or dismiss it. */
 export async function agentAnswerQuestion(body: {
   requestID: string;
@@ -219,20 +123,6 @@ export async function agentAbort(sessionID: string, directory: string): Promise<
   await fetch("/api/agent/abort", { method: "POST", headers: json(), body: JSON.stringify({ sessionID, directory }) });
 }
 
-export interface FileDiff {
-  file: string;
-  /** Unified patch (current OpenCode) … */
-  patch?: string;
-  /** … or full before/after text (older OpenCode). */
-  before?: string;
-  after?: string;
-  additions?: number;
-  deletions?: number;
-  status?: string;
-  /** Which prompt in the session made the change (1-based). */
-  turn?: number;
-}
-
 export async function agentDiff(sessionID: string, directory: string): Promise<unknown> {
   const r = await fetch(
     `/api/agent/diff?sessionID=${encodeURIComponent(sessionID)}&directory=${encodeURIComponent(directory)}`,
@@ -241,20 +131,55 @@ export async function agentDiff(sessionID: string, directory: string): Promise<u
 }
 
 /**
- * Open the SSE event stream for a session and dispatch parsed events.
- * Returns nothing; pass an AbortSignal to close it.
+ * Follow the SSE event stream for a session and dispatch parsed events until
+ * the signal aborts. A dropped connection (proxy idle timeout, backend
+ * restart) is reconnected with backoff; `onReconnect` fires after each
+ * reconnect so the caller can catch up on anything missed meanwhile. An HTTP
+ * error on connect (bad folder, signed out) is not retried: it throws.
  */
 export async function openAgentEvents(
   sessionID: string,
   directory: string,
   onEvent: (e: AgentEvent) => void,
   signal: AbortSignal,
+  onReconnect?: () => void,
+): Promise<void> {
+  let delay = 1000;
+  let connected = false;
+  while (!signal.aborted) {
+    try {
+      await readAgentEvents(sessionID, directory, onEvent, signal, () => {
+        delay = 1000;
+        if (connected) onReconnect?.();
+        connected = true;
+      });
+    } catch (e) {
+      if (signal.aborted) return;
+      if ((e as { fatal?: boolean }).fatal) throw e;
+      // network drop: fall through and retry
+    }
+    if (signal.aborted) return;
+    await new Promise((r) => setTimeout(r, delay));
+    delay = Math.min(delay * 2, 10_000);
+  }
+}
+
+/** One connection: resolves when the server ends the stream, rejects on a drop. */
+async function readAgentEvents(
+  sessionID: string,
+  directory: string,
+  onEvent: (e: AgentEvent) => void,
+  signal: AbortSignal,
+  onOpen: () => void,
 ): Promise<void> {
   const r = await fetch(
     `/api/agent/events?sessionID=${encodeURIComponent(sessionID)}&directory=${encodeURIComponent(directory)}`,
     { signal },
   );
-  if (!r.ok || !r.body) throw new Error(`Event stream failed (${r.status})`);
+  if (!r.ok || !r.body) {
+    throw Object.assign(new Error((await errMsg(r)) || `Event stream failed (${r.status})`), { fatal: true });
+  }
+  onOpen();
   const reader = r.body.getReader();
   const dec = new TextDecoder();
   let buf = "";

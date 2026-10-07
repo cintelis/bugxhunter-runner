@@ -1,5 +1,22 @@
 export type DiffLine = { kind: "same" | "add" | "del"; text: string };
 
+/** Unified patch -> display lines; hunk headers become gaps (null), file headers are dropped. */
+export function patchLines(patch: string): (DiffLine | null)[] {
+  const out: (DiffLine | null)[] = [];
+  let inHunk = false;
+  for (const raw of patch.split("\n")) {
+    const line = raw.replace(/\r$/, "");
+    if (line.startsWith("@@")) { out.push(null); inHunk = true; continue; }
+    if (!inHunk || line.startsWith("\\")) continue;
+    if (line.startsWith("+")) out.push({ kind: "add", text: line.slice(1) });
+    else if (line.startsWith("-")) out.push({ kind: "del", text: line.slice(1) });
+    else out.push({ kind: "same", text: line.slice(1) });
+  }
+  if (out[0] === null) out.shift();
+  if (out.length && out[out.length - 1]?.kind === "same" && out[out.length - 1]?.text === "") out.pop();
+  return out;
+}
+
 /** Line diff via LCS. Large files fall back to "all removed / all added". */
 export function lineDiff(before: string, after: string): DiffLine[] {
   const a = before ? before.split("\n") : [];

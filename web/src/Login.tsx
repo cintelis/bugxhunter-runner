@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Logo } from "./brand";
+import { TerminalBar } from "./Terminal";
+import { Wordmark } from "./brand";
 
 type AuthState = "checking" | "open" | "signed-in" | "signed-out";
 
@@ -54,17 +55,22 @@ function Login({ onSuccess }: { onSuccess: () => void }) {
     }
   }
 
+  // The site's OG card: a terminal window with the wordmark and a blinking cursor.
   return (
-    <div className="login-page">
+    <div className="login-page grid-bg">
       <form className="login-card" onSubmit={submit}>
-        <Logo size={34} />
-        <label htmlFor="pw">Password</label>
-        <input id="pw" type="password" autoFocus autoComplete="current-password"
-          value={password} onChange={(e) => setPassword(e.target.value)} />
-        {error && <div className="hint danger">{error}</div>}
-        <button className="btn primary block" type="submit" disabled={busy || !password}>
-          {busy ? "Signing in…" : "Sign in"}
-        </button>
+        <TerminalBar title="bugxhunter@redteam: ~/login" />
+        <div className="login-body">
+          <span className="logo login-mark" style={{ fontSize: 34 }} aria-label="BugXHunter"><Wordmark cursor /></span>
+          <div className="login-tag">Your Security Testing Partner</div>
+          <label htmlFor="pw">password</label>
+          <input id="pw" type="password" autoFocus autoComplete="current-password"
+            value={password} onChange={(e) => setPassword(e.target.value)} />
+          {error && <div className="form-status error">{error}</div>}
+          <button className="btn primary block" type="submit" disabled={busy || !password}>
+            {busy ? "authenticating…" : "./sign_in →"}
+          </button>
+        </div>
       </form>
     </div>
   );

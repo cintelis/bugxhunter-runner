@@ -42,8 +42,10 @@ export function chunkText(text: string, size = 900, overlap = 150): string[] {
       if (br > size * 0.5) end = i + br + 1;
     }
     chunks.push(clean.slice(i, end).trim());
-    i = end - overlap;
-    if (i < 0) i = 0;
+    // The final chunk reaches the end: stop here, otherwise stepping back by
+    // the overlap would re-emit that tail forever.
+    if (end >= clean.length) break;
+    i = Math.max(0, end - overlap);
   }
   return chunks.filter(Boolean);
 }

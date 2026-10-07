@@ -38,6 +38,8 @@ export interface ChatRequest {
   response_format?: { type: "json_object" | "text" };
   rag?: boolean;
   ragTopK?: number;
+  /** Token-by-token SSE (default) or one JSON completion when false. */
+  stream?: boolean;
 }
 
 export interface StreamHandlers {
@@ -50,8 +52,13 @@ export interface StreamHandlers {
   signal?: AbortSignal;
 }
 
-/** Streaming chat over SSE via the proxy. */
-export async function streamChat(req: ChatRequest, h: StreamHandlers): Promise<void> {
+/**
+ * Run one chat turn through the proxy and feed the handlers. Streams over SSE
+ * unless `req.stream` is false, in which case the whole completion arrives at
+ * once and is delivered through the same handlers.
+ */
+export async function runChat(req: ChatRequest, h: StreamHandlers): Promise<void> {
+  if (req.stream === false) return chatOnce(req, h);
   const r = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -123,6 +130,34 @@ export async function streamChat(req: ChatRequest, h: StreamHandlers): Promise<v
   }
   flushTools(toolAcc, h);
   h.onDone(finish);
+}
+
+/** Non-streaming turn: one JSON completion, delivered through the stream handlers. */
+async function chatOnce(req: ChatRequest, h: StreamHandlers): Promise<void> {
+  const r = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...req, stream: false }),
+    signal: h.signal,
+  });
+  if (!r.ok) {
+    h.onError((await safeErr(r)) || `Chat request failed (${r.status})`);
+    return;
+  }
+  const data = await r.json();
+  if (data.scx_sources) h.onSources?.(data.scx_sources as RagSource[]);
+  const choice = data.choices?.[0];
+  const msg = choice?.message;
+  if (msg?.content) h.onDelta(msg.content);
+  if (msg?.tool_calls?.length) h.onToolCalls?.(msg.tool_calls as ToolCall[]);
+  if (data.usage) {
+    h.onUsage?.({
+      prompt: data.usage.prompt_tokens,
+      completion: data.usage.completion_tokens,
+      reasoning: data.usage.completion_tokens_details?.reasoning_tokens,
+    });
+  }
+  h.onDone(choice?.finish_reason ?? null);
 }
 
 function flushTools(acc: Record<number, ToolCall>, h: StreamHandlers) {

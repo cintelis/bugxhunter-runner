@@ -1,12 +1,12 @@
-# Open Runner sandbox — how this environment works
+# BugXHunter sandbox — how this environment works
 
-You are running inside a sandboxed container managed by Open Runner. Read this before using the network.
+You are running inside a sandboxed container managed by BugXHunter. Read this before using the network.
 
 ## Network: direct internet
 
-- You have **direct internet access** — no proxy, no per-site approval. `curl`, `wget`, `git`,
-  `pip`, `npm`, `nmap`, `ping`, `dig`, and your `webfetch`/`websearch` tools all work normally.
-- `runner` is the Open Runner backend (it serves the model API); it is not a scan target.
+- You have **direct internet access**. `curl`, `wget`, `git`, `pip`, `npm`, `nmap`, `ping`,
+  `dig`, and your `webfetch`/`websearch` tools all work normally. Outbound connections are logged.
+- `runner` is the BugXHunter backend (it serves the model API); it is not a scan target.
 - **Only reach targets the user has authorised.** You have unrestricted outbound, so the
   responsibility is yours: confirm authorisation before scanning, and never touch a host the user
   hasn't named.
@@ -55,4 +55,3 @@ Scope beats speed. A blind full-template nuclei run fires thousands of requests,
 
 - Projects live under `/workspace`. Files the user attaches to a message are saved in the project's
   `attachments/` folder.
-- `/workspace/logs/` is Open Runner's audit log. Don't modify or delete it.
