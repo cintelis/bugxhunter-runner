@@ -3,7 +3,7 @@
 [![CI](https://github.com/cintelis/bugxhunter-runner/actions/workflows/ci.yml/badge.svg)](https://github.com/cintelis/bugxhunter-runner/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/cintelis/bugxhunter-runner/actions/workflows/codeql.yml/badge.svg)](https://github.com/cintelis/bugxhunter-runner/actions/workflows/codeql.yml)
 [![Built with Claude Code](https://img.shields.io/badge/built_with-Claude_Code-0a0e14?logo=anthropic&logoColor=00e5ff)](https://claude.com/claude-code)
-[![Reviewed with Claude Mythos 5.1](https://img.shields.io/badge/reviewed_with-Claude_Mythos_5.1-0a0e14?logo=anthropic&logoColor=00ff41)](https://claude.com)
+[![Reviewed by Claude Mythos 5.1](https://img.shields.io/badge/reviewed_by-Claude_Mythos_5.1-0a0e14?logo=anthropic&logoColor=faf9f5)](https://www.anthropic.com/claude/mythos)
 
 The [BugXHunter](https://bugxhunter.com) security-testing agent runner: a web UI for the
 [OpenCode](https://opencode.ai) coding agent, running on open-weight models (GLM-5.3 by default)
@@ -178,9 +178,10 @@ fails the other's type-check.
 ## AI assistance
 
 BugXHunter was built with [Claude Code](https://claude.com/claude-code), and the codebase was
-reviewed and hardened with Claude Mythos 5.1 (bug fixes, the security hardening, tests and CI).
-That is a tool credit, not a review or endorsement by Anthropic; the maintainers are responsible
-for the code.
+reviewed and hardened by [Claude Mythos 5.1](https://www.anthropic.com/claude/mythos) (bug fixes,
+the security hardening, tests and CI). The app shows this with Anthropic's Claude wordmark, used
+as published. It is a model credit, not an endorsement by Anthropic; the maintainers are
+responsible for the code.
 
 ## License
 

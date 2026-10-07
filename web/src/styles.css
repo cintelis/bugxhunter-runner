@@ -80,15 +80,17 @@ a { color: var(--cyan); }
 .sidebar-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .sidebar-body { overflow-y: auto; padding: 6px 18px 24px; flex: 1; }
 .sidebar-foot { padding: 10px 18px 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
-/* Tool credit, visible on every screen: built with Claude Code, reviewed with Claude Mythos 5.1. */
-.ai-badge {
-  display: flex; justify-content: center; align-items: center; gap: 4px; flex-wrap: wrap;
-  font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.3px; color: var(--text); text-decoration: none;
-  padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel-2); transition: var(--transition);
+/* "Reviewed by Claude Mythos 5.1" (as cisoai.au's "Powered by Claude"): Anthropic's ivory Claude
+   wordmark from its press kit, used as published — unaltered, uncropped, on a dark ground, with
+   clear space either side. Visible on every screen. */
+.powered-by {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; align-self: center;
+  color: var(--muted); font-family: var(--sans); font-size: 0.8rem; text-decoration: none; white-space: nowrap;
+  padding: 4px 0; transition: var(--transition);
 }
-.ai-badge .k { color: var(--muted); }
-.ai-badge .sep { color: var(--cyan); }
-.ai-badge:hover { border-color: var(--cyan); color: var(--cyan); }
+.powered-by-logo { display: block; width: auto; height: 18px; }
+.powered-by-model { color: var(--text); }
+.powered-by:hover .powered-by-lead, .powered-by:focus-visible .powered-by-lead { color: var(--text); }
 
 /* Splitter: a 1px border with a wider invisible grab area. */
 .splitter { position: relative; background: var(--border); cursor: col-resize; z-index: 5; touch-action: none; }

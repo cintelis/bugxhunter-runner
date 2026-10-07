@@ -337,14 +337,18 @@ export function Sidebar({
       )}
       <div className="sidebar-foot">
         {authOn && <button className="btn ghost sm block" onClick={logout}>Sign out</button>}
+        {/* Same treatment as cisoai.au's "Powered by Claude": Anthropic's ivory Claude
+            wordmark from its press kit, unaltered, on a dark ground with clear space. */}
         <a
-          className="ai-badge"
-          href="https://claude.com/claude-code"
+          className="powered-by"
+          href="https://www.anthropic.com/claude/mythos"
           target="_blank"
           rel="noopener noreferrer"
-          title="This app was built with Claude Code and its code reviewed and hardened with Claude Mythos 5.1."
+          aria-label="Reviewed by Claude Mythos 5.1"
         >
-          <span className="k">built with</span> Claude Code <span className="sep">·</span> <span className="k">reviewed with</span> Claude Mythos 5.1
+          <span className="powered-by-lead">Reviewed by</span>
+          <img className="powered-by-logo" src="/claude-logo-ivory.svg" alt="Claude" width="83" height="18" />
+          <span className="powered-by-model">Mythos 5.1</span>
         </a>
       </div>
     </aside>
