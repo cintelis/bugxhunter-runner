@@ -52,7 +52,9 @@ export function VaultPanel() {
   ) : !status.unsealed ? (
     <>
       <span className="vault-state sealed">vault locked</span>
-      <button className="btn primary sm" onClick={() => setDialog("unlock")}>unlock</button>
+      <button className="icon-btn vault-btn primary" onClick={() => setDialog("unlock")} title="Unlock the vault" aria-label="Unlock the vault">
+        <LockOpenIcon />
+      </button>
     </>
   ) : (
     <>
@@ -78,7 +80,14 @@ export function VaultPanel() {
   );
 }
 
-// Lucide icons (ISC): key-square and shield-keyhole, inlined so they take the theme colour.
+// Lucide icons (ISC): lock-keyhole-open, key-square and shield-keyhole, inlined so they take the theme colour.
+const LockOpenIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <circle cx="12" cy="16" r="1" />
+    <rect width="18" height="12" x="3" y="10" rx="2" />
+    <path d="M7 10V7a5 5 0 0 1 9.33-2.5" />
+  </svg>
+);
 const KeySquareIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     <path d="M12.4 2.7a2.5 2.5 0 0 1 3.4 0l5.5 5.5a2.5 2.5 0 0 1 0 3.4l-3.7 3.7a2.5 2.5 0 0 1-3.4 0L8.7 9.8a2.5 2.5 0 0 1 0-3.4z" />
