@@ -24,7 +24,8 @@ The agent working in a project — live tool calls, reasoning, and a markdown su
 
 ![BugXHunter — the agent reading a project and summarising it](docs/images/runner.jpg)
 
-Point it at any folder; resume past sessions; approve edits and commands as they happen:
+Point it at any folder; resume past sessions; approve edits and commands as they happen. The key
+vault's state and lock live in the sidebar footer:
 
 ![BugXHunter — Runner landing view](docs/images/landing.jpg)
 
