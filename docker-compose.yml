@@ -18,8 +18,13 @@
 
 name: bugxhunter
 
+# Images: `docker compose pull` fetches the published images (BXH_VERSION in
+# .env picks a signed release, e.g. v1.2.3; default latest); `docker compose
+# up -d --build` builds them locally instead. See SECURITY.md to verify a
+# release's image digests before pulling.
 services:
   runner:
+    image: ghcr.io/cintelis/bugxhunter-runner:${BXH_VERSION:-latest}
     build:
       context: .
       dockerfile: docker/runner.Dockerfile
@@ -47,6 +52,7 @@ services:
     restart: unless-stopped
 
   agent:
+    image: ghcr.io/cintelis/bugxhunter-agent:${BXH_VERSION:-latest}
     build:
       context: .
       dockerfile: docker/agent.Dockerfile
@@ -76,7 +82,7 @@ services:
   # /logs/egress-<date>.jsonl. Log-only — it never blocks traffic and
   # is not in the data path, so scans keep full speed.
   egress-logger:
-    image: bugxhunter-agent
+    image: ghcr.io/cintelis/bugxhunter-agent:${BXH_VERSION:-latest}
     command: ["node", "/usr/local/lib/egress-logger.mjs"]
     network_mode: "service:agent"        # see the agent's connections
     user: root                           # needs CAP_NET_RAW effective (agent image defaults to non-root)

@@ -27,6 +27,9 @@ $newPassword = -not $vals["OPEN_RUNNER_PASSWORD"]
 if ($newPassword) { $vals["OPEN_RUNNER_PASSWORD"] = New-Secret 12 }
 if (-not $vals["OPEN_RUNNER_SECRET"]) { $vals["OPEN_RUNNER_SECRET"] = New-Secret 32 }
 if (-not $vals["SCX_PROXY_TOKEN"]) { $vals["SCX_PROXY_TOKEN"] = New-Secret 32 }
+# A release's deploy bundle ships a VERSION file: pin `docker compose pull` to its images.
+$versionFile = Join-Path $root "VERSION"
+if (-not $vals["BXH_VERSION"] -and (Test-Path $versionFile)) { $vals["BXH_VERSION"] = (Get-Content $versionFile -Raw).Trim() }
 
 $out = ($vals.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join "`n"
 [IO.File]::WriteAllText($envFile, $out + "`n", (New-Object Text.UTF8Encoding $false))

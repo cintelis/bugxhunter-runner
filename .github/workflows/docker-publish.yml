@@ -1,12 +1,12 @@
-# Publishes the two images to GitHub Container Registry:
+# Publishes the two images to GitHub Container Registry on every push to master:
 #   ghcr.io/<owner>/bugxhunter-runner  and  ghcr.io/<owner>/bugxhunter-agent
-# Tags: `latest` on master, `vX.Y.Z` on version tags, `sha-<short>` always.
+# Tags: `latest` and `sha-<short>`. Versioned, signed images come from
+# release.yml instead.
 name: Docker publish
 
 on:
   push:
     branches: [master]
-    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -33,7 +33,6 @@ jobs:
           images: ghcr.io/${{ github.repository_owner }}/bugxhunter-${{ matrix.image }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
             type=sha,prefix=sha-
       - uses: docker/build-push-action@v6
         with:
