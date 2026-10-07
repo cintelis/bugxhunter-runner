@@ -17,6 +17,7 @@ export const MIN_PASSPHRASE = 10;
 const vaultLabel = () => `BugXHunter vault (${location.hostname})`;
 
 /** Secrets the app itself looks for; anything else is a custom item (e.g. a target's token). */
+const CUSTOM = "__custom__";
 const KNOWN_ITEMS = [
   { name: "SCX_API", label: "SCX.ai model key — the default provider" },
   { name: "OPENROUTER_API_KEY", label: "OpenRouter key — unlocks its model catalogue (optional)" },
@@ -402,7 +403,7 @@ function ManageDialog({ status, onChange, onClose }: { status: VaultStatus; onCh
               <span className="name">{k.name}<span className="desc"> — {k.label}</span></span>
               {present
                 ? <button className="btn danger" disabled={busy} onClick={() => removeItem(k.name)} title="Remove">✕</button>
-                : <button className="btn sm" disabled={busy} onClick={() => { setName(k.name); document.getElementById("v-value")?.focus(); }}>add</button>}
+                : <button className="btn sm" disabled={busy} onClick={() => { setName(k.name); setTimeout(() => document.getElementById("v-value")?.focus(), 0); }}>add</button>}
             </div>
           );
         })}
@@ -413,9 +414,14 @@ function ManageDialog({ status, onChange, onClose }: { status: VaultStatus; onCh
           </div>
         ))}
       </div>
-      <label htmlFor="v-name">Name</label>
-      <input id="v-name" type="text" className="mono" list="v-known" value={name} onChange={(e) => setName(e.target.value)} spellCheck={false} />
-      <datalist id="v-known">{KNOWN_ITEMS.map((k) => <option key={k.name} value={k.name} />)}</datalist>
+      <label htmlFor="v-name">Key</label>
+      <select id="v-name" className="mono" value={KNOWN_ITEMS.some((k) => k.name === name) ? name : CUSTOM} onChange={(e) => setName(e.target.value === CUSTOM ? "" : e.target.value)}>
+        {KNOWN_ITEMS.map((k) => <option key={k.name} value={k.name}>{k.name}{status.items.includes(k.name) ? " (replace)" : ""}</option>)}
+        <option value={CUSTOM}>custom…</option>
+      </select>
+      {!KNOWN_ITEMS.some((k) => k.name === name) && (
+        <input type="text" className="mono" placeholder="NAME_IN_UPPER_SNAKE_CASE" aria-label="Custom key name" value={name} onChange={(e) => setName(e.target.value)} spellCheck={false} autoFocus />
+      )}
       <label htmlFor="v-value">Value</label>
       <input id="v-value" type="password" autoComplete="off" value={value} onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => { if (e.key === "Enter" && value) saveItem(); }} />
