@@ -1,9 +1,9 @@
 {
   "name": "bugxhunter",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "license": "MIT",
-  "description": "BugXHunter \u2014 security-testing agent runner: a web UI for the OpenCode agent on open-weight models via SCX",
+  "description": "BugXHunter — security-testing agent runner: a web UI for the OpenCode agent on open-weight models via SCX",
   "workspaces": [
     "server",
     "web"
