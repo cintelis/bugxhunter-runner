@@ -59,8 +59,12 @@ export function VaultPanel() {
       <span className="vault-state open" title={status.idleMinutes ? `Auto-locks after ${status.idleMinutes} min without activity` : "Auto-lock off"}>
         vault open{status.sealsAt ? ` · locks in ${remaining(status.sealsAt - now)}` : ""}
       </span>
-      <button className="btn ghost sm" onClick={() => setDialog("manage")} title="Keys in the vault">keys</button>
-      <button className="btn ghost sm" onClick={lock} title="Lock now (Ctrl+Shift+L)">lock</button>
+      <button className="icon-btn vault-btn" onClick={() => setDialog("manage")} title="Keys in the vault" aria-label="Keys in the vault">
+        <KeySquareIcon />
+      </button>
+      <button className="icon-btn vault-btn" onClick={lock} title="Lock the vault (Ctrl+Shift+L)" aria-label="Lock the vault (Ctrl+Shift+L)">
+        <ShieldKeyholeIcon />
+      </button>
     </>
   );
 
@@ -73,6 +77,22 @@ export function VaultPanel() {
     </>
   );
 }
+
+// Lucide icons (ISC): key-square and shield-keyhole, inlined so they take the theme colour.
+const KeySquareIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M12.4 2.7a2.5 2.5 0 0 1 3.4 0l5.5 5.5a2.5 2.5 0 0 1 0 3.4l-3.7 3.7a2.5 2.5 0 0 1-3.4 0L8.7 9.8a2.5 2.5 0 0 1 0-3.4z" />
+    <path d="m14 7 3 3" />
+    <path d="m9.4 10.6-6.814 6.814A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814" />
+  </svg>
+);
+const ShieldKeyholeIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M12 13v3" />
+    <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 01-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 011-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 011.52 0C14.51 3.81 17 5 19 5a1 1 0 011 1z" />
+    <circle cx="12" cy="11" r="2" />
+  </svg>
+);
 
 function remaining(ms: number) {
   const m = Math.max(0, Math.round(ms / 60_000));
