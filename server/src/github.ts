@@ -1,12 +1,19 @@
 /**
  * GitHub, read-only.
  *
- * One fine-grained personal access token (vault item GITHUB_TOKEN, else the
- * GITHUB_TOKEN variable, scrubbed from the environment in providers.ts) does
- * two things: lists the repositories it was granted, and clones or
- * fast-forwards them into the workspace. The user decides the reach on
- * GitHub's own screen when minting the token (which repositories; Contents:
- * read-only), and this module never pushes, writes or reads anything else.
+ * The runner signs in to the public "BugXHunter" GitHub App with the device
+ * flow (the thing `gh auth login` does): a short code typed at
+ * github.com/login/device, no callback URL and no client secret, so one app
+ * registration serves every self-hosted runner. The app declares Contents:
+ * read-only and Metadata: read-only, and its user token reaches only the
+ * repositories the app was INSTALLED on ("Choose repositories"), so the reach
+ * is chosen and bounded by the user on GitHub's own screens. Tokens expire
+ * after eight hours and refresh; the pair is kept in the vault (item
+ * GITHUB_OAUTH), or in memory until restart when there is no vault yet.
+ *
+ * The token does two things: lists the repositories it reaches, and clones or
+ * fast-forwards them into the workspace. Nothing here pushes, writes or reads
+ * anything else.
  *
  * The token is passed to git through an environment-scoped config entry
  * (GIT_CONFIG_*), so it is in neither the command line nor the clone's
@@ -22,19 +29,23 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { CloneRequest, CloneResult, GitHubBranch, GitHubClone, GitHubRepo, GitHubStatus } from "../../shared/github.js";
+import type { CloneRequest, CloneResult, DeviceStart, DevicePoll, GitHubBranch, GitHubClone, GitHubRepo, GitHubStatus } from "../../shared/github.js";
 import { httpError } from "./errors.js";
 import { CLONE_ROOT, REMOTE_URL } from "./opencode.js";
-import { secret, secretSource } from "./providers.js";
 import * as vault from "./vault.js";
 
 const execFileP = promisify(execFile);
 
-export const TOKEN_ITEM = "GITHUB_TOKEN";
+/** The signed-in connection (tokens + login), as JSON. */
+export const CONNECTION_ITEM = "GITHUB_OAUTH";
+/** The public BugXHunter GitHub App. Forks register their own and override these. */
+export const CLIENT_ID = process.env.GITHUB_CLIENT_ID ?? "Iv23lijniIcrEZ0ZFNWD";
+export const APP_SLUG = process.env.GITHUB_APP_SLUG ?? "bugxhunter";
 const API_BASE = process.env.GITHUB_API_BASE ?? "https://api.github.com";
+const OAUTH_BASE = process.env.GITHUB_OAUTH_BASE ?? "https://github.com";
 /** Overridable so tests can clone from a local bare repository. */
 const GIT_BASE = process.env.GITHUB_GIT_BASE ?? "https://github.com";
-const NO_TOKEN = `No GitHub token. Create a fine-grained token on GitHub (only the repositories you choose, Contents: read-only) and add it to the vault as ${TOKEN_ITEM}.`;
+const NOT_CONNECTED = "Not connected to GitHub. Sidebar → clone from GitHub → Connect GitHub.";
 
 // --- names and paths ----------------------------------------------------------------
 
@@ -151,10 +162,149 @@ export function listClones(): GitHubClone[] {
 
 // --- the API --------------------------------------------------------------------------
 
-function token(): string {
-  const t = secret(TOKEN_ITEM); // throws 503 while the vault is sealed
-  if (!t) throw httpError(503, NO_TOKEN);
-  return t;
+// --- the signed-in connection (GitHub App, device flow) ------------------------------
+
+interface Connection {
+  accessToken: string;
+  refreshToken?: string;
+  /** Epoch ms; absent for a token that does not expire. */
+  expiresAt?: number;
+  login: string;
+}
+
+/** Where the connection lives when there is no vault to seal it in: this process only. */
+let memoryConnection: Connection | null = null;
+
+function connectionStorage(): "vault" | "memory" | "sealed" {
+  if (!vault.isInitialised()) return "memory";
+  return vault.isUnsealed() ? "vault" : "sealed";
+}
+
+function loadConnection(): Connection | null {
+  if (connectionStorage() === "vault") {
+    const raw = vault.getItem(CONNECTION_ITEM);
+    if (!raw) return null;
+    try { return JSON.parse(raw) as Connection; } catch { return null; }
+  }
+  return memoryConnection;
+}
+
+function saveConnection(c: Connection | null): "vault" | "memory" {
+  const where = connectionStorage();
+  if (where === "sealed") throw httpError(503, "The vault is locked. Unlock it (lock icon in the sidebar) and try again.");
+  if (where === "vault") {
+    if (c) vault.setItem(CONNECTION_ITEM, JSON.stringify(c));
+    else if (vault.status("none").items.includes(CONNECTION_ITEM)) vault.deleteItem(CONNECTION_ITEM);
+    memoryConnection = null;
+  } else {
+    memoryConnection = c;
+  }
+  return where;
+}
+
+export function disconnect(): void {
+  saveConnection(null);
+}
+
+interface TokenResponse {
+  access_token?: string;
+  refresh_token?: string;
+  expires_in?: number;
+  error?: string;
+  error_description?: string;
+  interval?: number;
+}
+
+/** POST to GitHub's OAuth endpoints (form in, JSON out). No client secret: the device flow has none. */
+async function oauthPost(path: string, params: Record<string, string>): Promise<TokenResponse> {
+  const r = await fetch(`${OAUTH_BASE}${path}`, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "bugxhunter-runner" },
+    body: new URLSearchParams({ client_id: CLIENT_ID, ...params }).toString(),
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!r.ok) throw httpError(502, `GitHub sign-in endpoint answered ${r.status}`);
+  return (await r.json()) as TokenResponse;
+}
+
+function tokensFrom(data: TokenResponse, login: string): Connection {
+  if (!data.access_token) throw httpError(502, data.error_description || data.error || "GitHub returned no token");
+  const c: Connection = { accessToken: data.access_token, login };
+  if (data.refresh_token) {
+    c.refreshToken = data.refresh_token;
+    // A minute early, so a token is never presented at the edge of expiry.
+    if (typeof data.expires_in === "number" && data.expires_in > 0) c.expiresAt = Date.now() + (data.expires_in - 60) * 1000;
+  }
+  return c;
+}
+
+/** Device flows started from this process, by an opaque id the browser polls with. */
+const pendingDevice = new Map<string, { deviceCode: string; interval: number; expiresAt: number; nextPoll: number }>();
+
+/** Step 1: ask GitHub for a code the person types at github.com/login/device. */
+export async function connectStart(): Promise<DeviceStart> {
+  if (connectionStorage() === "sealed") throw httpError(503, "The vault is locked. Unlock it first so the connection can be sealed in it.");
+  const d = (await oauthPost("/login/device/code", {})) as TokenResponse & { device_code?: string; user_code?: string; verification_uri?: string };
+  if (!d.device_code || !d.user_code) throw httpError(502, d.error_description || d.error || "GitHub did not start a device sign-in");
+  for (const [k, v] of pendingDevice) if (v.expiresAt < Date.now()) pendingDevice.delete(k);
+  const id = crypto.randomBytes(16).toString("base64url");
+  const interval = Math.max(5, d.interval ?? 5);
+  pendingDevice.set(id, { deviceCode: d.device_code, interval, expiresAt: Date.now() + (d.expires_in ?? 900) * 1000, nextPoll: 0 });
+  return { id, userCode: d.user_code, verificationUri: d.verification_uri ?? `${OAUTH_BASE}/login/device`, expiresIn: d.expires_in ?? 900, interval };
+}
+
+/**
+ * Step 2, repeated: has the person approved yet? GitHub's polling interval is
+ * respected here no matter how often the browser asks (a faster poll earns a
+ * `slow_down`). On approval the tokens are stored and the login looked up.
+ */
+export async function connectPoll(id: unknown): Promise<DevicePoll> {
+  const p = typeof id === "string" ? pendingDevice.get(id) : undefined;
+  if (!p) throw httpError(404, "That sign-in attempt is unknown or has expired. Start again.");
+  const key = id as string;
+  if (p.expiresAt < Date.now()) { pendingDevice.delete(key); return { status: "expired" }; }
+  if (Date.now() < p.nextPoll) return { status: "pending" };
+  p.nextPoll = Date.now() + p.interval * 1000;
+  const data = await oauthPost("/login/oauth/access_token", { device_code: p.deviceCode, grant_type: "urn:ietf:params:oauth:grant-type:device_code" });
+  switch (data.error) {
+    case "authorization_pending": return { status: "pending" };
+    case "slow_down": p.interval = Math.max(p.interval, (data.interval ?? p.interval) + 5); p.nextPoll = Date.now() + p.interval * 1000; return { status: "pending" };
+    case "expired_token": pendingDevice.delete(key); return { status: "expired" };
+    case "access_denied": pendingDevice.delete(key); return { status: "denied" };
+    case undefined: break;
+    default: pendingDevice.delete(key); throw httpError(502, `GitHub: ${data.error_description || data.error}`);
+  }
+  pendingDevice.delete(key);
+  const partial = tokensFrom(data, "");
+  const me = await api<{ login: string }>(partial.accessToken, "/user");
+  const storage = saveConnection({ ...partial, login: me.login });
+  return { status: "connected", login: me.login, storage };
+}
+
+/** A usable access token from the connection, refreshing it when it has expired. Null when not connected. */
+async function connectionToken(): Promise<string | null> {
+  const c = loadConnection();
+  if (!c) return null;
+  if (!c.expiresAt || Date.now() < c.expiresAt) return c.accessToken;
+  if (!c.refreshToken) { saveConnection(null); throw httpError(503, "The GitHub connection has expired. Connect again."); }
+  let next: Connection;
+  try {
+    next = tokensFrom(await oauthPost("/login/oauth/access_token", { grant_type: "refresh_token", refresh_token: c.refreshToken }), c.login);
+  } catch {
+    // A refresh token is single use and lasts six months; one that no longer
+    // works cannot be repaired from here.
+    saveConnection(null);
+    throw httpError(503, "GitHub would not renew the connection. Connect again.");
+  }
+  saveConnection(next);
+  return next.accessToken;
+}
+
+/** The token for this call. */
+async function token(): Promise<string> {
+  const c = await connectionToken();
+  if (!c) throw httpError(503, NOT_CONNECTED);
+  return c;
 }
 
 async function api<T>(tok: string, route: string): Promise<T> {
@@ -170,7 +320,11 @@ async function api<T>(tok: string, route: string): Promise<T> {
   if (r.ok) return (await r.json()) as T;
   let message = `GitHub answered ${r.status}`;
   try { message = ((await r.json()) as { message?: string }).message ?? message; } catch { /* no body */ }
-  if (r.status === 401) throw httpError(502, `GitHub rejected the token (${message}). Replace ${TOKEN_ITEM} in the vault.`);
+  if (r.status === 401) {
+    // Revoked on GitHub's side: drop our copy and say so, rather than "Bad credentials" on every click.
+    if (connectionStorage() !== "sealed") saveConnection(null);
+    throw httpError(503, `GitHub no longer accepts the connection (${message}). Connect again.`);
+  }
   throw httpError(r.status === 404 || r.status === 403 ? r.status : 502, `GitHub: ${message}`);
 }
 
@@ -186,12 +340,21 @@ async function whoami(tok: string): Promise<string> {
 }
 
 export async function status(): Promise<GitHubStatus> {
-  const source = secretSource(TOKEN_ITEM);
-  const base: GitHubStatus = { configured: source !== "none", source, sealed: false, login: null, error: null, cloneRoot: CLONE_ROOT, clones: listClones() };
-  if (source === "none") return base;
-  if (source === "vault" && !vault.isUnsealed()) return { ...base, sealed: true };
+  const storage = connectionStorage();
+  const connected = storage !== "sealed" && loadConnection() !== null;
+  const base: GitHubStatus = {
+    connected, sealed: false, login: null, error: null,
+    installUrl: `${OAUTH_BASE}/apps/${encodeURIComponent(APP_SLUG)}/installations/new`,
+    storage: storage === "sealed" ? null : storage,
+    cloneRoot: CLONE_ROOT, clones: listClones(),
+  };
+  if (storage === "sealed") {
+    // The sign-in may be in the vault; say so rather than "not connected".
+    return vault.status("none").items.includes(CONNECTION_ITEM) ? { ...base, connected: true, sealed: true } : base;
+  }
+  if (!connected) return base;
   try {
-    return { ...base, login: await whoami(token()) };
+    return { ...base, login: await whoami(await token()) };
   } catch (e) {
     return { ...base, error: (e as Error).message };
   }
@@ -201,7 +364,7 @@ interface RepoRow { full_name: string; description: string | null; default_branc
 
 /** Every repository the token can see (a fine-grained token: the ones it was granted), newest push first. */
 export async function listRepos(): Promise<GitHubRepo[]> {
-  const tok = token();
+  const tok = await token();
   const rows: RepoRow[] = [];
   for (let page = 1; page <= 3; page++) {
     const batch = await api<RepoRow[]>(tok, `/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member&page=${page}`);
@@ -222,7 +385,7 @@ export async function listRepos(): Promise<GitHubRepo[]> {
 
 export async function listBranches(repo: unknown): Promise<GitHubBranch[]> {
   const { fullName } = parseRepo(repo);
-  const tok = token();
+  const tok = await token();
   const [info, branches] = await Promise.all([
     api<{ default_branch: string }>(tok, `/repos/${fullName}`),
     api<{ name: string }[]>(tok, `/repos/${fullName}/branches?per_page=100`),
@@ -253,7 +416,7 @@ export function cloneOrUpdate(req: CloneRequest): Promise<CloneResult> {
 }
 
 async function doCloneOrUpdate(fullName: string, dir: string, branch?: string): Promise<CloneResult> {
-  const tok = token();
+  const tok = await token();
   if (fs.existsSync(dir)) {
     const existing = inspectClone(dir);
     if (!existing) throw httpError(409, `${dir} exists but is not a git clone. Move it aside first.`);

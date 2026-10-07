@@ -150,24 +150,30 @@ shows each model's per-token rates.
 ## GitHub repositories (read-only)
 
 To review a repository, clone it into the workspace from the sidebar (**clone from GitHub** under
-the project folder). The reach is yours to set, on GitHub, when you mint the token:
+the project folder). The first time, click **Connect GitHub**: a short code appears, you enter it
+at github.com/login/device, and the runner is signed in. Then **Choose repositories on GitHub**
+opens the app's install screen, where you pick which repositories it may read; the list in the
+dialog refreshes when you come back. Nothing to register, no token to paste.
 
-1. [Create a fine-grained personal access token](https://github.com/settings/personal-access-tokens/new):
-   Repository access **Only select repositories**, Permissions **Contents: Read-only** (Metadata
-   comes with it). Give it an expiry.
-2. Add it to the vault as `GITHUB_TOKEN` (keys dialog). No GitHub App, no callback URL.
+The sign-in is to the public **BugXHunter** GitHub App, which declares only *Contents: read-only*
+and *Metadata: read-only*, so even GitHub will refuse a push with its token. It reaches only the
+repositories you install it on, and you can change that list or revoke the app on GitHub at any
+time. Its tokens expire after eight hours and are refreshed by the runner; the pair is sealed in
+the vault (or, before a vault exists, kept in memory until the runner restarts).
 
-The dialog lists exactly the repositories the token was granted (change the list on GitHub any
-time), with a branch picker. A clone lands in `<workspace>/<owner>/<repo>` (Docker: the shared
-`workspace` volume; locally `~/bugxhunter/repos`, or `OPEN_RUNNER_WORKSPACE`) and becomes the
-project folder. Cloning again fast-forwards it and never resets local edits.
+A clone lands in `<workspace>/<owner>/<repo>` (Docker: the shared `workspace` volume; locally
+`~/bugxhunter/repos`, or `OPEN_RUNNER_WORKSPACE`) and becomes the project folder. Cloning again
+fast-forwards it and never resets local edits.
 
 **The runner does the cloning, the agent gets a working copy.** The token is passed to git as a
-process-scoped header, so it is in neither the command line nor the clone's `.git/config`, and
-the `GITHUB_TOKEN` variable is scrubbed from the environment before the agent starts. The agent
-can read, grep and scan the code (gitleaks over the history included) and edit it locally, but
-nothing in the sandbox can fetch, push, open issues or see any other repository. Pushing results
-back is deliberately not built: findings leave through the UI, not through your GitHub account.
+process-scoped header, so it is in neither the command line nor the clone's `.git/config`. The
+agent can read, grep and scan the code (gitleaks over the history included) and edit it locally,
+but nothing in the sandbox can fetch, push, open issues or see any other repository. Pushing
+results back is deliberately not built: findings leave through the UI, not through your GitHub
+account.
+
+A fork that wants its own app registers one (device flow on, *Contents: read-only*, installable
+on any account) and sets `GITHUB_CLIENT_ID` and `GITHUB_APP_SLUG`.
 
 ## Security-testing tools (authorised use only)
 
@@ -208,7 +214,7 @@ you run this in — Docker's bridge NAT doesn't restrict outbound on its own.
 | `OPENROUTER_API_KEY` | the vault, else unset | OpenRouter key in the clear; prefer the vault item of the same name |
 | `OPENROUTER_MODELS` | unset | Comma list of OpenRouter model ids the agent may use; becomes an OpenCode provider through the proxy |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter endpoint |
-| `GITHUB_TOKEN` | the vault, else unset | GitHub fine-grained token in the clear; prefer the vault item of the same name. Read-only clones only |
+| `GITHUB_CLIENT_ID` | the BugXHunter app | A fork's own GitHub App (device flow); `GITHUB_APP_SLUG` names its install page |
 | `OPEN_RUNNER_VAULT_FILE` | `~/.config/bugxhunter/vault.json` | The sealed vault (Docker: `/data/vault.json` on the `runner-data` volume) |
 | `OPEN_RUNNER_VAULT_IDLE_MINUTES` | `120` | Auto-lock after this long without a model call or API write; `0` = never |
 | `OPEN_RUNNER_SECRET` | random per start | Signs session cookies; set it to keep sign-ins across restarts |

@@ -80,34 +80,6 @@ for (const p of Object.values(PROVIDERS)) {
 }
 for (const k of ["SCX_PROXY_TOKEN", "OPEN_RUNNER_SECRET"]) delete process.env[k];
 
-/**
- * Secrets the runner uses for itself and the agent must never inherit (the
- * GitHub token: the sandbox gets clones, not credentials). Same rule as the
- * provider keys: the vault item first, then the environment, read once here
- * and scrubbed.
- */
-const RUNNER_SECRETS = ["GITHUB_TOKEN"] as const;
-const runnerSecrets: Record<string, string> = {};
-for (const v of RUNNER_SECRETS) {
-  if (process.env[v]) runnerSecrets[v] = process.env[v]!;
-  delete process.env[v];
-}
-
-export function secretSource(name: (typeof RUNNER_SECRETS)[number]): "vault" | "env" | "none" {
-  if (vault.isInitialised() && vault.status("none").items.includes(name)) return "vault";
-  if (runnerSecrets[name]) return "env";
-  return "none";
-}
-
-/** The secret's value, or undefined when none is configured. Throws 503 while the vault is sealed. */
-export function secret(name: (typeof RUNNER_SECRETS)[number]): string | undefined {
-  switch (secretSource(name)) {
-    case "vault": return vault.getItem(name);
-    case "env": return runnerSecrets[name];
-    default: return undefined;
-  }
-}
-
 /** Where a provider's key comes from right now. */
 export function keySource(id: ProviderId): KeySource {
   const p = PROVIDERS[id];

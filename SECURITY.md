@@ -67,17 +67,19 @@ API keys and other secrets the app holds are sealed at rest in `vault.json`
   inputs and tool output go to the model provider in plaintext; the vault seals
   secrets, not engagements.
 
-## The GitHub token
+## The GitHub sign-in
 
-The GitHub integration is read-only on both sides. On GitHub's side, use a fine-grained personal
-access token limited to the repositories you choose with **Contents: Read-only**; the runner never
-asks for more, and never writes (no pushes, no issues, no API calls beyond listing repositories and
-branches). On the runner's side, the token lives in the vault like the model keys, is handed to git
-through a process-scoped config entry (`GIT_CONFIG_*`, so it is not on a command line and not in
-the clone's `.git/config`; credential helpers are disabled so nothing caches it), and is scrubbed
-from the environment before OpenCode is spawned. The agent container receives a plain working copy
-in the shared workspace with an `https://github.com/...` origin and no credentials: it can read and
-scan the code, and cannot fetch, push or reach any other repository.
+The GitHub integration is read-only on both sides. On GitHub's side, the runner signs in to the
+public BugXHunter GitHub App with the device flow (no client secret exists, so there is nothing to
+leak from an open-source build). The app declares only **Contents: read-only** and **Metadata:
+read-only**, and a user token reaches only the repositories the app was installed on, so GitHub
+itself refuses anything beyond reading those. Revoke it any time under *Settings → Applications*.
+On the runner's side, the token pair lives in the vault like the model keys (in memory until a
+vault exists), is handed to git through a process-scoped config entry (`GIT_CONFIG_*`, so it is
+not on a command line and not in the clone's `.git/config`; credential helpers are disabled so
+nothing caches it), and never reaches the agent. The agent container receives a plain working copy
+in the shared workspace with an `https://github.com/...` origin and no credentials: it can read
+and scan the code, and cannot fetch, push or reach any other repository.
 
 ## Verifying a release yourself
 

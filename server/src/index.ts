@@ -222,6 +222,19 @@ app.delete("/api/vault", (req, res) => {
 app.get("/api/github", async (_req, res) => {
   try { res.json(await github.status()); } catch (e) { sendError(res, e); }
 });
+app.post("/api/github/connect/start", async (_req, res) => {
+  try { res.json(await github.connectStart()); } catch (e) { sendError(res, e); }
+});
+app.post("/api/github/connect/poll", async (req, res) => {
+  try {
+    const r = await github.connectPoll(req.body?.id);
+    if (r.status === "connected") audit("github.connected", { login: r.login, storage: r.storage });
+    res.json(r);
+  } catch (e) { sendError(res, e); }
+});
+app.delete("/api/github/connect", (_req, res) => {
+  try { github.disconnect(); audit("github.disconnected"); res.json({ ok: true }); } catch (e) { sendError(res, e); }
+});
 app.get("/api/github/repos", async (_req, res) => {
   try { res.json({ repos: await github.listRepos() }); } catch (e) { sendError(res, e); }
 });

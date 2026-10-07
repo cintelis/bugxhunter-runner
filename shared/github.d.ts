@@ -1,19 +1,23 @@
 /**
  * GitHub integration: read-only, scoped by the user.
  *
- * The runner holds one fine-grained personal access token (vault item
- * GITHUB_TOKEN) and uses it for exactly two things: listing the repositories
- * the token was granted, and cloning or fast-forwarding them into the
+ * The runner signs in to the public BugXHunter GitHub App (device flow; the
+ * app can only read Contents and reaches only the repositories it is
+ * installed on) and uses the token for exactly two things: listing the
+ * repositories it reaches, and cloning or fast-forwarding them into the
  * workspace. The agent never sees the token (clones carry no credentials), so
  * nothing in the sandbox can push, open issues or read anything else.
  */
 
 export interface GitHubStatus {
-  /** A token is available (vault item or GITHUB_TOKEN in the environment). */
-  configured: boolean;
-  source: "vault" | "env" | "none";
-  /** The vault holds the token but is locked, so it cannot be used right now. */
+  /** Signed in to the GitHub App. */
+  connected: boolean;
+  /** The sign-in is in the vault, which is locked, so it cannot be used right now. */
   sealed: boolean;
+  /** Where the person picks which repositories the app may read (GitHub's install screen). */
+  installUrl: string;
+  /** Where a sign-in would be kept: sealed in the vault, or in memory until the runner restarts (no vault yet). */
+  storage: "vault" | "memory" | null;
   /** The token's account, once it has been looked up; null while unknown. */
   login: string | null;
   /** Why the token could not be checked (network, or GitHub rejected it); null when fine. */
@@ -23,6 +27,22 @@ export interface GitHubStatus {
   /** Repositories already in the workspace. */
   clones: GitHubClone[];
 }
+
+/** Step 1 of signing in: the code to type at github.com/login/device. */
+export interface DeviceStart {
+  id: string;
+  userCode: string;
+  verificationUri: string;
+  expiresIn: number;
+  /** Seconds between polls, GitHub's rule. */
+  interval: number;
+}
+
+export type DevicePoll =
+  | { status: "pending" }
+  | { status: "expired" }
+  | { status: "denied" }
+  | { status: "connected"; login: string; storage: "vault" | "memory" };
 
 export interface GitHubRepo {
   /** `owner/name` */

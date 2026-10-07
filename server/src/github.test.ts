@@ -4,15 +4,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-// Isolate everything the module reads at import time: the vault file, the
-// clone root, a token (captured and scrubbed by providers.ts) and a local
-// "GitHub" that is just a folder of bare repositories.
+// Isolate everything the module reads at import time: the vault file (none,
+// so the sign-in is kept in memory), the clone root, and a local "GitHub"
+// that is just a folder of bare repositories.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bxh-gh-"));
 const remotes = path.join(tmp, "remotes");
 process.env.OPEN_RUNNER_VAULT_FILE = path.join(tmp, "vault.json");
 process.env.OPEN_RUNNER_WORKSPACE = path.join(tmp, "repos");
-process.env.GITHUB_TOKEN = "ghp_test_token_value";
 process.env.GITHUB_GIT_BASE = remotes;
+process.env.GITHUB_APP_SLUG = "bugxhunter-test";
 delete process.env.OPENCODE_URL;
 const github = await import("./github.js");
 
@@ -35,6 +35,45 @@ function makeRemote(fullName: string) {
   git(["push", "-q", "origin", "main"], work);
   return { bare, work };
 }
+
+// One fake GitHub for the whole file: the OAuth endpoints (device flow,
+// refresh) and the few REST routes the module uses. `state` steers it.
+const state = { approved: false, polls: 0, token: "tok-1", refreshes: 0, calls: [] as string[] };
+const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+  const u = String(url);
+  state.calls.push(u);
+  const form = typeof init?.body === "string" ? new URLSearchParams(init.body) : new URLSearchParams();
+  if (u.endsWith("/login/device/code")) {
+    expect(form.get("client_id")).toBe(github.CLIENT_ID);
+    return Response.json({ device_code: "dev-123", user_code: "ABCD-EFGH", verification_uri: "https://github.com/login/device", expires_in: 900, interval: 5 });
+  }
+  if (u.endsWith("/login/oauth/access_token")) {
+    expect(form.get("client_id")).toBe(github.CLIENT_ID);
+    expect(form.has("client_secret")).toBe(false);
+    if (form.get("grant_type") === "refresh_token") {
+      state.refreshes++;
+      if (form.get("refresh_token") !== "ref-1") return Response.json({ error: "bad_refresh_token" });
+      return Response.json({ access_token: "tok-2", refresh_token: "ref-2", expires_in: 28800 });
+    }
+    state.polls++;
+    if (!state.approved) return Response.json({ error: "authorization_pending" });
+    return Response.json({ access_token: state.token, refresh_token: "ref-1", expires_in: 28800 });
+  }
+  const auth = (init?.headers as Record<string, string>).Authorization;
+  if (auth !== `Bearer ${state.token}`) return Response.json({ message: "Bad credentials" }, { status: 401 });
+  if (u.endsWith("/user")) return Response.json({ login: "nick" });
+  if (u.includes("/user/repos")) {
+    const page = Number(new URL(u).searchParams.get("page"));
+    if (page === 1) return Response.json(Array.from({ length: 100 }, (_, i) => ({ full_name: `o/r${i}`, description: null, default_branch: "main", private: i % 2 === 0, pushed_at: "2026-10-01T00:00:00Z" })));
+    return Response.json([{ full_name: "cintelis/demo", description: "d", default_branch: "trunk", private: true, archived: true, pushed_at: null }]);
+  }
+  if (u.endsWith("/repos/cintelis/demo")) return Response.json({ default_branch: "main" });
+  if (u.endsWith("/repos/cintelis/demo/branches?per_page=100")) return Response.json([{ name: "a" }, { name: "main" }, { name: "b" }]);
+  if (u.endsWith("/repos/cintelis/gone")) return Response.json({ message: "Not Found" }, { status: 404 });
+  return Response.json({ message: "unexpected" }, { status: 500 });
+});
+beforeAll(() => vi.stubGlobal("fetch", fetchMock));
+afterAll(() => vi.unstubAllGlobals());
 
 describe("names", () => {
   it("accepts owner/name and strips .git", () => {
@@ -66,7 +105,7 @@ describe("names", () => {
   });
 });
 
-describe("token handling", () => {
+describe("git credentials", () => {
   it("hands git the token in a process-scoped header, never an argument, with credential helpers off", () => {
     const env = github.gitAuthEnv("secret-token");
     expect(env.GIT_CONFIG_KEY_0).toBe(`http.${remotes}/.extraheader`);
@@ -76,59 +115,75 @@ describe("token handling", () => {
     expect(env.GIT_TERMINAL_PROMPT).toBe("0");
     expect(JSON.stringify(env)).not.toContain("secret-token");
   });
-  it("was scrubbed from the environment, so the agent cannot inherit it", () => {
-    expect(process.env.GITHUB_TOKEN).toBeUndefined();
+});
+
+describe("signing in (device flow)", () => {
+  it("starts disconnected, with the app's install page known", async () => {
+    const s = await github.status();
+    expect(s).toMatchObject({ connected: false, sealed: false, login: null, storage: "memory", installUrl: "https://github.com/apps/bugxhunter-test/installations/new" });
+    await expect(github.listRepos()).rejects.toMatchObject({ status: 503, message: expect.stringContaining("Not connected") });
+  });
+  it("hands out a user code, polls at GitHub's pace, then stores the tokens and the login", async () => {
+    const start = await github.connectStart();
+    expect(start).toMatchObject({ userCode: "ABCD-EFGH", verificationUri: "https://github.com/login/device", interval: 5 });
+    expect(await github.connectPoll(start.id)).toEqual({ status: "pending" });
+    // A second poll inside the interval never reaches GitHub.
+    expect(await github.connectPoll(start.id)).toEqual({ status: "pending" });
+    expect(state.polls).toBe(1);
+    state.approved = true;
+    vi.useFakeTimers({ now: Date.now() + 6000 });
+    try {
+      expect(await github.connectPoll(start.id)).toEqual({ status: "connected", login: "nick", storage: "memory" });
+    } finally {
+      vi.useRealTimers();
+    }
+    await expect(github.connectPoll(start.id)).rejects.toMatchObject({ status: 404 });
+    expect(await github.status()).toMatchObject({ connected: true, login: "nick", error: null });
+  });
+  it("rejects unknown attempts", async () => {
+    await expect(github.connectPoll("nope")).rejects.toMatchObject({ status: 404 });
   });
 });
 
-describe("the API", () => {
-  const calls: string[] = [];
-  const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
-    const u = String(url);
-    calls.push(u);
-    expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer ghp_test_token_value");
-    if (u.endsWith("/user")) return Response.json({ login: "nick" });
-    if (u.includes("/user/repos")) {
-      const page = Number(new URL(u).searchParams.get("page"));
-      if (page === 1) return Response.json(Array.from({ length: 100 }, (_, i) => ({ full_name: `o/r${i}`, description: null, default_branch: "main", private: i % 2 === 0, pushed_at: "2026-10-01T00:00:00Z" })));
-      return Response.json([{ full_name: "cintelis/demo", description: "d", default_branch: "trunk", private: true, archived: true, pushed_at: null }]);
-    }
-    if (u.endsWith("/repos/cintelis/demo")) return Response.json({ default_branch: "trunk" });
-    if (u.endsWith("/repos/cintelis/demo/branches?per_page=100")) return Response.json([{ name: "a" }, { name: "trunk" }, { name: "b" }]);
-    if (u.endsWith("/repos/cintelis/gone")) return Response.json({ message: "Not Found" }, { status: 404 });
-    if (u.endsWith("/repos/cintelis/bad")) return Response.json({ message: "Bad credentials" }, { status: 401 });
-    return Response.json({ message: "unexpected" }, { status: 500 });
-  });
-  beforeAll(() => vi.stubGlobal("fetch", fetchMock));
-  afterAll(() => vi.unstubAllGlobals());
-
-  it("reports the token's account and that the token comes from the environment", async () => {
-    const s = await github.status();
-    expect(s).toMatchObject({ configured: true, source: "env", sealed: false, login: "nick", error: null, cloneRoot: process.env.OPEN_RUNNER_WORKSPACE });
-    await github.status();
-    expect(calls.filter((c) => c.endsWith("/user"))).toHaveLength(1); // cached per token
-  });
+describe("the API, signed in", () => {
   it("follows pagination and keeps the shape the UI wants", async () => {
     const repos = await github.listRepos();
     expect(repos).toHaveLength(101);
     expect(repos.at(-1)).toEqual({ fullName: "cintelis/demo", description: "d", defaultBranch: "trunk", private: true, archived: true, pushedAt: null });
   });
   it("lists branches with the default first", async () => {
-    expect(await github.listBranches("cintelis/demo")).toEqual([{ name: "trunk", isDefault: true }, { name: "a", isDefault: false }, { name: "b", isDefault: false }]);
+    expect(await github.listBranches("cintelis/demo")).toEqual([{ name: "main", isDefault: true }, { name: "a", isDefault: false }, { name: "b", isDefault: false }]);
   });
-  it("maps GitHub's errors: 404 stays, a bad token becomes an upstream failure that names the vault item", async () => {
+  it("keeps GitHub's 404 as a 404", async () => {
     await expect(github.listBranches("cintelis/gone")).rejects.toMatchObject({ status: 404, message: "GitHub: Not Found" });
-    await expect(github.listBranches("cintelis/bad")).rejects.toMatchObject({ status: 502, message: expect.stringContaining("GITHUB_TOKEN") });
+  });
+  it("refreshes an expired token without a client secret", async () => {
+    vi.useFakeTimers({ now: Date.now() + 9 * 3600 * 1000 });
+    try {
+      state.token = "tok-2";
+      expect(await github.listBranches("cintelis/demo")).toHaveLength(3);
+      expect(state.refreshes).toBe(1);
+      expect(state.calls.at(-1)).toContain("/repos/cintelis/demo");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("drops a connection GitHub has revoked and says to connect again", async () => {
+    state.token = "revoked-elsewhere";
+    await expect(github.listBranches("cintelis/demo")).rejects.toMatchObject({ status: 503, message: expect.stringContaining("Connect again") });
+    expect(await github.status()).toMatchObject({ connected: false });
+    state.token = "tok-2";
   });
 });
 
 describe("clone and update (real git, local bare remote)", () => {
-  const fetchMock = vi.fn(async (url: string | URL) => {
-    if (String(url).endsWith("/repos/cintelis/demo")) return Response.json({ default_branch: "main" });
-    return Response.json({ message: "unexpected" }, { status: 500 });
+  beforeAll(async () => {
+    // Sign in again for the clone (the previous test revoked the connection).
+    state.approved = true;
+    const start = await github.connectStart();
+    vi.useFakeTimers({ now: Date.now() + 6000 });
+    try { expect(await github.connectPoll(start.id)).toMatchObject({ status: "connected" }); } finally { vi.useRealTimers(); }
   });
-  beforeAll(() => vi.stubGlobal("fetch", fetchMock));
-  afterAll(() => vi.unstubAllGlobals());
 
   it("clones on the default branch, with a clean config, then fast-forwards", async () => {
     const { work } = makeRemote("cintelis/demo");
@@ -137,10 +192,8 @@ describe("clone and update (real git, local bare remote)", () => {
     const readme = () => fs.readFileSync(path.join(first.directory, "README.md"), "utf8").trim(); // trim: autocrlf on Windows
     expect(readme()).toBe("# one");
     const config = fs.readFileSync(path.join(first.directory, ".git", "config"), "utf8");
-    expect(config).not.toMatch(/extraheader|AUTHORIZATION|ghp_test/i);
+    expect(config).not.toMatch(/extraheader|AUTHORIZATION|tok-/i);
     expect(github.listClones()).toEqual([{ fullName: "cintelis/demo", directory: first.directory, branch: "main" }]);
-    // The runner's own clone is read-only for the agent by construction, but
-    // the runner itself must see what the world pushed since.
     fs.writeFileSync(path.join(work, "README.md"), "# two\n");
     git(["commit", "-q", "-am", "two"], work);
     git(["push", "-q", "origin", "main"], work);
@@ -155,5 +208,9 @@ describe("clone and update (real git, local bare remote)", () => {
   });
   it("reports a missing repository instead of hanging on a prompt", async () => {
     await expect(github.cloneOrUpdate({ repo: "cintelis/missing", branch: "main" })).rejects.toMatchObject({ status: expect.any(Number), message: expect.stringContaining("git clone failed") });
+  });
+  it("disconnects", async () => {
+    github.disconnect();
+    expect(await github.status()).toMatchObject({ connected: false, login: null });
   });
 });

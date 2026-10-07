@@ -22,7 +22,6 @@ const CUSTOM = "__custom__";
 const KNOWN_ITEMS = [
   { name: "SCX_API", label: "SCX.ai model key — the default provider" },
   { name: "OPENROUTER_API_KEY", label: "OpenRouter key — unlocks its model catalogue (optional)" },
-  { name: "GITHUB_TOKEN", label: "GitHub fine-grained token — clone the repositories you pick, read-only (optional)" },
 ];
 
 export function VaultPanel() {
