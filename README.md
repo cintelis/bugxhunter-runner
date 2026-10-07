@@ -145,12 +145,16 @@ you run this in — Docker's bridge NAT doesn't restrict outbound on its own.
 | `OPEN_RUNNER_WORKSPACE` | `/workspace` | Remote mode: projects must live under this folder |
 | `SCX_PROXY_TOKEN` | unset | Enables the `/scx/v1` key proxy for the sandboxed agent |
 
+Releases are on the [releases page](https://github.com/cintelis/bugxhunter-runner/releases).
+See [SECURITY.md](SECURITY.md) to verify one by hand, or to report a vulnerability.
+
 ## Releases
 
-Each release ships an **app** archive (the compiled server and web app, runnable with Node and
-no Docker), a **deploy** archive (`docker-compose.yml` and the setup scripts, pinned to that
-version's images), `images.txt` (both GHCR images by digest) and `checksums.txt`, which the
-maintainer signs offline with the Cintelis release key. Nothing is published unsigned.
+Every published release, newest first. Each is signed with the Cintelis release key;
+`scripts/verify-release.sh` refuses anything that isn't. A release ships an **app** archive (the
+compiled server and web app, runnable with Node and no Docker), a **deploy** archive
+(`docker-compose.yml` and the setup scripts, pinned to that version's images), `images.txt` (both
+GHCR images by digest) and the signed `checksums.txt` that covers them all.
 
 <!-- releases:start -->
 | Release | Published | Checksums | Signature | Signature check | Build |
