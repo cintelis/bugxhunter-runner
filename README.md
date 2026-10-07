@@ -105,26 +105,27 @@ The SCX key (and any other secret the agent needs) lives in a vault that is **se
 disk there is only ciphertext and wrapped keys, so a copied `.env`, volume or container yields
 nothing. Set it up from the sidebar after the first start; it takes a minute:
 
-1. **Passphrase** — something you know.
-2. **Passkey** — something you have: Windows Hello, Touch ID, Android, or a security key. The
-   authenticator derives a secret (WebAuthn PRF) that never leaves the device. Chrome, Edge and
-   Safari 18+; Firefox can't do this yet. Open the app as `http://localhost:…`, not by IP.
-3. **Recovery code** — shown once, stored nowhere. Keep it offline. It opens the vault if the
+1. **Passkey** — Windows Hello, Touch ID, Android, or a security key. One touch unlocks the vault
+   and signs you in; the authenticator's own biometric or PIN is the second factor. It derives a
+   secret (WebAuthn PRF) that never leaves the device. Chrome, Edge and Safari 18+; Firefox can't
+   do this yet. Open the app as `http://localhost:…`, not by IP.
+2. **Recovery code** — shown once, stored nowhere. Keep it offline. It opens the vault if the
    passkey is lost.
+3. **Backup passphrase** (optional) — a way in on a device without the passkey.
 
-Unlocking needs **both** the passphrase and the passkey (or the recovery code alone). The
-decryption key then lives only in the backend's memory, so after every restart, and after
+The decryption key lives only in the backend's memory, so after every restart, and after
 **2 hours without activity** (`OPEN_RUNNER_VAULT_IDLE_MINUTES`), someone has to unlock it before the
-agent can call a model. The crypto is symmetric only (AES-256-GCM, HKDF-SHA-256, PBKDF2-SHA-256),
-which keeps it out of reach of a quantum attacker; see [SECURITY.md](SECURITY.md#the-key-vault).
+agent can call a model. **Ctrl+Shift+L** locks it at once. The crypto is symmetric only
+(AES-256-GCM, HKDF-SHA-256, PBKDF2-SHA-256), which keeps it out of reach of a quantum attacker;
+see [SECURITY.md](SECURITY.md#the-key-vault).
 
 While the vault is locked, model calls fail with a clear "vault is sealed" message. Without a vault
 the app falls back to `SCX_API` in `.env` or OpenCode's `auth.json`, in the clear.
 
-**Sign-in is the same passkey.** Once a vault exists the API needs a session, and the only way in
-is a WebAuthn assertion with one of the vault's passkeys (verified server-side), or the recovery
-code. One touch at the sign-in screen also unlocks the vault when you type the passphrase. Keep
-two passkeys on different devices (keys dialog → add passkey). Lost every factor? Someone with
+**Sign-in is the same passkey.** Once a vault exists the API needs a session, and the ways in are
+a WebAuthn assertion with one of the vault's passkeys (verified server-side), the backup
+passphrase, or the recovery code. One touch at the sign-in screen signs in and unlocks the vault.
+Keep two passkeys on different devices (keys dialog → add passkey). Lost every factor? Someone with
 access to the server's files runs `npm run vault:reset` (Docker: `docker compose exec runner rm
 /data/vault.json`): the vault and its secrets are gone and the app reopens for a fresh setup.
 Nothing on the network can do that, which is what keeps the lock meaningful.

@@ -14,7 +14,7 @@ export function DiffModal({ diff, onClose }: { diff: FileDiff[] | string; onClos
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <span className="modal-title"><span className="dot r" aria-hidden />git diff --session</span>
-          <button className="btn ghost sm" onClick={onClose}>close</button>
+          <button className="icon-btn close-x" onClick={onClose} aria-label="Close" title="Close (Esc)">✕</button>
         </div>
         <div className="modal-body">
           {typeof diff === "string" ? <pre className="diff-raw">{diff}</pre>

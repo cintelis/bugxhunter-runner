@@ -109,7 +109,7 @@ export const isUnsealed = () => dek !== null;
  */
 export function publicMethods(): PublicMethod[] {
   return (load()?.methods ?? []).map((m) => {
-    if (m.type === "recovery") return m;
+    if (m.type !== "passkey") return m;
     const { publicKey, signCount: _c, ...rest } = m;
     return { ...rest, canLogin: Boolean(publicKey && m.alg !== undefined) };
   });
@@ -147,18 +147,23 @@ export function dekMatches(dekB64: string): boolean {
   return dek !== null && key.length === 32 && crypto.timingSafeEqual(key, dek);
 }
 
-/** Add an unlock method (a new passkey). The caller must hold the current DEK, since the method must wrap it. */
+/**
+ * Add an unlock method: a passkey, or the (single) backup passphrase, which
+ * replaces an existing one. The caller must hold the current DEK, since the
+ * method must wrap it.
+ */
 export function addMethod(method: VaultMethod, dekB64: string) {
   const v = load();
   if (!v) throw httpError(404, "No vault yet.");
   if (!dek) throw httpError(503, "The vault is sealed. Unlock it first.");
   if (!dekMatches(dekB64)) throw httpError(403, "Only a client holding the vault key can add a method.");
   validateMethod(method);
-  if (method.type !== "passkey") throw httpError(400, "Only passkeys can be added.");
-  if (v.methods.some((m) => m.id === method.id || (m.type === "passkey" && m.credentialId === method.credentialId))) {
+  if (method.type === "recovery") throw httpError(400, "The recovery code is fixed at setup.");
+  if (v.methods.some((m) => m.id === method.id || (m.type === "passkey" && method.type === "passkey" && m.credentialId === method.credentialId))) {
     throw httpError(409, "That passkey is already enrolled.");
   }
-  save({ ...v, methods: [...v.methods, method] });
+  const kept = method.type === "password" ? v.methods.filter((m) => m.type !== "password") : v.methods;
+  save({ ...v, methods: [...kept, method] });
   audit("vault.method.added", { type: method.type, id: method.id, label: method.label });
 }
 
@@ -171,16 +176,18 @@ export function destroy(dekB64: string) {
   audit("vault.destroyed", { file: VAULT_FILE });
 }
 
-/** Remove a passkey. The recovery code can't be removed, and the last passkey can't either. */
+/** Remove a passkey or the backup passphrase. The recovery code can't be removed, and the last passkey can't either. */
 export function removeMethod(id: string) {
   const v = load();
   if (!v) throw httpError(404, "No vault yet.");
   const m = v.methods.find((x) => x.id === id);
   if (!m) return;
-  if (m.type !== "passkey") throw httpError(400, "The recovery code can't be removed.");
-  if (v.methods.filter((x) => x.type === "passkey").length <= 1) throw httpError(400, "Add another passkey before removing the last one.");
+  if (m.type === "recovery") throw httpError(400, "The recovery code can't be removed.");
+  if (m.type === "passkey" && v.methods.filter((x) => x.type === "passkey").length <= 1) {
+    throw httpError(400, "Add another passkey before removing the last one.");
+  }
   save({ ...v, methods: v.methods.filter((x) => x.id !== id) });
-  audit("vault.method.removed", { id, label: m.label });
+  audit("vault.method.removed", { id, type: m.type, label: m.label });
 }
 
 /**
@@ -207,9 +214,9 @@ export function initialise(next: VaultDoc, dekB64: string) {
 function validateMethod(m: VaultMethod) {
   if (!m?.id || !m.wrapped?.iv || !m.wrapped?.ct) throw httpError(400, "Malformed unlock method.");
   if (m.type === "passkey") {
-    if (!m.credentialId || !m.prfSalt || !m.hkdfSalt || m.passphrase?.name !== "PBKDF2") throw httpError(400, "Malformed passkey method.");
-  } else if (m.type === "recovery") {
-    if (m.kdf?.name !== "PBKDF2") throw httpError(400, "Malformed recovery method.");
+    if (!m.credentialId || !m.prfSalt || !m.hkdfSalt) throw httpError(400, "Malformed passkey method.");
+  } else if (m.type === "password" || m.type === "recovery") {
+    if (m.kdf?.name !== "PBKDF2") throw httpError(400, `Malformed ${m.type} method.`);
   } else {
     throw httpError(400, "Unknown unlock method.");
   }

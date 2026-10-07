@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { b64, b64url, buildVault, generateRecoveryCode, looksLikeRecoveryCode, normaliseRecoveryCode, unwrapWithPasskey, unwrapWithRecovery } from "./crypto";
-import type { PasskeyMethod, RecoveryMethod } from "../../../shared/vault";
+import { b64, b64url, buildVault, generateRecoveryCode, looksLikeRecoveryCode, normaliseRecoveryCode, unwrapWithPasskey, unwrapWithPassword, unwrapWithRecovery } from "./crypto";
+import type { PasskeyMethod, PasswordMethod, RecoveryMethod } from "../../../shared/vault";
 
 // Node's global WebCrypto, btoa and atob stand in for the browser's.
 
@@ -24,29 +24,31 @@ describe("base64", () => {
   });
 });
 
+const enrolled = { credentialId: "AQID", transports: ["internal"], publicKey: "AAAA", alg: -7, label: "test" };
+
 describe("buildVault / unwrap", () => {
-  it("wraps the same DEK for the passkey+passphrase method and the recovery code", async () => {
+  it("wraps the same DEK for the passkey (PRF only), the backup passphrase and the recovery code", async () => {
     const prf = new Uint8Array(32).fill(42);
-    const { doc, dek, recoveryCode } = await buildVault({
-      passphrase: "correct horse battery", prf, credentialId: "AQID", transports: ["internal"], publicKey: "AAAA", alg: -7, label: "test", items: { SCX_API: "sk-x" },
-    });
-    expect(doc.methods.map((m) => m.type)).toEqual(["passkey", "recovery"]);
+    const { doc, dek, recoveryCode } = await buildVault({ ...enrolled, prf, passphrase: "correct horse battery", items: { SCX_API: "sk-x" } });
+    expect(doc.methods.map((m) => m.type)).toEqual(["passkey", "password", "recovery"]);
     expect(Object.keys(doc.items)).toEqual(["SCX_API"]);
     expect(JSON.stringify(doc)).not.toContain("sk-x");
     expect(JSON.stringify(doc)).not.toContain(dek);
-    const pk = doc.methods[0] as PasskeyMethod;
-    const rc = doc.methods[1] as RecoveryMethod;
-    expect(await unwrapWithPasskey(pk, prf, "correct horse battery")).toBe(dek);
+    const [pk, pw, rc] = doc.methods as [PasskeyMethod, PasswordMethod, RecoveryMethod];
+    expect(pk.passphrase).toBeUndefined();
+    expect(await unwrapWithPasskey(pk, prf)).toBe(dek); // one touch
+    expect(await unwrapWithPassword(pw, "correct horse battery")).toBe(dek);
     expect(await unwrapWithRecovery(rc, recoveryCode.toLowerCase())).toBe(dek);
   }, 60_000);
 
-  it("fails with a wrong passphrase, wrong PRF output or wrong code", async () => {
+  it("fails with a wrong PRF output, passphrase or code; skips the passphrase method when none was set", async () => {
     const prf = new Uint8Array(32).fill(1);
-    const { doc } = await buildVault({ passphrase: "right", prf, credentialId: "AQID", publicKey: "AAAA", alg: -7, label: "t", items: {} });
-    const pk = doc.methods[0] as PasskeyMethod;
-    const rc = doc.methods[1] as RecoveryMethod;
-    await expect(unwrapWithPasskey(pk, prf, "wrong")).rejects.toThrow();
-    await expect(unwrapWithPasskey(pk, new Uint8Array(32).fill(2), "right")).rejects.toThrow();
+    const { doc } = await buildVault({ ...enrolled, prf, passphrase: "right one", items: {} });
+    const [pk, pw, rc] = doc.methods as [PasskeyMethod, PasswordMethod, RecoveryMethod];
+    await expect(unwrapWithPasskey(pk, new Uint8Array(32).fill(2))).rejects.toThrow();
+    await expect(unwrapWithPassword(pw, "wrong")).rejects.toThrow();
     await expect(unwrapWithRecovery(rc, generateRecoveryCode())).rejects.toThrow();
+    const bare = await buildVault({ ...enrolled, prf, items: {} });
+    expect(bare.doc.methods.map((m) => m.type)).toEqual(["passkey", "recovery"]);
   }, 60_000);
 });

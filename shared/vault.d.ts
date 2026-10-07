@@ -11,11 +11,13 @@
  * and the WebAuthn PRF extension (an HMAC inside the authenticator) — so the
  * design does not depend on any public-key scheme a quantum computer breaks.
  *
- * Unlock methods:
- *  - passkey: KEK = HKDF(PRF(credential, prfSalt) || PBKDF2(passphrase)).
- *    Two factors, both required: the authenticator and the passphrase.
+ * Unlock methods, each able to unwrap the DEK on its own:
+ *  - passkey: KEK = HKDF(PRF(credential, prfSalt)). One touch; the
+ *    authenticator's user verification (biometric / PIN) is the second factor.
+ *  - password: KEK = PBKDF2(backup passphrase). Optional, for a device without
+ *    the passkey.
  *  - recovery: KEK = PBKDF2(recovery code). A 128-bit random code shown once
- *    at setup, for when the passkey is lost.
+ *    at setup, for when everything else is lost.
  */
 
 /** AES-256-GCM output: 12-byte IV and ciphertext with the 16-byte tag appended, both base64. */
@@ -51,10 +53,24 @@ export interface PasskeyMethod {
   signCount?: number;
   /** The PRF salt is fixed per method; changing it changes the derived secret. */
   prfSalt: string;
-  passphrase: Pbkdf2Params;
+  /**
+   * Legacy (vaults from before one-touch unlock): the passphrase was mixed into
+   * the KEK as well. Present only on those; the browser asks for it then.
+   */
+  passphrase?: Pbkdf2Params;
   /** base64 HKDF salt. */
   hkdfSalt: string;
   /** The DEK, wrapped with the KEK. */
+  wrapped: Sealed;
+  createdAt: string;
+}
+
+/** A backup passphrase. */
+export interface PasswordMethod {
+  type: "password";
+  id: string;
+  label: string;
+  kdf: Pbkdf2Params;
   wrapped: Sealed;
   createdAt: string;
 }
@@ -68,7 +84,7 @@ export interface RecoveryMethod {
   createdAt: string;
 }
 
-export type VaultMethod = PasskeyMethod | RecoveryMethod;
+export type VaultMethod = PasskeyMethod | PasswordMethod | RecoveryMethod;
 
 export interface VaultDoc {
   version: 1;
@@ -88,6 +104,7 @@ export interface VaultDoc {
  */
 export type PublicMethod =
   | (Omit<PasskeyMethod, "publicKey" | "signCount"> & { canLogin: boolean })
+  | PasswordMethod
   | RecoveryMethod;
 
 /** GET /api/vault */

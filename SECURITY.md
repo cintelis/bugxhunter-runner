@@ -31,11 +31,13 @@ API keys and other secrets the app holds are sealed at rest in `vault.json`
 (`shared/vault.d.ts` is the format). What an attacker who copies the file, the
 `runner-data` volume or the whole container gets is ciphertext and wrapped keys.
 
-- **Two factors to unlock.** The key-encryption key is HKDF-SHA-256 over the
-  concatenation of the passkey's WebAuthn PRF output (an HMAC computed inside
-  the authenticator; the seed never leaves it) and PBKDF2-SHA-256 of the
-  passphrase. Neither factor alone unwraps anything. A recovery code (128 random
-  bits, shown once) is the alternative, for a lost passkey.
+- **One touch, two factors.** The passkey's key-encryption key is HKDF-SHA-256
+  over its WebAuthn PRF output (an HMAC computed inside the authenticator; the
+  seed never leaves it), and every PRF evaluation requires user verification
+  (biometric or PIN) on the device: possession plus something you know or are.
+  A recovery code (128 random bits, shown once) and an optional backup
+  passphrase (PBKDF2-SHA-256, 600k iterations) are separate ways in, each
+  wrapping the same data key.
 - **Symmetric only.** AES-256-GCM, HKDF-SHA-256, PBKDF2-SHA-256 (600k iterations)
   and the PRF. No RSA or elliptic-curve step protects the data, so the design does
   not depend on anything a quantum computer is expected to break; 256-bit
@@ -53,8 +55,9 @@ API keys and other secrets the app holds are sealed at rest in `vault.json`
   single-use challenge, allowed origin, relying-party hash, user-presence and
   user-verification flags, signature against the public key captured at
   enrolment, and a monotonic counter where the authenticator keeps one. The
-  recovery code signs in by proving possession of the vault key. Without a
-  vault the app is open, on localhost only, behind the Host-header guard.
+  backup passphrase and the recovery code sign in by proving possession of the
+  vault key. Without a vault the app is open, on localhost only, behind the
+  Host-header guard.
 - **Break-glass is on the server only.** Losing the passkey and the recovery
   code means the secrets are gone; `npm run vault:reset` deletes the vault from
   the server's files and reopens the app for a new setup. No network request

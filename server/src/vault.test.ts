@@ -27,13 +27,15 @@ async function browserSetup(passphrase: string, prf: Uint8Array) {
     const ct = await subtle.encrypt({ name: "AES-GCM", iv, additionalData: enc.encode(aad) }, key, enc.encode(text));
     return { iv: b64(iv), ct: b64(ct) };
   };
-  // passkey method: KEK = HKDF(prf || pbkdf2(passphrase))
+  // passkey method: KEK = HKDF(prf); the backup passphrase is its own method
   const salt = webcrypto.getRandomValues(new Uint8Array(16));
   const hkdfSalt = webcrypto.getRandomValues(new Uint8Array(16));
   const pass = await subtle.importKey("raw", enc.encode(passphrase), "PBKDF2", false, ["deriveBits"]);
   const passBits = new Uint8Array(await subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: 1000 }, pass, 256));
-  const ikm = new Uint8Array(64); ikm.set(prf, 0); ikm.set(passBits, 32);
-  const hk = await subtle.importKey("raw", ikm, "HKDF", false, ["deriveKey"]);
+  const pwKek = await subtle.importKey("raw", passBits, "AES-GCM", false, ["encrypt"]);
+  const pwIv = webcrypto.getRandomValues(new Uint8Array(12));
+  const pwWrapped = await subtle.encrypt({ name: "AES-GCM", iv: pwIv, additionalData: enc.encode("pw-1") }, pwKek, dekRaw);
+  const hk = await subtle.importKey("raw", prf, "HKDF", false, ["deriveKey"]);
   const kek = await subtle.deriveKey({ name: "HKDF", hash: "SHA-256", salt: hkdfSalt, info: enc.encode("bugxhunter-vault-kek-v1") }, hk, { name: "AES-GCM", length: 256 }, false, ["encrypt"]);
   const wrapIv = webcrypto.getRandomValues(new Uint8Array(12));
   const wrapped = await subtle.encrypt({ name: "AES-GCM", iv: wrapIv, additionalData: enc.encode("pk-1") }, kek, dekRaw);
@@ -42,8 +44,11 @@ async function browserSetup(passphrase: string, prf: Uint8Array) {
     createdAt: new Date().toISOString(),
     methods: [{
       type: "passkey" as const, id: "pk-1", label: "test", credentialId: "AAAA", prfSalt: "bugxhunter-vault-prf-v1",
-      passphrase: { name: "PBKDF2" as const, hash: "SHA-256" as const, iterations: 1000, salt: b64(salt) },
       hkdfSalt: b64(hkdfSalt), wrapped: { iv: b64(wrapIv), ct: b64(wrapped) }, createdAt: new Date().toISOString(),
+    }, {
+      type: "password" as const, id: "pw-1", label: "Backup passphrase",
+      kdf: { name: "PBKDF2" as const, hash: "SHA-256" as const, iterations: 1000, salt: b64(salt) },
+      wrapped: { iv: b64(pwIv), ct: b64(pwWrapped) }, createdAt: new Date().toISOString(),
     }],
     verifier: await sealWith(dek, "bugxhunter-vault-ok", "verifier"),
     items: { SCX_API: await sealWith(dek, "sk-scx-test-123", "SCX_API") },

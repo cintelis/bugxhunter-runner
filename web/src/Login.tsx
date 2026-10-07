@@ -1,21 +1,22 @@
 /**
  * Sign-in with the vault's passkey (no passwords). One touch signs the
- * server's challenge and, with the passphrase, also unlocks the vault. A lost
- * passkey falls back to the recovery code, which proves possession of the
- * vault key. Lost both: reset the vault on the server (instructions shown).
+ * server's challenge and, via the same assertion's PRF output, unlocks the
+ * vault. Backups: the backup passphrase or the recovery code, each of which
+ * proves possession of the vault key. Lost all three: reset the vault on the
+ * server (instructions shown).
  */
 import { useEffect, useState, type ReactNode } from "react";
-import type { PasskeyMethod, RecoveryMethod } from "../../shared/vault";
+import type { PasskeyMethod, PasswordMethod, RecoveryMethod } from "../../shared/vault";
 import { TerminalBar } from "./Terminal";
 import { Wordmark } from "./brand";
 import { authChallenge, authLogout, authMe, authMethods, authPasskey, authRecover, vaultUnseal } from "./vault/api";
-import { looksLikeRecoveryCode, unwrapWithPasskey, unwrapWithRecovery } from "./vault/crypto";
+import { looksLikeRecoveryCode, unwrapWithPasskey, unwrapWithPassword, unwrapWithRecovery } from "./vault/crypto";
 import { assertPasskey, passkeysAvailable } from "./vault/prf";
 import { forgetDek, rememberDek } from "./vault/session";
 
 type AuthState = "checking" | "open" | "signed-in" | "signed-out";
 
-/** Fired by any /api call that comes back 401 (see main.tsx). */
+/** Fired by any /api call that comes back 401 from our own gate (see main.tsx). */
 export const UNAUTHORIZED_EVENT = "or:unauthorized";
 
 export async function logout() {
@@ -43,12 +44,22 @@ export function AuthGate({ children }: { children: ReactNode }) {
 }
 
 function Login({ onSuccess }: { onSuccess: () => void }) {
-  const [mode, setMode] = useState<"passkey" | "recovery" | "lost">("passkey");
-  const [passphrase, setPassphrase] = useState("");
+  const [mode, setMode] = useState<"passkey" | "password" | "recovery" | "lost">("passkey");
+  const [legacyPass, setLegacyPass] = useState("");
+  const [pass, setPass] = useState("");
   const [code, setCode] = useState("");
+  const [legacy, setLegacy] = useState(false);
+  const [hasPassword, setHasPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    authMethods().then(({ methods }) => {
+      setLegacy(methods.some((m) => m.type === "passkey" && !!m.passphrase));
+      setHasPassword(methods.some((m) => m.type === "password"));
+    }).catch(() => {});
+  }, []);
 
   async function withPasskey() {
     setBusy(true); setError(null); setNote(null);
@@ -60,17 +71,15 @@ function Login({ onSuccess }: { onSuccess: () => void }) {
       const salt = passkeys[0]?.prfSalt ?? "bugxhunter-vault-prf-v1";
       const { assertion, prf } = await assertPasskey(c, salt);
       await authPasskey(assertion);
-      // Same touch: unlock the vault if the passphrase was given.
-      if (passphrase && prf) {
-        const m = passkeys.find((p) => p.credentialId === assertion.credentialId);
-        if (m) {
-          try {
-            const dek = await unwrapWithPasskey(m, prf, passphrase);
-            await vaultUnseal(dek);
-            rememberDek(dek);
-          } catch {
-            setNote("Signed in, but the passphrase didn't unlock the vault — unlock it from the sidebar.");
-          }
+      // Same touch: unlock the vault with this assertion's PRF output.
+      const m = passkeys.find((p) => p.credentialId === assertion.credentialId);
+      if (m && prf) {
+        try {
+          const dek = await unwrapWithPasskey(m, prf, m.passphrase ? legacyPass : undefined);
+          await vaultUnseal(dek);
+          rememberDek(dek);
+        } catch {
+          setNote(m.passphrase ? "Signed in; the vault stays locked (passphrase?) — unlock it from the sidebar." : "Signed in, but the vault didn't unlock — unlock it from the sidebar.");
         }
       }
       onSuccess();
@@ -80,15 +89,26 @@ function Login({ onSuccess }: { onSuccess: () => void }) {
     }
   }
 
-  async function withRecovery() {
+  /** The backups prove possession of the vault key, which signs in and unlocks. */
+  async function withSecret(kind: "password" | "recovery") {
     setBusy(true); setError(null);
     try {
       const { methods } = await authMethods();
-      const rc = methods.find((m): m is RecoveryMethod => m.type === "recovery");
-      if (!rc) throw new Error("This vault has no recovery code.");
       let dek: string;
-      try { dek = await unwrapWithRecovery(rc, code); } catch { throw new Error("That recovery code doesn't open the vault."); }
-      await authRecover(dek); // signs in and unseals
+      try {
+        if (kind === "password") {
+          const pw = methods.find((m): m is PasswordMethod => m.type === "password");
+          if (!pw) throw new Error("no method");
+          dek = await unwrapWithPassword(pw, pass);
+        } else {
+          const rc = methods.find((m): m is RecoveryMethod => m.type === "recovery");
+          if (!rc) throw new Error("no method");
+          dek = await unwrapWithRecovery(rc, code);
+        }
+      } catch {
+        throw new Error(kind === "password" ? "Wrong backup passphrase." : "That recovery code doesn't open the vault.");
+      }
+      await authRecover(dek);
       rememberDek(dek);
       onSuccess();
     } catch (e) {
@@ -97,9 +117,11 @@ function Login({ onSuccess }: { onSuccess: () => void }) {
     }
   }
 
+  const submit = () => { if (mode === "passkey") withPasskey(); else if (mode === "password") withSecret("password"); else if (mode === "recovery") withSecret("recovery"); };
+
   return (
     <div className="login-page grid-bg">
-      <form className="login-card" onSubmit={(e) => { e.preventDefault(); if (mode === "passkey") withPasskey(); else if (mode === "recovery") withRecovery(); }}>
+      <form className="login-card" onSubmit={(e) => { e.preventDefault(); submit(); }}>
         <TerminalBar title="bugxhunter@redteam: ~/login" />
         <div className="login-body">
           <span className="logo login-mark" style={{ fontSize: 34 }} aria-label="BugXHunter"><Wordmark cursor /></span>
@@ -107,13 +129,32 @@ function Login({ onSuccess }: { onSuccess: () => void }) {
 
           {mode === "passkey" && (
             <>
-              <label htmlFor="pp">vault passphrase <span className="muted">(optional — also unlocks the vault)</span></label>
-              <input id="pp" type="password" autoFocus autoComplete="current-password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} />
-              {!passkeysAvailable() && <div className="form-status error">This browser has no passkey support. Use Chrome, Edge or Safari, or a recovery code.</div>}
-              <button className="btn primary block" type="submit" disabled={busy || !passkeysAvailable()}>
+              {legacy && (
+                <>
+                  <label htmlFor="pp">vault passphrase <span className="muted">(this passkey was enrolled with one)</span></label>
+                  <input id="pp" type="password" autoFocus autoComplete="current-password" value={legacyPass} onChange={(e) => setLegacyPass(e.target.value)} />
+                </>
+              )}
+              {!passkeysAvailable() && <div className="form-status error">This browser has no passkey support. Use Chrome, Edge or Safari, or a backup.</div>}
+              <button className="btn primary block" type="submit" autoFocus={!legacy} disabled={busy || !passkeysAvailable()}>
                 {busy ? "waiting for the passkey…" : "./sign_in --passkey →"}
               </button>
-              <button type="button" className="link-btn" disabled={busy} onClick={() => { setMode("recovery"); setError(null); }}>lost the passkey? use the recovery code</button>
+              <div className="login-links">
+                {hasPassword && <button type="button" className="link-btn" disabled={busy} onClick={() => { setMode("password"); setError(null); }}>use the backup passphrase</button>}
+                <button type="button" className="link-btn" disabled={busy} onClick={() => { setMode("recovery"); setError(null); }}>use the recovery code</button>
+              </div>
+            </>
+          )}
+
+          {mode === "password" && (
+            <>
+              <label htmlFor="bp">backup passphrase</label>
+              <input id="bp" type="password" autoFocus autoComplete="current-password" value={pass} onChange={(e) => setPass(e.target.value)} />
+              <button className="btn primary block" type="submit" disabled={busy || !pass}>{busy ? "checking…" : "./sign_in --passphrase →"}</button>
+              <div className="login-links">
+                <button type="button" className="link-btn" disabled={busy} onClick={() => { setMode("passkey"); setError(null); }}>back to the passkey</button>
+                <button type="button" className="link-btn" disabled={busy} onClick={() => { setMode("recovery"); setError(null); }}>use the recovery code</button>
+              </div>
             </>
           )}
 
@@ -124,15 +165,17 @@ function Login({ onSuccess }: { onSuccess: () => void }) {
                 value={code} onChange={(e) => setCode(e.target.value)} />
               <button className="btn primary block" type="submit" disabled={busy || !looksLikeRecoveryCode(code)}>{busy ? "checking…" : "./sign_in --recovery →"}</button>
               <p className="hint" style={{ margin: 0 }}>This signs you in and unlocks the vault. Enrol a new passkey right after, from the keys dialog.</p>
-              <button type="button" className="link-btn" disabled={busy} onClick={() => { setMode("passkey"); setError(null); }}>back to the passkey</button>
-              <button type="button" className="link-btn" disabled={busy} onClick={() => { setMode("lost"); setError(null); }}>lost that too?</button>
+              <div className="login-links">
+                <button type="button" className="link-btn" disabled={busy} onClick={() => { setMode("passkey"); setError(null); }}>back to the passkey</button>
+                <button type="button" className="link-btn" disabled={busy} onClick={() => { setMode("lost"); setError(null); }}>lost that too?</button>
+              </div>
             </>
           )}
 
           {mode === "lost" && (
             <>
               <p className="hint" style={{ margin: 0 }}>
-                Without the passkey or the recovery code the vault's secrets can't be recovered — by design, and by anyone.
+                Without the passkey, the backup passphrase or the recovery code the vault's secrets can't be recovered — by design, and by anyone.
                 Someone with access to the server's files can reset it, which deletes the vault and reopens the app for a fresh setup:
               </p>
               <pre className="tool-output" style={{ borderTop: "1px solid var(--border)" }}>{"npm run vault:reset\n# Docker:\ndocker compose exec runner rm /data/vault.json"}</pre>

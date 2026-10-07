@@ -25,7 +25,7 @@ beforeAll(() => {
     methods: [{
       type: "passkey", id: "pk-test", label: "test", credentialId: CRED_ID, prfSalt: "bugxhunter-vault-prf-v1",
       publicKey: publicKey.export({ format: "der", type: "spki" }).toString("base64"), alg: -7, signCount: 0,
-      passphrase: { name: "PBKDF2", hash: "SHA-256", iterations: 1000, salt: "AAAA" }, hkdfSalt: "AAAA",
+      hkdfSalt: "AAAA",
       wrapped: { iv: "AAAAAAAAAAAAAAAA", ct: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" }, createdAt: new Date().toISOString(),
     }],
     verifier: sealed("bugxhunter-vault-ok", "verifier"), items: {},

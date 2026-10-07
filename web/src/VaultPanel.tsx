@@ -1,18 +1,20 @@
 /**
  * The key vault in the sidebar: a one-line state (none / locked / open with
  * the auto-lock countdown) and the dialogs behind it — the setup wizard
- * (passphrase → passkey → key → recovery code), unlock (passkey + passphrase,
- * or recovery code) and item management. All key derivation happens here in
- * the browser (vault/crypto.ts, vault/prf.ts); the server stores ciphertext.
+ * (passkey → key → backups), one-touch unlock (passkey; backup passphrase or
+ * recovery code as fallbacks) and the keys dialog (items, passkeys, backup
+ * passphrase, delete). All key derivation happens here in the browser
+ * (vault/crypto.ts, vault/prf.ts); the server stores ciphertext.
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import type { PasskeyMethod, RecoveryMethod, VaultStatus } from "../../shared/vault";
+import type { PasskeyMethod, PasswordMethod, RecoveryMethod, VaultStatus } from "../../shared/vault";
 import { vaultAddMethod, vaultDeleteItem, vaultDestroy, vaultInit, vaultRemoveMethod, vaultSeal, vaultSetItem, vaultStatus, vaultUnseal } from "./vault/api";
-import { b64, buildVault, looksLikeRecoveryCode, PRF_SALT, unwrapWithPasskey, unwrapWithRecovery, wrapForPasskey } from "./vault/crypto";
+import { b64, buildVault, looksLikeRecoveryCode, PRF_SALT, unwrapWithPasskey, unwrapWithPassword, unwrapWithRecovery, wrapForPasskey, wrapForPassword } from "./vault/crypto";
 import { createPasskeyWithPrf, evaluatePrf, passkeysAvailable, type EnrolledPasskey } from "./vault/prf";
 import { forgetDek, heldDek, rememberDek } from "./vault/session";
 
-const MIN_PASSPHRASE = 10;
+export const MIN_PASSPHRASE = 10;
+const vaultLabel = () => `BugXHunter vault (${location.hostname})`;
 
 export function VaultPanel() {
   const [status, setStatus] = useState<VaultStatus | null>(null);
@@ -27,6 +29,17 @@ export function VaultPanel() {
   }, [refresh]);
 
   const close = () => { setDialog(null); refresh(); };
+  const lock = useCallback(() => { forgetDek(); vaultSeal().then(setStatus).catch(() => {}); }, []);
+
+  // Ctrl+Shift+L (Cmd+Shift+L on a Mac): lock the vault from anywhere.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "l") { e.preventDefault(); lock(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lock]);
+
   if (!status) return null;
 
   const row = !status.initialised ? (
@@ -47,7 +60,7 @@ export function VaultPanel() {
         vault open{status.sealsAt ? ` · locks in ${remaining(status.sealsAt - now)}` : ""}
       </span>
       <button className="btn ghost sm" onClick={() => setDialog("manage")} title="Keys in the vault">keys</button>
-      <button className="btn ghost sm" onClick={() => { forgetDek(); vaultSeal().then(setStatus).catch(() => {}); }} title="Lock now">lock</button>
+      <button className="btn ghost sm" onClick={lock} title="Lock now (Ctrl+Shift+L)">lock</button>
     </>
   );
 
@@ -78,7 +91,7 @@ function Dialog({ title, onClose, children }: { title: string; onClose?: () => v
       <div className="modal" role="dialog" aria-label={title} onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <span className="modal-title"><span className="dot y" aria-hidden />{title}</span>
-          {onClose && <button className="btn ghost sm" onClick={onClose}>close</button>}
+          {onClose && <button className="icon-btn close-x" onClick={onClose} aria-label="Close" title="Close (Esc)">✕</button>}
         </div>
         <div className="modal-body">{children}</div>
       </div>
@@ -88,26 +101,24 @@ function Dialog({ title, onClose, children }: { title: string; onClose?: () => v
 
 // --- setup wizard ------------------------------------------------------------
 
-type Step = "passphrase" | "passkey" | "key" | "recovery";
-const STEPS: Step[] = ["passphrase", "passkey", "key", "recovery"];
+type Step = "passkey" | "key" | "backups";
+const STEPS: Step[] = ["passkey", "key", "backups"];
 
 function SetupDialog({ onClose }: { onClose: () => void }) {
-  const [step, setStep] = useState<Step>("passphrase");
-  const [pass, setPass] = useState("");
-  const [pass2, setPass2] = useState("");
+  const [step, setStep] = useState<Step>("passkey");
   const [enrolled, setEnrolled] = useState<EnrolledPasskey | null>(null);
   const [scxKey, setScxKey] = useState("");
+  const [pass, setPass] = useState("");
+  const [pass2, setPass2] = useState("");
   const [built, setBuilt] = useState<Awaited<ReturnType<typeof buildVault>> | null>(null);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const label = `BugXHunter vault (${location.hostname})`;
-
   async function enrol() {
     setBusy(true); setError(null);
     try {
-      setEnrolled(await createPasskeyWithPrf(label, PRF_SALT));
+      setEnrolled(await createPasskeyWithPrf(vaultLabel(), PRF_SALT));
       setStep("key");
     } catch (e) {
       setError((e as Error).message);
@@ -116,15 +127,13 @@ function SetupDialog({ onClose }: { onClose: () => void }) {
     }
   }
 
-  async function build() {
+  // The backups step shows the recovery code, so the vault is built when we get there.
+  async function toBackups() {
     if (!enrolled) return;
     setBusy(true); setError(null);
     try {
-      setBuilt(await buildVault({
-        ...enrolled, passphrase: pass, label,
-        items: scxKey.trim() ? { SCX_API: scxKey.trim() } : {},
-      }));
-      setStep("recovery");
+      setBuilt(await buildVault({ ...enrolled, label: vaultLabel(), items: scxKey.trim() ? { SCX_API: scxKey.trim() } : {} }));
+      setStep("backups");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -136,7 +145,10 @@ function SetupDialog({ onClose }: { onClose: () => void }) {
     if (!built) return;
     setBusy(true); setError(null);
     try {
-      await vaultInit(built.doc, built.dek);
+      let doc = built.doc;
+      // The optional backup passphrase is wrapped now, with the DEK still in hand.
+      if (pass) doc = { ...doc, methods: [...doc.methods, await wrapForPassword(b64.dec(built.dek), pass)] };
+      await vaultInit(doc, built.dek);
       rememberDek(built.dek);
       onClose();
     } catch (e) {
@@ -145,33 +157,19 @@ function SetupDialog({ onClose }: { onClose: () => void }) {
     }
   }
 
-  const passOk = pass.length >= MIN_PASSPHRASE && pass === pass2;
+  const passOk = !pass || (pass.length >= MIN_PASSPHRASE && pass === pass2);
   return (
-    <Dialog title="vault --init" onClose={step === "recovery" ? undefined : onClose}>
+    <Dialog title="vault --init" onClose={step === "backups" ? undefined : onClose}>
       <div className="steps">
         {STEPS.map((s) => <span key={s} className={s === step ? "on" : STEPS.indexOf(s) < STEPS.indexOf(step) ? "done" : ""}>{s}</span>)}
       </div>
 
-      {step === "passphrase" && (
-        <>
-          <p>Your model keys will be sealed at rest. Unlocking needs <b>both</b> a passphrase and a passkey, so neither a copied disk nor a stolen device alone opens them.</p>
-          <label htmlFor="v-pass">Passphrase (at least {MIN_PASSPHRASE} characters)</label>
-          <input id="v-pass" type="password" autoFocus autoComplete="new-password" value={pass} onChange={(e) => setPass(e.target.value)} />
-          <label htmlFor="v-pass2">Again</label>
-          <input id="v-pass2" type="password" autoComplete="new-password" value={pass2} onChange={(e) => setPass2(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && passOk) setStep("passkey"); }} />
-          {pass2 && pass !== pass2 && <div className="form-status error">The passphrases differ.</div>}
-          <div className="perm-actions"><button className="btn primary sm" disabled={!passOk} onClick={() => setStep("passkey")}>next →</button></div>
-        </>
-      )}
-
       {step === "passkey" && (
         <>
-          <p>Now the second factor: a passkey. The authenticator (Windows Hello, Touch ID, Android, or a security key) derives a secret that never leaves it. Works in Chrome, Edge and Safari 18+; Firefox can't do this yet.</p>
+          <p>Your model keys will be sealed at rest, and this passkey will unlock them and sign you in — one touch. The authenticator (Windows Hello, Touch ID, Android, or a security key) derives a secret that never leaves it. Works in Chrome, Edge and Safari 18+; Firefox can't do this yet.</p>
           {!passkeysAvailable() && <div className="form-status error">This browser has no passkey support.</div>}
           <div className="perm-actions">
             <button className="btn primary sm" disabled={busy || !passkeysAvailable()} onClick={enrol}>{busy ? "waiting for the authenticator…" : "create passkey"}</button>
-            <button className="btn sm" disabled={busy} onClick={() => setStep("passphrase")}>← back</button>
           </div>
         </>
       )}
@@ -181,19 +179,28 @@ function SetupDialog({ onClose }: { onClose: () => void }) {
           <p>Passkey enrolled. Add the SCX API key now, or later from the keys dialog. It goes straight into the sealed vault; <code className="mono">.env</code> can then drop <code className="mono">SCX_API</code>.</p>
           <label htmlFor="v-scx">SCX API key (optional)</label>
           <input id="v-scx" type="password" autoFocus autoComplete="off" placeholder="sk-scx-…" value={scxKey} onChange={(e) => setScxKey(e.target.value)} />
-          <div className="perm-actions"><button className="btn primary sm" disabled={busy} onClick={build}>{busy ? "sealing…" : "next →"}</button></div>
+          <div className="perm-actions"><button className="btn primary sm" disabled={busy} onClick={toBackups}>{busy ? "sealing…" : "next →"}</button></div>
         </>
       )}
 
-      {step === "recovery" && built && (
+      {step === "backups" && built && (
         <>
-          <p>This recovery code opens the vault if the passkey is lost. It is shown <b>once</b> and stored nowhere. Keep it offline, like a password-manager note or paper.</p>
+          <p>Backups, for when the passkey isn't at hand. This recovery code is shown <b>once</b> and stored nowhere — keep it offline, like a password-manager note or paper.</p>
           <div className="recovery-code" aria-label="Recovery code">{built.recoveryCode}</div>
           <div className="perm-actions">
             <button className="btn sm" onClick={() => navigator.clipboard?.writeText(built.recoveryCode)}>copy</button>
           </div>
           <label className="check"><input type="checkbox" checked={saved} onChange={(e) => setSaved(e.target.checked)} /> I have stored this code somewhere safe.</label>
-          <div className="perm-actions"><button className="btn primary sm" disabled={!saved || busy} onClick={create}>{busy ? "creating…" : "create vault"}</button></div>
+          <label htmlFor="v-pass">Backup passphrase (optional, at least {MIN_PASSPHRASE} characters)</label>
+          <input id="v-pass" type="password" autoComplete="new-password" value={pass} onChange={(e) => setPass(e.target.value)} />
+          {pass && (
+            <>
+              <label htmlFor="v-pass2">Again</label>
+              <input id="v-pass2" type="password" autoComplete="new-password" value={pass2} onChange={(e) => setPass2(e.target.value)} />
+              {pass2 && pass !== pass2 && <div className="form-status error">The passphrases differ.</div>}
+            </>
+          )}
+          <div className="perm-actions"><button className="btn primary sm" disabled={!saved || !passOk || busy} onClick={create}>{busy ? "creating…" : "create vault"}</button></div>
         </>
       )}
 
@@ -205,26 +212,22 @@ function SetupDialog({ onClose }: { onClose: () => void }) {
 // --- unlock --------------------------------------------------------------------
 
 function UnlockDialog({ status, onClose }: { status: VaultStatus; onClose: () => void }) {
-  const [mode, setMode] = useState<"passkey" | "recovery">("passkey");
+  const [mode, setMode] = useState<"passkey" | "password" | "recovery">("passkey");
   const [pass, setPass] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const passkey = status.methods.find((m) => m.type === "passkey") as PasskeyMethod | undefined;
+  const password = status.methods.find((m) => m.type === "password") as PasswordMethod | undefined;
   const recovery = status.methods.find((m) => m.type === "recovery") as RecoveryMethod | undefined;
+  const legacy = Boolean(passkey?.passphrase); // enrolled when the passphrase was mixed in
 
-  async function withPasskey() {
-    if (!passkey) return;
+  async function finish(unwrap: () => Promise<string>, wrongMsg: string) {
     setBusy(true); setError(null);
     try {
-      const prf = await evaluatePrf(passkey.credentialId, passkey.transports, passkey.prfSalt);
       let dek: string;
-      try {
-        dek = await unwrapWithPasskey(passkey, prf, pass);
-      } catch {
-        throw new Error("Wrong passphrase, or a different passkey than the one enrolled.");
-      }
+      try { dek = await unwrap(); } catch (e) { throw e instanceof Error && /Passkey|authenticator|pending|origin/i.test(e.message) ? e : new Error(wrongMsg); }
       await vaultUnseal(dek);
       rememberDek(dek);
       onClose();
@@ -234,39 +237,42 @@ function UnlockDialog({ status, onClose }: { status: VaultStatus; onClose: () =>
     }
   }
 
-  async function withRecovery() {
-    if (!recovery) return;
-    setBusy(true); setError(null);
-    try {
-      let dek: string;
-      try {
-        dek = await unwrapWithRecovery(recovery, code);
-      } catch {
-        throw new Error("That recovery code doesn't open the vault.");
-      }
-      await vaultUnseal(dek);
-      rememberDek(dek);
-      onClose();
-    } catch (e) {
-      setError((e as Error).message);
-      setBusy(false);
-    }
-  }
+  const withPasskey = () => passkey && finish(async () => {
+    const prf = await evaluatePrf(passkey.credentialId, passkey.transports, passkey.prfSalt);
+    return unwrapWithPasskey(passkey, prf, legacy ? pass : undefined);
+  }, legacy ? "Wrong passphrase, or a different passkey than the one enrolled." : "A different passkey than the one enrolled.");
+  const withPassword = () => password && finish(() => unwrapWithPassword(password, pass), "Wrong backup passphrase.");
+  const withRecovery = () => recovery && finish(() => unwrapWithRecovery(recovery, code), "That recovery code doesn't open the vault.");
 
   return (
     <Dialog title="vault --unlock" onClose={onClose}>
-      {mode === "passkey" ? (
+      {mode === "passkey" && (
         <>
-          <p>Enter the passphrase, then confirm with your passkey. Both are needed.</p>
-          <label htmlFor="v-unlock-pass">Passphrase</label>
-          <input id="v-unlock-pass" type="password" autoFocus autoComplete="current-password" value={pass}
-            onChange={(e) => setPass(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && pass) withPasskey(); }} />
+          <p>{legacy ? "This passkey was enrolled with a passphrase: enter it, then confirm with the passkey." : "One touch: confirm with your passkey."}</p>
+          {legacy && (
+            <>
+              <label htmlFor="v-unlock-pass">Passphrase</label>
+              <input id="v-unlock-pass" type="password" autoFocus autoComplete="current-password" value={pass} onChange={(e) => setPass(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && pass) withPasskey(); }} />
+            </>
+          )}
           <div className="perm-actions">
-            <button className="btn primary sm" disabled={busy || !pass || !passkey} onClick={withPasskey}>{busy ? "waiting for the authenticator…" : "unlock with passkey"}</button>
-            {recovery && <button className="link-btn" disabled={busy} onClick={() => { setMode("recovery"); setError(null); }}>use a recovery code</button>}
+            <button className="btn primary sm" autoFocus={!legacy} disabled={busy || !passkey || (legacy && !pass)} onClick={withPasskey}>{busy ? "waiting for the authenticator…" : "unlock with passkey"}</button>
+            {password && <button className="link-btn" disabled={busy} onClick={() => { setMode("password"); setError(null); }}>use the backup passphrase</button>}
+            {recovery && <button className="link-btn" disabled={busy} onClick={() => { setMode("recovery"); setError(null); }}>use the recovery code</button>}
           </div>
         </>
-      ) : (
+      )}
+      {mode === "password" && (
+        <>
+          <label htmlFor="v-unlock-pw">Backup passphrase</label>
+          <input id="v-unlock-pw" type="password" autoFocus autoComplete="current-password" value={pass} onChange={(e) => setPass(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && pass) withPassword(); }} />
+          <div className="perm-actions">
+            <button className="btn primary sm" disabled={busy || !pass} onClick={withPassword}>{busy ? "unlocking…" : "unlock"}</button>
+            <button className="link-btn" disabled={busy} onClick={() => { setMode("passkey"); setError(null); }}>use the passkey instead</button>
+          </div>
+        </>
+      )}
+      {mode === "recovery" && (
         <>
           <p>Enter the recovery code shown when the vault was created.</p>
           <label htmlFor="v-code">Recovery code</label>
@@ -283,18 +289,19 @@ function UnlockDialog({ status, onClose }: { status: VaultStatus; onClose: () =>
   );
 }
 
-// --- keys: items, passkeys, the vault itself -----------------------------------------
+// --- keys: items, passkeys, backup passphrase, the vault itself ---------------------
 
 function ManageDialog({ status, onChange, onClose }: { status: VaultStatus; onChange: (s: VaultStatus) => void; onClose: () => void }) {
   const [name, setName] = useState("SCX_API");
   const [value, setValue] = useState("");
-  const [addPass, setAddPass] = useState("");
-  const [adding, setAdding] = useState(false);
+  const [newPass, setNewPass] = useState("");
+  const [settingPass, setSettingPass] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const dek = heldDek();
   const passkeys = status.methods.filter((m): m is PasskeyMethod & { canLogin: boolean } => m.type === "passkey");
+  const password = status.methods.find((m) => m.type === "password");
 
   async function run(action: () => Promise<VaultStatus | void>) {
     setBusy(true); setError(null);
@@ -307,24 +314,25 @@ function ManageDialog({ status, onChange, onClose }: { status: VaultStatus; onCh
       setBusy(false);
     }
   }
+  const needDek = () => { if (!dek) throw new Error("Unlock the vault in this tab first (the change must wrap the current key)."); return b64.dec(dek); };
 
   const saveItem = () => run(async () => { const s = await vaultSetItem(name.trim().toUpperCase(), value); setValue(""); return s; });
   const removeItem = (n: string) => run(() => vaultDeleteItem(n));
-  const removePasskey = (id: string) => run(() => vaultRemoveMethod(id));
-
+  const removeMethod = (id: string) => run(() => vaultRemoveMethod(id));
   const addPasskey = () => run(async () => {
-    if (!dek) throw new Error("Unlock the vault in this tab first (the new passkey must wrap the current key).");
-    const label = `BugXHunter vault (${location.hostname})`;
-    const enrolled = await createPasskeyWithPrf(label, PRF_SALT);
-    const method = await wrapForPasskey(b64.dec(dek), enrolled, addPass, label);
-    const s = await vaultAddMethod(method, dek);
-    setAdding(false); setAddPass("");
+    const raw = needDek();
+    const method = await wrapForPasskey(raw, await createPasskeyWithPrf(vaultLabel(), PRF_SALT), vaultLabel());
+    return vaultAddMethod(method, dek!);
+  });
+  const setPassphrase = () => run(async () => {
+    const raw = needDek();
+    const s = await vaultAddMethod(await wrapForPassword(raw, newPass), dek!);
+    setSettingPass(false); setNewPass("");
     return s;
   });
-
   const destroy = () => run(async () => {
-    if (!dek) throw new Error("Unlock the vault in this tab first.");
-    const s = await vaultDestroy(dek);
+    needDek();
+    const s = await vaultDestroy(dek!);
     forgetDek();
     onClose();
     return s;
@@ -354,28 +362,43 @@ function ManageDialog({ status, onChange, onClose }: { status: VaultStatus; onCh
       </div>
 
       <div className="section-title">passkeys</div>
-      <p>Each passkey unlocks the vault (with the passphrase) and signs you in. Keep two, on different devices, so losing one is not an emergency.</p>
+      <p>Each passkey unlocks the vault and signs you in with one touch. Keep two, on different devices, so losing one is not an emergency.</p>
       <div className="vault-items">
         {passkeys.map((p) => (
           <div className="vault-item" key={p.id}>
             <span className={p.canLogin ? "ok" : "warn"} aria-hidden>{p.canLogin ? "✓" : "!"}</span>
-            <span className="name">{p.label}{p.canLogin ? "" : " — unlock only; enrolled before sign-in existed, add a new one for sign-in"}</span>
-            <button className="btn danger" disabled={busy || passkeys.length <= 1} onClick={() => removePasskey(p.id)} title={passkeys.length <= 1 ? "Add another passkey first" : "Remove"}>✕</button>
+            <span className="name">{p.label}{p.passphrase ? " — needs its passphrase (older enrolment)" : ""}{p.canLogin ? "" : " — unlock only, can't sign in; add a new passkey"}</span>
+            <button className="btn danger" disabled={busy || passkeys.length <= 1} onClick={() => removeMethod(p.id)} title={passkeys.length <= 1 ? "Add another passkey first" : "Remove"}>✕</button>
           </div>
         ))}
       </div>
-      {adding ? (
+      <div className="perm-actions">
+        <button className="btn sm" disabled={busy || !dek} onClick={addPasskey} title={dek ? "" : "Unlock the vault in this tab first"}>{busy ? "waiting for the authenticator…" : "+ add passkey"}</button>
+      </div>
+
+      <div className="section-title">backups</div>
+      <p>The recovery code from setup always works. A backup passphrase is optional: a way in on a device without the passkey.</p>
+      <div className="vault-items">
+        <div className="vault-item"><span className="ok" aria-hidden>✓</span><span className="name">Recovery code</span></div>
+        {password && (
+          <div className="vault-item">
+            <span className="ok" aria-hidden>✓</span><span className="name">Backup passphrase</span>
+            <button className="btn danger" disabled={busy} onClick={() => removeMethod(password.id)} title="Remove">✕</button>
+          </div>
+        )}
+      </div>
+      {settingPass ? (
         <>
-          <label htmlFor="v-addpass">Passphrase for the new passkey (may be the same)</label>
-          <input id="v-addpass" type="password" autoFocus autoComplete="new-password" value={addPass} onChange={(e) => setAddPass(e.target.value)} />
+          <label htmlFor="v-newpass">{password ? "New backup passphrase" : "Backup passphrase"} (at least {MIN_PASSPHRASE} characters)</label>
+          <input id="v-newpass" type="password" autoFocus autoComplete="new-password" value={newPass} onChange={(e) => setNewPass(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && newPass.length >= MIN_PASSPHRASE) setPassphrase(); }} />
           <div className="perm-actions">
-            <button className="btn primary sm" disabled={busy || addPass.length < MIN_PASSPHRASE} onClick={addPasskey}>{busy ? "waiting for the authenticator…" : "create passkey"}</button>
-            <button className="btn sm" disabled={busy} onClick={() => setAdding(false)}>cancel</button>
+            <button className="btn primary sm" disabled={busy || newPass.length < MIN_PASSPHRASE} onClick={setPassphrase}>{busy ? "sealing…" : "save"}</button>
+            <button className="btn sm" disabled={busy} onClick={() => setSettingPass(false)}>cancel</button>
           </div>
         </>
       ) : (
         <div className="perm-actions">
-          <button className="btn sm" disabled={busy || !dek} onClick={() => setAdding(true)} title={dek ? "" : "Unlock the vault in this tab first"}>+ add passkey</button>
+          <button className="btn sm" disabled={busy || !dek} onClick={() => setSettingPass(true)} title={dek ? "" : "Unlock the vault in this tab first"}>{password ? "replace backup passphrase" : "+ set a backup passphrase"}</button>
         </div>
       )}
 

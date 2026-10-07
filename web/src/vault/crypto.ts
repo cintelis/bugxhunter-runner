@@ -4,7 +4,7 @@
  * server never sees a passphrase, a PRF output or a recovery code — only the
  * wrapped keys it stores and, after an unlock, the DEK for its memory.
  */
-import type { Pbkdf2Params, PasskeyMethod, RecoveryMethod, Sealed, VaultDoc } from "../../../shared/vault";
+import type { Pbkdf2Params, PasskeyMethod, PasswordMethod, RecoveryMethod, Sealed, VaultDoc, VaultMethod } from "../../../shared/vault";
 
 export const PBKDF2_ITERATIONS = 600_000;
 /** Fixed: the PRF output is a function of (credential, salt). Change = every passkey derives a different secret. */
@@ -36,24 +36,37 @@ async function pbkdf2(secret: string, params: Pbkdf2Params): Promise<Uint8Array>
   return new Uint8Array(bits);
 }
 
-/** Both factors go into the KEK: the authenticator's PRF output and the passphrase. */
-async function passkeyKek(prf: Uint8Array, passphrase: string, m: Pick<PasskeyMethod, "passphrase" | "hkdfSalt">): Promise<CryptoKey> {
+/**
+ * The passkey's KEK: HKDF over the authenticator's PRF output. One touch; the
+ * authenticator's user verification is the second factor. Legacy vaults (from
+ * before one-touch unlock) mixed a passphrase in as well: those methods carry
+ * `passphrase` parameters and need the passphrase here.
+ */
+async function passkeyKek(prf: Uint8Array, m: Pick<PasskeyMethod, "passphrase" | "hkdfSalt">, passphrase?: string): Promise<CryptoKey> {
   if (prf.length !== 32) throw new Error("PRF output must be 32 bytes");
-  const pass = await pbkdf2(passphrase, m.passphrase);
-  const ikm = new Uint8Array(64);
-  ikm.set(prf, 0);
-  ikm.set(pass, 32);
+  let ikm: Uint8Array;
+  if (m.passphrase) {
+    if (!passphrase) throw new Error("This passkey was enrolled with a passphrase; enter it as well.");
+    const pass = await pbkdf2(passphrase, m.passphrase);
+    ikm = new Uint8Array(64);
+    ikm.set(prf, 0);
+    ikm.set(pass, 32);
+    pass.fill(0);
+  } else {
+    ikm = new Uint8Array(prf);
+  }
   const hk = await subtle.importKey("raw", buf(ikm), "HKDF", false, ["deriveKey"]);
   const kek = await subtle.deriveKey(
     { name: "HKDF", hash: "SHA-256", salt: buf(b64.dec(m.hkdfSalt)), info: enc.encode(HKDF_INFO) },
     hk, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"],
   );
-  ikm.fill(0); pass.fill(0);
+  ikm.fill(0);
   return kek;
 }
 
-async function recoveryKek(code: string, kdf: Pbkdf2Params): Promise<CryptoKey> {
-  const bits = await pbkdf2(normaliseRecoveryCode(code), kdf);
+/** A KEK from a typed secret (backup passphrase, recovery code). */
+async function secretKek(secret: string, kdf: Pbkdf2Params): Promise<CryptoKey> {
+  const bits = await pbkdf2(secret, kdf);
   const kek = await subtle.importKey("raw", buf(bits), "AES-GCM", false, ["encrypt", "decrypt"]);
   bits.fill(0);
   return kek;
@@ -108,59 +121,70 @@ export interface Enrolled {
 }
 
 export interface BuildInput extends Enrolled {
-  passphrase: string;
   label: string;
+  /** Optional backup passphrase: a second way in besides the passkey and the recovery code. */
+  passphrase?: string;
   /** Initial sealed items, e.g. { SCX_API: "sk-..." }. */
   items: Record<string, string>;
 }
 
-/** Wrap a DEK for a passkey + passphrase (used at setup and when adding a passkey later). */
-export async function wrapForPasskey(dekRaw: Uint8Array, e: Enrolled, passphrase: string, label: string): Promise<PasskeyMethod> {
+const newId = (prefix: string) => `${prefix}-${b64url.enc(randomBytes(6))}`;
+const pbkdf2Params = (): Pbkdf2Params => ({ name: "PBKDF2", hash: "SHA-256", iterations: PBKDF2_ITERATIONS, salt: b64.enc(randomBytes(16)) });
+
+/** Wrap a DEK for a passkey (at setup, or when adding a passkey later). */
+export async function wrapForPasskey(dekRaw: Uint8Array, e: Enrolled, label: string): Promise<PasskeyMethod> {
   const method: PasskeyMethod = {
-    type: "passkey", id: `pk-${b64url.enc(randomBytes(6))}`, label,
+    type: "passkey", id: newId("pk"), label,
     credentialId: e.credentialId, transports: e.transports, publicKey: e.publicKey, alg: e.alg, signCount: 0, prfSalt: PRF_SALT,
-    passphrase: { name: "PBKDF2", hash: "SHA-256", iterations: PBKDF2_ITERATIONS, salt: b64.enc(randomBytes(16)) },
     hkdfSalt: b64.enc(randomBytes(16)), wrapped: { iv: "", ct: "" }, createdAt: new Date().toISOString(),
   };
-  method.wrapped = await sealWith(await passkeyKek(e.prf, passphrase, method), dekRaw, method.id);
+  method.wrapped = await sealWith(await passkeyKek(e.prf, method), dekRaw, method.id);
   return method;
 }
 
-/** Generate the DEK, wrap it for a passkey+passphrase method and a recovery code, seal the items. */
+/** Wrap a DEK for the backup passphrase. */
+export async function wrapForPassword(dekRaw: Uint8Array, passphrase: string): Promise<PasswordMethod> {
+  const method: PasswordMethod = {
+    type: "password", id: newId("pw"), label: "Backup passphrase", kdf: pbkdf2Params(), wrapped: { iv: "", ct: "" }, createdAt: new Date().toISOString(),
+  };
+  method.wrapped = await sealWith(await secretKek(passphrase, method.kdf), dekRaw, method.id);
+  return method;
+}
+
+/** Generate the DEK; wrap it for the passkey, the recovery code and (if given) the backup passphrase; seal the items. */
 export async function buildVault(input: BuildInput): Promise<{ doc: VaultDoc; dek: string; recoveryCode: string }> {
   const dekRaw = randomBytes(32);
   const dek = await subtle.importKey("raw", buf(dekRaw), "AES-GCM", false, ["encrypt"]);
   const now = new Date().toISOString();
 
-  const passkey = await wrapForPasskey(dekRaw, input, input.passphrase, input.label);
-
+  const methods: VaultMethod[] = [await wrapForPasskey(dekRaw, input, input.label)];
+  if (input.passphrase) methods.push(await wrapForPassword(dekRaw, input.passphrase));
   const recoveryCode = generateRecoveryCode();
-  const recovery: RecoveryMethod = {
-    type: "recovery", id: `rc-${b64url.enc(randomBytes(6))}`, label: "Recovery code",
-    kdf: { name: "PBKDF2", hash: "SHA-256", iterations: PBKDF2_ITERATIONS, salt: b64.enc(randomBytes(16)) },
-    wrapped: { iv: "", ct: "" }, createdAt: now,
-  };
-  recovery.wrapped = await sealWith(await recoveryKek(recoveryCode, recovery.kdf), dekRaw, recovery.id);
+  const recovery: RecoveryMethod = { type: "recovery", id: newId("rc"), label: "Recovery code", kdf: pbkdf2Params(), wrapped: { iv: "", ct: "" }, createdAt: now };
+  recovery.wrapped = await sealWith(await secretKek(normaliseRecoveryCode(recoveryCode), recovery.kdf), dekRaw, recovery.id);
+  methods.push(recovery);
 
   const items: VaultDoc["items"] = {};
   for (const [name, value] of Object.entries(input.items)) if (value) items[name] = await sealWith(dek, enc.encode(value), name);
 
-  const doc: VaultDoc = {
-    version: 1, createdAt: now, methods: [passkey, recovery],
-    verifier: await sealWith(dek, enc.encode(VERIFIER_TEXT), "verifier"), items,
-  };
+  const doc: VaultDoc = { version: 1, createdAt: now, methods, verifier: await sealWith(dek, enc.encode(VERIFIER_TEXT), "verifier"), items };
   const dekB64 = b64.enc(dekRaw);
   dekRaw.fill(0);
   return { doc, dek: dekB64, recoveryCode };
 }
 
-/** Unwrap the DEK with a passkey's PRF output and the passphrase. Throws on a wrong factor. */
-export async function unwrapWithPasskey(m: PasskeyMethod, prf: Uint8Array, passphrase: string): Promise<string> {
-  const kek = await passkeyKek(prf, passphrase, m);
+/** Unwrap the DEK with a passkey's PRF output (plus the passphrase for a legacy method). Throws on a wrong factor. */
+export async function unwrapWithPasskey(m: PasskeyMethod, prf: Uint8Array, passphrase?: string): Promise<string> {
+  const kek = await passkeyKek(prf, m, passphrase);
+  return b64.enc(await openWith(kek, m.wrapped, m.id));
+}
+
+export async function unwrapWithPassword(m: PasswordMethod, passphrase: string): Promise<string> {
+  const kek = await secretKek(passphrase, m.kdf);
   return b64.enc(await openWith(kek, m.wrapped, m.id));
 }
 
 export async function unwrapWithRecovery(m: RecoveryMethod, code: string): Promise<string> {
-  const kek = await recoveryKek(code, m.kdf);
+  const kek = await secretKek(normaliseRecoveryCode(code), m.kdf);
   return b64.enc(await openWith(kek, m.wrapped, m.id));
 }
