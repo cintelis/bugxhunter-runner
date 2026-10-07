@@ -420,9 +420,9 @@ function RunnerSidebar({ runner, status, statusError, onOpen, sessions }: {
       <div className="section-title">Agents</div>
       <div className="agent-info">
         <div className="ai-row"><span className="ai-name">build</span><span className="hint">edits &amp; runs</span></div>
-        <div className="hint" style={{ margin: "2px 0 10px" }}>Every file edit and shell command waits for your approval.</div>
+        <div className="hint ai-desc">Every file edit and shell command waits for your approval.</div>
         <div className="ai-row"><span className="ai-name">plan</span><span className="hint">read-only</span></div>
-        <div className="hint" style={{ margin: "2px 0 0" }}>Explores and reasons without changing anything.</div>
+        <div className="hint ai-desc">Explores and reasons without changing anything.</div>
       </div>
 
       <div className="section-title">Engine</div>
