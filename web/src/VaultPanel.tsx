@@ -168,8 +168,8 @@ function SetupDialog({ onClose }: { onClose: () => void }) {
         <>
           <p>Your model keys will be sealed at rest, and this passkey will unlock them and sign you in — one touch. The authenticator (Windows Hello, Touch ID, Android, or a security key) derives a secret that never leaves it. Works in Chrome, Edge and Safari 18+; Firefox can't do this yet.</p>
           {!passkeysAvailable() && <div className="form-status error">This browser has no passkey support.</div>}
-          <div className="perm-actions">
-            <button className="btn primary sm" disabled={busy || !passkeysAvailable()} onClick={enrol}>{busy ? "waiting for the authenticator…" : "create passkey"}</button>
+          <div className="perm-actions center">
+            <button className="btn primary wide" disabled={busy || !passkeysAvailable()} onClick={enrol}>{busy ? "waiting for the authenticator…" : "create passkey →"}</button>
           </div>
         </>
       )}
