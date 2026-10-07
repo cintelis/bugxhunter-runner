@@ -161,4 +161,4 @@ jobs:
           set -eu
           cd dist/npm && npm pack --silent >/dev/null
           node bin/bugxhunter.mjs --version | grep -qx "$(node -p "require('./package.json').version")"
-      - run: npm publish dist/npm --provenance --access public
+      - run: npm publish ./dist/npm --provenance --access public

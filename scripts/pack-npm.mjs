@@ -11,7 +11,7 @@
 //
 // Its package.json is generated: the server's runtime dependencies plus
 // opencode-ai (the agent binary, so Node is the only prerequisite). Workspaces,
-// dev dependencies and scripts stay here. `npm publish dist/npm` publishes it.
+// dev dependencies and scripts stay here. `npm publish ./dist/npm` publishes it.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
