@@ -574,10 +574,17 @@ select {
 .steps .on { color: var(--cyan); }
 .steps .done { color: var(--green); }
 .steps .done::before { content: "✓ "; }
+/* The recovery code is a button: one click copies it. */
 .recovery-code {
+  display: flex; flex-direction: column; align-items: center; gap: 6px; width: 100%; cursor: pointer;
   font-family: var(--mono); font-size: 17px; letter-spacing: 1px; text-align: center; padding: 14px 10px;
-  background: var(--bg); border: 1px dashed var(--amber); border-radius: var(--radius); color: var(--text); user-select: all; word-break: break-all;
+  background: var(--bg); border: 1px dashed var(--amber); border-radius: var(--radius); color: var(--text); word-break: break-all; transition: var(--transition);
 }
+.recovery-code .code { user-select: all; }
+.recovery-code .copy-hint { font-size: 10.5px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+.recovery-code:hover { border-style: solid; background: var(--panel-2); }
+.recovery-code.copied { border-color: var(--green); }
+.recovery-code.copied .copy-hint { color: var(--green); }
 .check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); text-transform: none; letter-spacing: 0; font-family: var(--sans); }
 .check input { accent-color: var(--green); }
 .vault-items { display: flex; flex-direction: column; gap: 6px; }

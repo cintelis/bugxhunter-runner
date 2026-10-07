@@ -112,6 +112,7 @@ function SetupDialog({ onClose }: { onClose: () => void }) {
   const [pass2, setPass2] = useState("");
   const [built, setBuilt] = useState<Awaited<ReturnType<typeof buildVault>> | null>(null);
   const [saved, setSaved] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -179,17 +180,25 @@ function SetupDialog({ onClose }: { onClose: () => void }) {
           <p>Passkey enrolled. Add the SCX API key now, or later from the keys dialog. It goes straight into the sealed vault; <code className="mono">.env</code> can then drop <code className="mono">SCX_API</code>.</p>
           <label htmlFor="v-scx">SCX API key (optional)</label>
           <input id="v-scx" type="password" autoFocus autoComplete="off" placeholder="sk-scx-…" value={scxKey} onChange={(e) => setScxKey(e.target.value)} />
-          <div className="perm-actions"><button className="btn primary sm" disabled={busy} onClick={toBackups}>{busy ? "sealing…" : "next →"}</button></div>
+          <div className="perm-actions center"><button className="btn primary wide" disabled={busy} onClick={toBackups}>{busy ? "sealing…" : "next →"}</button></div>
         </>
       )}
 
       {step === "backups" && built && (
         <>
           <p>Backups, for when the passkey isn't at hand. This recovery code is shown <b>once</b> and stored nowhere — keep it offline, like a password-manager note or paper.</p>
-          <div className="recovery-code" aria-label="Recovery code">{built.recoveryCode}</div>
-          <div className="perm-actions">
-            <button className="btn sm" onClick={() => navigator.clipboard?.writeText(built.recoveryCode)}>copy</button>
-          </div>
+          <button
+            type="button"
+            className={"recovery-code" + (copied ? " copied" : "")}
+            aria-label="Recovery code — click to copy"
+            title="Click to copy"
+            onClick={() => {
+              navigator.clipboard?.writeText(built.recoveryCode).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }).catch(() => {});
+            }}
+          >
+            <span className="code">{built.recoveryCode}</span>
+            <span className="copy-hint">{copied ? "✓ copied" : "click to copy"}</span>
+          </button>
           <label className="check"><input type="checkbox" checked={saved} onChange={(e) => setSaved(e.target.checked)} /> I have stored this code somewhere safe.</label>
           <label htmlFor="v-pass">Backup passphrase (optional, at least {MIN_PASSPHRASE} characters)</label>
           <input id="v-pass" type="password" autoComplete="new-password" value={pass} onChange={(e) => setPass(e.target.value)} />
@@ -200,7 +209,7 @@ function SetupDialog({ onClose }: { onClose: () => void }) {
               {pass2 && pass !== pass2 && <div className="form-status error">The passphrases differ.</div>}
             </>
           )}
-          <div className="perm-actions"><button className="btn primary sm" disabled={!saved || !passOk || busy} onClick={create}>{busy ? "creating…" : "create vault"}</button></div>
+          <div className="perm-actions center"><button className="btn primary wide" disabled={!saved || !passOk || busy} onClick={create}>{busy ? "creating…" : "create vault →"}</button></div>
         </>
       )}
 
