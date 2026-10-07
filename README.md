@@ -212,6 +212,7 @@ GHCR images by digest) and the signed `checksums.txt` that covers them all.
 <!-- releases:start -->
 | Release | Published | Checksums | Signature | Signature check | Build |
 | --- | --- | --- | --- | --- | --- |
+| [v0.2.0](https://github.com/cintelis/bugxhunter-runner/releases/tag/v0.2.0) | 2026-10-07 | [checksums.txt](https://github.com/cintelis/bugxhunter-runner/releases/download/v0.2.0/checksums.txt) | [checksums.txt.sig](https://github.com/cintelis/bugxhunter-runner/releases/download/v0.2.0/checksums.txt.sig) | ✅ release key | [workflow run](https://github.com/cintelis/bugxhunter-runner/actions/runs/37618237000) |
 | [v0.1.0](https://github.com/cintelis/bugxhunter-runner/releases/tag/v0.1.0) | 2026-10-07 | [checksums.txt](https://github.com/cintelis/bugxhunter-runner/releases/download/v0.1.0/checksums.txt) | [checksums.txt.sig](https://github.com/cintelis/bugxhunter-runner/releases/download/v0.1.0/checksums.txt.sig) | ✅ release key | [workflow run](https://github.com/cintelis/bugxhunter-runner/actions/runs/37597898761) |
 
 Signature check: `checksums.txt.sig` verified against the release key (`SHA256:RY9yd61LBZCa5WrzSkEet+1Dnt2zVu9zpMRbZMWIV+I`)
