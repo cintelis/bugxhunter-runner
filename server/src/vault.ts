@@ -10,7 +10,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { Sealed, VaultDoc, VaultMethod, VaultStatus } from "../../shared/vault.js";
+import type { PasskeyMethod, PublicMethod, Sealed, VaultDoc, VaultMethod, VaultStatus } from "../../shared/vault.js";
 import { audit } from "./audit.js";
 import { httpError } from "./opencode.js";
 
@@ -101,21 +101,86 @@ export function verifies(vault: VaultDoc, key: Buffer): boolean {
 export const isInitialised = () => load() !== null;
 export const isUnsealed = () => dek !== null;
 
+/**
+ * The public half of every method. Everything the browser needs to derive a
+ * KEK (salts, wrapped DEKs) is public by design: without the factors it is
+ * random bytes. Never the credential public key's sign counter or anything
+ * from memory.
+ */
+export function publicMethods(): PublicMethod[] {
+  return (load()?.methods ?? []).map((m) => {
+    if (m.type === "recovery") return m;
+    const { publicKey, signCount: _c, ...rest } = m;
+    return { ...rest, canLogin: Boolean(publicKey && m.alg !== undefined) };
+  });
+}
+
 export function status(keySource: VaultStatus["keySource"]): VaultStatus {
   const v = load();
   return {
     initialised: v !== null,
     unsealed: dek !== null,
-    // Everything the browser needs to derive a KEK (salts, wrapped DEKs) is
-    // public by design: without the factors it is just random bytes.
-    methods: (v?.methods ?? []).map((m) => (m.type === "passkey"
-      ? { type: m.type, id: m.id, label: m.label, credentialId: m.credentialId, transports: m.transports, prfSalt: m.prfSalt, passphrase: m.passphrase, hkdfSalt: m.hkdfSalt, wrapped: m.wrapped }
-      : { type: m.type, id: m.id, label: m.label, kdf: m.kdf, wrapped: m.wrapped })),
+    methods: publicMethods(),
     items: Object.keys(v?.items ?? {}),
     keySource,
     idleMinutes: IDLE_MS / 60_000,
     sealsAt: sealsAt(),
   };
+}
+
+// --- sign-in support -------------------------------------------------------------
+
+/** Passkeys that can sign in (enrolled with their public key). */
+export function loginCredentials(): PasskeyMethod[] {
+  return (load()?.methods ?? []).filter((m): m is PasskeyMethod => m.type === "passkey" && !!m.publicKey && m.alg !== undefined);
+}
+
+export function recordSignCount(methodId: string, count: number) {
+  const v = load();
+  if (!v) return;
+  save({ ...v, methods: v.methods.map((m) => (m.id === methodId && m.type === "passkey" ? { ...m, signCount: count } : m)) });
+}
+
+/** True if this is the key currently in memory (so a client proving it holds the DEK may change methods). */
+export function dekMatches(dekB64: string): boolean {
+  const key = Buffer.from(dekB64, "base64");
+  return dek !== null && key.length === 32 && crypto.timingSafeEqual(key, dek);
+}
+
+/** Add an unlock method (a new passkey). The caller must hold the current DEK, since the method must wrap it. */
+export function addMethod(method: VaultMethod, dekB64: string) {
+  const v = load();
+  if (!v) throw httpError(404, "No vault yet.");
+  if (!dek) throw httpError(503, "The vault is sealed. Unlock it first.");
+  if (!dekMatches(dekB64)) throw httpError(403, "Only a client holding the vault key can add a method.");
+  validateMethod(method);
+  if (method.type !== "passkey") throw httpError(400, "Only passkeys can be added.");
+  if (v.methods.some((m) => m.id === method.id || (m.type === "passkey" && m.credentialId === method.credentialId))) {
+    throw httpError(409, "That passkey is already enrolled.");
+  }
+  save({ ...v, methods: [...v.methods, method] });
+  audit("vault.method.added", { type: method.type, id: method.id, label: method.label });
+}
+
+/** Delete the vault file and forget the key: the owner (proving the key) starting over. */
+export function destroy(dekB64: string) {
+  if (!load()) throw httpError(404, "No vault to delete.");
+  if (!dekMatches(dekB64)) throw httpError(403, "Only a client holding the vault key can delete it. Lost it? Run `npm run vault:reset` on the server.");
+  sealVault("user");
+  fs.rmSync(VAULT_FILE, { force: true });
+  audit("vault.destroyed", { file: VAULT_FILE });
+}
+
+/** Remove a passkey. The recovery code can't be removed, and the last passkey can't either. */
+export function removeMethod(id: string) {
+  const v = load();
+  if (!v) throw httpError(404, "No vault yet.");
+  const m = v.methods.find((x) => x.id === id);
+  if (!m) return;
+  if (m.type !== "passkey") throw httpError(400, "The recovery code can't be removed.");
+  if (v.methods.filter((x) => x.type === "passkey").length <= 1) throw httpError(400, "Add another passkey before removing the last one.");
+  save({ ...v, methods: v.methods.filter((x) => x.id !== id) });
+  audit("vault.method.removed", { id, label: m.label });
 }
 
 /**

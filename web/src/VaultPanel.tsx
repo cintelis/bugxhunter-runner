@@ -7,9 +7,10 @@
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { PasskeyMethod, RecoveryMethod, VaultStatus } from "../../shared/vault";
-import { vaultDeleteItem, vaultInit, vaultSeal, vaultSetItem, vaultStatus, vaultUnseal } from "./vault/api";
-import { buildVault, looksLikeRecoveryCode, PRF_SALT, unwrapWithPasskey, unwrapWithRecovery } from "./vault/crypto";
+import { vaultAddMethod, vaultDeleteItem, vaultDestroy, vaultInit, vaultRemoveMethod, vaultSeal, vaultSetItem, vaultStatus, vaultUnseal } from "./vault/api";
+import { b64, buildVault, looksLikeRecoveryCode, PRF_SALT, unwrapWithPasskey, unwrapWithRecovery, wrapForPasskey } from "./vault/crypto";
 import { createPasskeyWithPrf, evaluatePrf, passkeysAvailable, type EnrolledPasskey } from "./vault/prf";
+import { forgetDek, heldDek, rememberDek } from "./vault/session";
 
 const MIN_PASSPHRASE = 10;
 
@@ -46,7 +47,7 @@ export function VaultPanel() {
         vault open{status.sealsAt ? ` · locks in ${remaining(status.sealsAt - now)}` : ""}
       </span>
       <button className="btn ghost sm" onClick={() => setDialog("manage")} title="Keys in the vault">keys</button>
-      <button className="btn ghost sm" onClick={() => vaultSeal().then(setStatus).catch(() => {})} title="Lock now">lock</button>
+      <button className="btn ghost sm" onClick={() => { forgetDek(); vaultSeal().then(setStatus).catch(() => {}); }} title="Lock now">lock</button>
     </>
   );
 
@@ -120,7 +121,7 @@ function SetupDialog({ onClose }: { onClose: () => void }) {
     setBusy(true); setError(null);
     try {
       setBuilt(await buildVault({
-        passphrase: pass, prf: enrolled.prf, credentialId: enrolled.credentialId, transports: enrolled.transports, label,
+        ...enrolled, passphrase: pass, label,
         items: scxKey.trim() ? { SCX_API: scxKey.trim() } : {},
       }));
       setStep("recovery");
@@ -136,6 +137,7 @@ function SetupDialog({ onClose }: { onClose: () => void }) {
     setBusy(true); setError(null);
     try {
       await vaultInit(built.doc, built.dek);
+      rememberDek(built.dek);
       onClose();
     } catch (e) {
       setError((e as Error).message);
@@ -224,6 +226,7 @@ function UnlockDialog({ status, onClose }: { status: VaultStatus; onClose: () =>
         throw new Error("Wrong passphrase, or a different passkey than the one enrolled.");
       }
       await vaultUnseal(dek);
+      rememberDek(dek);
       onClose();
     } catch (e) {
       setError((e as Error).message);
@@ -242,6 +245,7 @@ function UnlockDialog({ status, onClose }: { status: VaultStatus; onClose: () =>
         throw new Error("That recovery code doesn't open the vault.");
       }
       await vaultUnseal(dek);
+      rememberDek(dek);
       onClose();
     } catch (e) {
       setError((e as Error).message);
@@ -279,29 +283,52 @@ function UnlockDialog({ status, onClose }: { status: VaultStatus; onClose: () =>
   );
 }
 
-// --- items -----------------------------------------------------------------------
+// --- keys: items, passkeys, the vault itself -----------------------------------------
 
 function ManageDialog({ status, onChange, onClose }: { status: VaultStatus; onChange: (s: VaultStatus) => void; onClose: () => void }) {
   const [name, setName] = useState("SCX_API");
   const [value, setValue] = useState("");
+  const [addPass, setAddPass] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const dek = heldDek();
+  const passkeys = status.methods.filter((m): m is PasskeyMethod & { canLogin: boolean } => m.type === "passkey");
 
-  async function save() {
+  async function run(action: () => Promise<VaultStatus | void>) {
     setBusy(true); setError(null);
     try {
-      onChange(await vaultSetItem(name.trim().toUpperCase(), value));
-      setValue("");
+      const next = await action();
+      if (next) onChange(next);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
     }
   }
-  async function remove(n: string) {
-    setError(null);
-    try { onChange(await vaultDeleteItem(n)); } catch (e) { setError((e as Error).message); }
-  }
+
+  const saveItem = () => run(async () => { const s = await vaultSetItem(name.trim().toUpperCase(), value); setValue(""); return s; });
+  const removeItem = (n: string) => run(() => vaultDeleteItem(n));
+  const removePasskey = (id: string) => run(() => vaultRemoveMethod(id));
+
+  const addPasskey = () => run(async () => {
+    if (!dek) throw new Error("Unlock the vault in this tab first (the new passkey must wrap the current key).");
+    const label = `BugXHunter vault (${location.hostname})`;
+    const enrolled = await createPasskeyWithPrf(label, PRF_SALT);
+    const method = await wrapForPasskey(b64.dec(dek), enrolled, addPass, label);
+    const s = await vaultAddMethod(method, dek);
+    setAdding(false); setAddPass("");
+    return s;
+  });
+
+  const destroy = () => run(async () => {
+    if (!dek) throw new Error("Unlock the vault in this tab first.");
+    const s = await vaultDestroy(dek);
+    forgetDek();
+    onClose();
+    return s;
+  });
 
   return (
     <Dialog title="vault --keys" onClose={onClose}>
@@ -311,7 +338,7 @@ function ManageDialog({ status, onChange, onClose }: { status: VaultStatus; onCh
           {status.items.map((n) => (
             <div className="vault-item" key={n}>
               <span className="ok" aria-hidden>✓</span><span className="name">{n}</span>
-              <button className="btn danger" onClick={() => remove(n)} title="Remove">✕</button>
+              <button className="btn danger" disabled={busy} onClick={() => removeItem(n)} title="Remove">✕</button>
             </div>
           ))}
         </div>
@@ -320,10 +347,43 @@ function ManageDialog({ status, onChange, onClose }: { status: VaultStatus; onCh
       <input id="v-name" type="text" className="mono" value={name} onChange={(e) => setName(e.target.value)} spellCheck={false} />
       <label htmlFor="v-value">Value</label>
       <input id="v-value" type="password" autoComplete="off" value={value} onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => { if (e.key === "Enter" && value) save(); }} />
+        onKeyDown={(e) => { if (e.key === "Enter" && value) saveItem(); }} />
       <div className="perm-actions">
-        <button className="btn primary sm" disabled={busy || !value || !name.trim()} onClick={save}>{busy ? "sealing…" : "save"}</button>
+        <button className="btn primary sm" disabled={busy || !value || !name.trim()} onClick={saveItem}>{busy ? "sealing…" : "save"}</button>
         <span className="hint" style={{ margin: 0 }}>{status.idleMinutes ? `Auto-locks after ${status.idleMinutes} min idle.` : "Auto-lock is off."}</span>
+      </div>
+
+      <div className="section-title">passkeys</div>
+      <p>Each passkey unlocks the vault (with the passphrase) and signs you in. Keep two, on different devices, so losing one is not an emergency.</p>
+      <div className="vault-items">
+        {passkeys.map((p) => (
+          <div className="vault-item" key={p.id}>
+            <span className={p.canLogin ? "ok" : "warn"} aria-hidden>{p.canLogin ? "✓" : "!"}</span>
+            <span className="name">{p.label}{p.canLogin ? "" : " — unlock only; enrolled before sign-in existed, add a new one for sign-in"}</span>
+            <button className="btn danger" disabled={busy || passkeys.length <= 1} onClick={() => removePasskey(p.id)} title={passkeys.length <= 1 ? "Add another passkey first" : "Remove"}>✕</button>
+          </div>
+        ))}
+      </div>
+      {adding ? (
+        <>
+          <label htmlFor="v-addpass">Passphrase for the new passkey (may be the same)</label>
+          <input id="v-addpass" type="password" autoFocus autoComplete="new-password" value={addPass} onChange={(e) => setAddPass(e.target.value)} />
+          <div className="perm-actions">
+            <button className="btn primary sm" disabled={busy || addPass.length < MIN_PASSPHRASE} onClick={addPasskey}>{busy ? "waiting for the authenticator…" : "create passkey"}</button>
+            <button className="btn sm" disabled={busy} onClick={() => setAdding(false)}>cancel</button>
+          </div>
+        </>
+      ) : (
+        <div className="perm-actions">
+          <button className="btn sm" disabled={busy || !dek} onClick={() => setAdding(true)} title={dek ? "" : "Unlock the vault in this tab first"}>+ add passkey</button>
+        </div>
+      )}
+
+      <div className="section-title">danger zone</div>
+      <p>Delete the vault to start over with new factors. Its secrets are gone; the app reopens without sign-in until a new vault exists. Lost every factor instead? Run <code className="mono">npm run vault:reset</code> on the server.</p>
+      <div className="perm-actions">
+        <input type="text" className="mono" placeholder="type DELETE" value={confirmDelete} onChange={(e) => setConfirmDelete(e.target.value)} style={{ width: 160 }} />
+        <button className="btn danger-outline sm" disabled={busy || confirmDelete !== "DELETE" || !dek} onClick={destroy}>delete vault</button>
       </div>
       {error && <div className="form-status error">{error}</div>}
     </Dialog>

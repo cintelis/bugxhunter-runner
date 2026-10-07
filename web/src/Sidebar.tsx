@@ -56,7 +56,11 @@ export function Sidebar({
 
   const [authOn, setAuthOn] = useState(false);
   useEffect(() => {
-    fetch("/api/auth/me").then((r) => r.json()).then((me) => setAuthOn(Boolean(me.required))).catch(() => {});
+    // Sign-in switches on once a vault with a passkey exists, so re-check now and then.
+    const check = () => fetch("/api/auth/me").then((r) => r.json()).then((me) => setAuthOn(Boolean(me.required))).catch(() => {});
+    check();
+    const t = setInterval(check, 30_000);
+    return () => clearInterval(t);
   }, []);
 
   // --- Knowledge base (RAG) state ---

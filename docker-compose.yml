@@ -1,6 +1,6 @@
-# BugXHunter in Docker: UI + login in `runner`, the agent in `agent`.
+# BugXHunter in Docker: UI + passkey sign-in in `runner`, the agent in `agent`.
 #
-#   powershell -File docker/setup.ps1   # once: writes .env (password, tokens, SCX key)
+#   powershell -File docker/setup.ps1   # once: writes .env (secrets)
 #   docker compose up -d --build
 #   open http://localhost:8790
 #
@@ -34,8 +34,6 @@ services:
       SCX_API: ${SCX_API:-}
       OPEN_RUNNER_VAULT_FILE: /data/vault.json
       OPEN_RUNNER_VAULT_IDLE_MINUTES: ${OPEN_RUNNER_VAULT_IDLE_MINUTES:-120}
-      OPEN_RUNNER_PASSWORD: ${OPEN_RUNNER_PASSWORD:-}
-      OPEN_RUNNER_PASSWORD_HASH: ${OPEN_RUNNER_PASSWORD_HASH:-}
       OPEN_RUNNER_SECRET: ${OPEN_RUNNER_SECRET:-}
       SCX_PROXY_TOKEN: ${SCX_PROXY_TOKEN:?run docker/setup.ps1 first}
       OPENCODE_URL: http://agent:4096

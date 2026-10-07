@@ -18,7 +18,7 @@ import {
   DEFAULT_DIRECTORY, DEFAULT_MODEL, REMOTE_URL, REPO_ROOT, ALLOWED_ROOTS,
 } from "./opencode.js";
 import type { PendingRequests, SessionSummary, SlashCommand, StoredMessage, Todo } from "../../shared/agent.js";
-import { mountAuth, authRequired } from "./auth.js";
+import { mountAuth, authRequired, issueSession } from "./auth.js";
 import { audit, followOpencode, LOG_DIR } from "./audit.js";
 import { saveAttachments, type Attachment } from "./attachments.js";
 import * as vault from "./vault.js";
@@ -44,7 +44,7 @@ const PORT = Number(process.env.PORT ?? 8790);
 // environment. The OpenCode server is spawned with a copy of our environment,
 // and the agent's shell inherits that: anything left here is one
 // `echo $SCX_API` away from a prompt-injected agent.
-for (const k of ["SCX_API", "SCX_API_KEY", "SCX_PROXY_TOKEN", "OPEN_RUNNER_PASSWORD", "OPEN_RUNNER_PASSWORD_HASH", "OPEN_RUNNER_SECRET"]) {
+for (const k of ["SCX_API", "SCX_API_KEY", "SCX_PROXY_TOKEN", "OPEN_RUNNER_SECRET"]) {
   delete process.env[k];
 }
 
@@ -145,7 +145,7 @@ app.use("/api", (req, res, next) => {
 // Prompts can carry attachments (base64), so allow larger bodies there.
 app.use("/api/agent/prompt", express.json({ limit: "40mb" }));
 app.use(express.json({ limit: "4mb" }));
-mountAuth(app);
+mountAuth(app, ALLOWED_HOSTS);
 // Any authenticated write counts as activity for the vault's auto-lock (reads
 // don't, so the sidebar's status polling can't keep it open).
 app.use("/api", (req, _res, next) => {
@@ -155,6 +155,11 @@ app.use("/api", (req, _res, next) => {
 
 const sendError = (res: express.Response, e: unknown) => {
   if (e instanceof SCXError) {
+    // The provider rejecting our key is a configuration problem here, not the
+    // browser's session: report it as an upstream failure with a pointer.
+    if (e.status === 401 || e.status === 403) {
+      return res.status(502).json({ error: { message: `SCX rejected the API key (${e.status}: ${e.message}). Check the SCX_API key in the vault.`, type: e.type } });
+    }
     return res.status(e.status).json({ error: { message: e.message, type: e.type } });
   }
   const status = (e as { status?: number })?.status;
@@ -176,6 +181,8 @@ app.post("/api/vault/init", (req, res) => {
     const { doc, dek } = req.body ?? {};
     if (!doc || typeof dek !== "string") return res.status(400).json({ error: { message: "doc and dek required" } });
     vault.initialise(doc, dek);
+    // Creating the vault turns sign-in on; the browser that created it is signed in.
+    issueSession(req, res);
     res.json(vault.status(keySource()));
   } catch (e) {
     sendError(res, e);
@@ -210,6 +217,42 @@ app.put("/api/vault/items/:name", (req, res) => {
 app.delete("/api/vault/items/:name", (req, res) => {
   try {
     vault.deleteItem(req.params.name);
+    res.json(vault.status(keySource()));
+  } catch (e) {
+    sendError(res, e);
+  }
+});
+
+/** Enrol another passkey. The browser must prove it holds the current key (it wrapped it for the new method). */
+app.post("/api/vault/methods", (req, res) => {
+  try {
+    const { method, dek } = req.body ?? {};
+    if (!method || typeof dek !== "string") return res.status(400).json({ error: { message: "method and dek required" } });
+    vault.addMethod(method, dek);
+    res.json(vault.status(keySource()));
+  } catch (e) {
+    sendError(res, e);
+  }
+});
+
+app.delete("/api/vault/methods/:id", (req, res) => {
+  try {
+    vault.removeMethod(req.params.id);
+    res.json(vault.status(keySource()));
+  } catch (e) {
+    sendError(res, e);
+  }
+});
+
+/**
+ * Delete the vault, to recreate it with new factors. Needs the current key as
+ * proof, so it is a rotation tool for the owner, not a way around the lock.
+ * Lost every factor? Reset from the server instead: `npm run vault:reset`.
+ */
+app.delete("/api/vault", (req, res) => {
+  try {
+    if (typeof req.body?.dek !== "string") return res.status(400).json({ error: { message: "dek required" } });
+    vault.destroy(req.body.dek);
     res.json(vault.status(keySource()));
   } catch (e) {
     sendError(res, e);
@@ -703,7 +746,7 @@ const server = app.listen(PORT, process.env.HOST ?? "127.0.0.1", () => {
   if (src === "vault" && (ENV_KEY || AUTH_KEY)) console.log("  note: a vault exists, so the key in .env / auth.json is ignored; remove it");
   console.log(`  agent: ${REMOTE_URL ? `remote OpenCode at ${REMOTE_URL}` : "local OpenCode"}`);
   if (!REMOTE_URL) console.log(`  project roots: ${ALLOWED_ROOTS.length ? ALLOWED_ROOTS.join(", ") : "any folder (set OPEN_RUNNER_ALLOWED_ROOTS to restrict)"}`);
-  console.log(`  login: ${authRequired ? "password required" : "off (set OPEN_RUNNER_PASSWORD to enable)"}`);
+  console.log(`  sign-in: ${authRequired() ? "passkey (the vault's)" : "open — set up the vault in the sidebar to require a passkey"}`);
   if (TRUST_PROXY) console.log(`  trust proxy: ${TRUST_PROXY}`);
   console.log(`  audit log: ${LOG_DIR || "off (set OPEN_RUNNER_LOG_DIR)"}`);
   console.log(`  default project: ${DEFAULT_DIRECTORY}\n`);

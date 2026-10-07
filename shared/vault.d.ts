@@ -40,6 +40,15 @@ export interface PasskeyMethod {
   /** base64url credential id, passed back as allowCredentials. */
   credentialId: string;
   transports?: string[];
+  /**
+   * The credential's public key (SPKI DER, base64) and COSE algorithm, so the
+   * same passkey also signs people in: the server verifies WebAuthn assertions
+   * against it. Absent on vaults created before sign-in existed.
+   */
+  publicKey?: string;
+  alg?: number;
+  /** Last authenticator signature counter seen (0 when the authenticator doesn't count). */
+  signCount?: number;
   /** The PRF salt is fixed per method; changing it changes the derived secret. */
   prfSalt: string;
   passphrase: Pbkdf2Params;
@@ -71,13 +80,23 @@ export interface VaultDoc {
   items: Record<string, Sealed>;
 }
 
+/**
+ * The public half of an unlock method: everything the browser needs to derive
+ * a KEK and unwrap, nothing that helps without the factors. Served to the
+ * sign-in screen too (GET /api/auth/methods), since sign-in uses the same
+ * passkeys.
+ */
+export type PublicMethod =
+  | (Omit<PasskeyMethod, "publicKey" | "signCount"> & { canLogin: boolean })
+  | RecoveryMethod;
+
 /** GET /api/vault */
 export interface VaultStatus {
   /** No vault.json yet: setup wizard. */
   initialised: boolean;
   /** DEK in memory. */
   unsealed: boolean;
-  methods: { type: VaultMethod["type"]; id: string; label: string; credentialId?: string; transports?: string[]; prfSalt?: string; passphrase?: Pbkdf2Params; hkdfSalt?: string; wrapped?: Sealed; kdf?: Pbkdf2Params }[];
+  methods: PublicMethod[];
   /** Names of the sealed items (never values). */
   items: string[];
   /** Where the model key comes from right now. */
@@ -90,3 +109,28 @@ export interface VaultStatus {
 
 /** The item names the app understands. Others are allowed (custom secrets). */
 export type KnownItem = "SCX_API";
+
+// --- sign-in -------------------------------------------------------------------
+
+/** GET /api/auth/me */
+export interface AuthMe {
+  /** A passkey that can sign in exists, so the API is gated. */
+  required: boolean;
+  authenticated: boolean;
+}
+
+/** POST /api/auth/challenge */
+export interface AuthChallenge {
+  /** base64url, single use, short-lived. */
+  challenge: string;
+  rpId: string;
+  allowCredentials: { id: string; transports?: string[] }[];
+}
+
+/** POST /api/auth/passkey: the assertion, fields base64url as the browser gives them. */
+export interface PasskeyAssertion {
+  credentialId: string;
+  clientDataJSON: string;
+  authenticatorData: string;
+  signature: string;
+}

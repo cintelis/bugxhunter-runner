@@ -1,19 +1,20 @@
 /**
- * Passkeys as a key source, via the WebAuthn PRF extension.
+ * Passkeys, for two jobs:
  *
- * WebAuthn is an authentication protocol: it signs challenges, and the
- * signatures are non-deterministic, so nothing stable can be derived from one.
- * The PRF extension (CTAP2 hmac-secret) returns a stable 32 bytes for a given
- * (credential, salt), computed inside the authenticator — the seed never
- * leaves the device. That is the vault's first factor; the passphrase is the
- * second. Support: Chromium, Android, Safari 18+, Windows Hello (recent);
- * Firefox lacks it, which is why enrolment probes and recovery codes exist.
+ *  1. Key derivation, via the WebAuthn PRF extension (CTAP2 hmac-secret): a
+ *     stable 32 bytes for (credential, salt), computed inside the authenticator.
+ *     That is the vault's first factor; the passphrase is the second. WebAuthn
+ *     signatures alone can't do this — they are non-deterministic.
+ *  2. Sign-in: an ordinary WebAuthn assertion, which the server verifies against
+ *     the public key captured at enrolment (response.getPublicKey()).
  *
- * The server does not verify these credentials: the passkey's job here is key
- * derivation, and the proof that it is the right one is that the derived KEK
- * opens the wrapped DEK (an AES-GCM tag check).
+ * One `navigator.credentials.get()` does both: the assertion signs in and its
+ * PRF output unlocks. Support: Chromium, Android, Safari 18+, Windows Hello
+ * (recent). Firefox lacks PRF, which is why enrolment probes and recovery
+ * codes exist.
  */
-import { b64url, randomBytes } from "./crypto";
+import type { AuthChallenge, PasskeyAssertion } from "../../../shared/vault";
+import { b64, b64url, randomBytes } from "./crypto";
 
 export class PrfUnsupportedError extends Error {
   constructor(message: string) { super(message); this.name = "PrfUnsupportedError"; }
@@ -50,14 +51,19 @@ function translate(e: unknown): Error {
   return err instanceof Error ? err : new Error(String(e));
 }
 
+const prfExtension = (prfSalt: string) => ({ prf: { eval: { first: enc.encode(prfSalt) } } }) as AuthenticationExtensionsClientInputs;
+
 export interface EnrolledPasskey {
   credentialId: string;
   transports?: string[];
   /** 32-byte PRF output for PRF_SALT. */
   prf: Uint8Array;
+  /** SPKI DER, base64, and the COSE algorithm: what the server verifies sign-ins with. */
+  publicKey: string;
+  alg: number;
 }
 
-/** Create a passkey and evaluate its PRF. Fails cleanly if the authenticator lacks PRF. */
+/** Create a passkey, capture its public key, and evaluate its PRF. Fails cleanly if PRF is missing. */
 export async function createPasskeyWithPrf(label: string, prfSalt: string): Promise<EnrolledPasskey> {
   if (!passkeysAvailable()) throw new PrfUnsupportedError("This browser has no passkey support.");
   let cred: PublicKeyCredential | null;
@@ -67,10 +73,10 @@ export async function createPasskeyWithPrf(label: string, prfSalt: string): Prom
         rp: { id: rpId(), name: "BugXHunter" },
         user: { id: randomBytes(16), name: label, displayName: "BugXHunter vault" },
         challenge: randomBytes(32),
-        pubKeyCredParams: [{ type: "public-key", alg: -8 }, { type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
+        pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -8 }, { type: "public-key", alg: -257 }],
         authenticatorSelection: { residentKey: "preferred", userVerification: "required" },
         timeout: 120_000,
-        extensions: { prf: { eval: { first: enc.encode(prfSalt) } } } as AuthenticationExtensionsClientInputs,
+        extensions: prfExtension(prfSalt),
       },
     })) as PublicKeyCredential | null;
   } catch (e) {
@@ -81,34 +87,54 @@ export async function createPasskeyWithPrf(label: string, prfSalt: string): Prom
   if (!ext.prf?.enabled) {
     throw new PrfUnsupportedError("This passkey can't derive keys (no PRF support). Use a platform passkey (Windows Hello, Touch ID, Android) or a recent security key, in Chrome, Edge or Safari 18+.");
   }
-  const transports = (cred.response as AuthenticatorAttestationResponse).getTransports?.() ?? undefined;
+  const att = cred.response as AuthenticatorAttestationResponse;
+  const spki = att.getPublicKey?.();
+  if (!spki) throw new PrfUnsupportedError("This browser doesn't expose the passkey's public key (needed for sign-in). Use Chrome, Edge or Safari.");
+  const transports = att.getTransports?.() ?? undefined;
   const credentialId = b64url.enc(new Uint8Array(cred.rawId));
   // Some authenticators evaluate PRF at creation; others only on assertion.
-  const prf = ext.prf.results?.first ? new Uint8Array(ext.prf.results.first) : await evaluatePrf(credentialId, transports, prfSalt);
-  return { credentialId, transports, prf };
+  const prf = ext.prf.results?.first ? new Uint8Array(ext.prf.results.first) : (await assertPasskey({ challenge: b64url.enc(randomBytes(32)), rpId: rpId(), allowCredentials: [{ id: credentialId, transports }] }, prfSalt)).prf!;
+  return { credentialId, transports, prf, publicKey: b64.enc(spki), alg: att.getPublicKeyAlgorithm() };
 }
 
-/** Ask the authenticator for this credential's PRF output (one touch). */
-export async function evaluatePrf(credentialId: string, transports: string[] | undefined, prfSalt: string): Promise<Uint8Array> {
+/**
+ * One touch: sign the server's challenge (for sign-in) and evaluate the PRF
+ * (for unlocking). `prf` is undefined when the authenticator didn't return one.
+ */
+export async function assertPasskey(c: AuthChallenge, prfSalt: string): Promise<{ assertion: PasskeyAssertion; prf?: Uint8Array }> {
   if (!passkeysAvailable()) throw new PrfUnsupportedError("This browser has no passkey support.");
   let cred: PublicKeyCredential | null;
   try {
     cred = (await navigator.credentials.get({
       publicKey: {
-        rpId: rpId(),
-        challenge: randomBytes(32),
-        allowCredentials: [{ type: "public-key", id: b64url.dec(credentialId), transports: transports as AuthenticatorTransport[] | undefined }],
+        rpId: c.rpId,
+        challenge: b64url.dec(c.challenge),
+        allowCredentials: c.allowCredentials.map((a) => ({ type: "public-key" as const, id: b64url.dec(a.id), transports: a.transports as AuthenticatorTransport[] | undefined })),
         userVerification: "required",
         timeout: 120_000,
-        extensions: { prf: { eval: { first: enc.encode(prfSalt) } } } as AuthenticationExtensionsClientInputs,
+        extensions: prfExtension(prfSalt),
       },
     })) as PublicKeyCredential | null;
   } catch (e) {
     throw translate(e);
   }
   if (!cred) throw new PasskeyCancelledError();
+  const r = cred.response as AuthenticatorAssertionResponse;
   const ext = cred.getClientExtensionResults() as { prf?: { results?: { first?: ArrayBuffer } } };
-  const first = ext.prf?.results?.first;
-  if (!first) throw new PrfUnsupportedError("The authenticator returned no PRF output. Use a passkey that supports PRF, or your recovery code.");
-  return new Uint8Array(first);
+  return {
+    assertion: {
+      credentialId: b64url.enc(new Uint8Array(cred.rawId)),
+      clientDataJSON: b64url.enc(new Uint8Array(r.clientDataJSON)),
+      authenticatorData: b64url.enc(new Uint8Array(r.authenticatorData)),
+      signature: b64url.enc(new Uint8Array(r.signature)),
+    },
+    prf: ext.prf?.results?.first ? new Uint8Array(ext.prf.results.first) : undefined,
+  };
+}
+
+/** Ask the authenticator for this credential's PRF output only (an unlock while already signed in). */
+export async function evaluatePrf(credentialId: string, transports: string[] | undefined, prfSalt: string): Promise<Uint8Array> {
+  const { prf } = await assertPasskey({ challenge: b64url.enc(randomBytes(32)), rpId: rpId(), allowCredentials: [{ id: credentialId, transports }] }, prfSalt);
+  if (!prf) throw new PrfUnsupportedError("The authenticator returned no PRF output. Use a passkey that supports PRF, or your recovery code.");
+  return prf;
 }

@@ -51,11 +51,9 @@ npm run dev          # backend :8790 + web :5190
 Open **http://localhost:5190**.
 
 The backend starts its own OpenCode server on `127.0.0.1:8791` (it stops a stale one left on
-that port by a previous run). Everything listens on localhost only — there is no login, so
-don't expose these ports.
-
-Set `OPEN_RUNNER_PASSWORD` (or let `docker/setup.ps1` write it to `.env`) to require a login
-locally too.
+that port by a previous run). Everything listens on localhost only. There are no passwords:
+until you set up the [vault](#key-vault) the app is open, and from then on you sign in with the
+vault's passkey.
 
 ## Docker (sandboxed agent + login)
 
@@ -65,8 +63,8 @@ docker compose up -d --build          # build locally, or `docker compose pull &
                                       # for the published images (set BXH_VERSION in .env to pin a signed release)
 ```
 
-Open **http://localhost:8790**, sign in with `OPEN_RUNNER_PASSWORD` from `.env`, then set up the
-[vault](#key-vault) in the sidebar and put your SCX key in it. (`setup.ps1 -CopyScxKey` copies
+Open **http://localhost:8790** and set up the [vault](#key-vault) in the sidebar: it seals your
+SCX key and turns on passkey sign-in. (`setup.ps1 -CopyScxKey` copies
 the key into `.env` instead, in the clear.)
 
 Two containers:
@@ -123,6 +121,14 @@ which keeps it out of reach of a quantum attacker; see [SECURITY.md](SECURITY.md
 While the vault is locked, model calls fail with a clear "vault is sealed" message. Without a vault
 the app falls back to `SCX_API` in `.env` or OpenCode's `auth.json`, in the clear.
 
+**Sign-in is the same passkey.** Once a vault exists the API needs a session, and the only way in
+is a WebAuthn assertion with one of the vault's passkeys (verified server-side), or the recovery
+code. One touch at the sign-in screen also unlocks the vault when you type the passphrase. Keep
+two passkeys on different devices (keys dialog → add passkey). Lost every factor? Someone with
+access to the server's files runs `npm run vault:reset` (Docker: `docker compose exec runner rm
+/data/vault.json`): the vault and its secrets are gone and the app reopens for a fresh setup.
+Nothing on the network can do that, which is what keeps the lock meaningful.
+
 ## Security-testing tools (authorised use only)
 
 The agent image ships a standard pentest toolchain for **authorised** testing (your own sites,
@@ -161,11 +167,9 @@ you run this in — Docker's bridge NAT doesn't restrict outbound on its own.
 | `SCX_API` | the vault, else `opencode auth login` | SCX key in the clear; ignored once a vault exists (preferred) |
 | `OPEN_RUNNER_VAULT_FILE` | `~/.config/bugxhunter/vault.json` | The sealed vault (Docker: `/data/vault.json` on the `runner-data` volume) |
 | `OPEN_RUNNER_VAULT_IDLE_MINUTES` | `120` | Auto-lock after this long without a model call or API write; `0` = never |
-| `OPEN_RUNNER_PASSWORD` | unset (no login) | Enables the login screen |
-| `OPEN_RUNNER_PASSWORD_HASH` | unset | Same, but only the scrypt hash is stored: `node scripts/hash-password.mjs` |
-| `OPEN_RUNNER_SECRET` | random per start | Signs session cookies; set it to keep sessions across restarts |
+| `OPEN_RUNNER_SECRET` | random per start | Signs session cookies; set it to keep sign-ins across restarts |
 | `COOKIE_SECURE` | unset | `1` marks the session cookie `Secure` (behind TLS) |
-| `TRUST_PROXY` | unset | Behind a reverse proxy: `1` (hop count), `loopback`, or a CIDR list — so the login rate limit sees real client IPs |
+| `TRUST_PROXY` | unset | Behind a reverse proxy: `1` (hop count), `loopback`, or a CIDR list — so the cookie's `Secure` flag and client IPs are right |
 | `OPEN_RUNNER_LOG_DIR` | unset (off) | Folder for the JSONL audit log (Docker sets `/logs`) |
 | `ALLOWED_HOSTS` | localhost only | Extra `Host` header values to accept (comma list), e.g. the domain a reverse proxy serves. Everything else gets 403, which blocks DNS-rebinding attacks |
 | `OPEN_RUNNER_ALLOWED_ROOTS` | any folder | Local mode: folders the UI may open, PATH-style list (`;` on Windows, `:` elsewhere). Set it before sharing the app |

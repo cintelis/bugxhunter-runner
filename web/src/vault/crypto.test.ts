@@ -28,7 +28,7 @@ describe("buildVault / unwrap", () => {
   it("wraps the same DEK for the passkey+passphrase method and the recovery code", async () => {
     const prf = new Uint8Array(32).fill(42);
     const { doc, dek, recoveryCode } = await buildVault({
-      passphrase: "correct horse battery", prf, credentialId: "AQID", transports: ["internal"], label: "test", items: { SCX_API: "sk-x" },
+      passphrase: "correct horse battery", prf, credentialId: "AQID", transports: ["internal"], publicKey: "AAAA", alg: -7, label: "test", items: { SCX_API: "sk-x" },
     });
     expect(doc.methods.map((m) => m.type)).toEqual(["passkey", "recovery"]);
     expect(Object.keys(doc.items)).toEqual(["SCX_API"]);
@@ -42,7 +42,7 @@ describe("buildVault / unwrap", () => {
 
   it("fails with a wrong passphrase, wrong PRF output or wrong code", async () => {
     const prf = new Uint8Array(32).fill(1);
-    const { doc } = await buildVault({ passphrase: "right", prf, credentialId: "AQID", label: "t", items: {} });
+    const { doc } = await buildVault({ passphrase: "right", prf, credentialId: "AQID", publicKey: "AAAA", alg: -7, label: "t", items: {} });
     const pk = doc.methods[0] as PasskeyMethod;
     const rc = doc.methods[1] as RecoveryMethod;
     await expect(unwrapWithPasskey(pk, prf, "wrong")).rejects.toThrow();

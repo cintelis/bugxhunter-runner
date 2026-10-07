@@ -98,14 +98,32 @@ export function looksLikeRecoveryCode(s: string) {
 
 // --- building and unlocking ---------------------------------------------------
 
-export interface BuildInput {
-  passphrase: string;
-  prf: Uint8Array;
+/** What enrolment produced: the credential, its PRF output, and its public key for sign-in. */
+export interface Enrolled {
   credentialId: string;
   transports?: string[];
+  prf: Uint8Array;
+  publicKey: string;
+  alg: number;
+}
+
+export interface BuildInput extends Enrolled {
+  passphrase: string;
   label: string;
   /** Initial sealed items, e.g. { SCX_API: "sk-..." }. */
   items: Record<string, string>;
+}
+
+/** Wrap a DEK for a passkey + passphrase (used at setup and when adding a passkey later). */
+export async function wrapForPasskey(dekRaw: Uint8Array, e: Enrolled, passphrase: string, label: string): Promise<PasskeyMethod> {
+  const method: PasskeyMethod = {
+    type: "passkey", id: `pk-${b64url.enc(randomBytes(6))}`, label,
+    credentialId: e.credentialId, transports: e.transports, publicKey: e.publicKey, alg: e.alg, signCount: 0, prfSalt: PRF_SALT,
+    passphrase: { name: "PBKDF2", hash: "SHA-256", iterations: PBKDF2_ITERATIONS, salt: b64.enc(randomBytes(16)) },
+    hkdfSalt: b64.enc(randomBytes(16)), wrapped: { iv: "", ct: "" }, createdAt: new Date().toISOString(),
+  };
+  method.wrapped = await sealWith(await passkeyKek(e.prf, passphrase, method), dekRaw, method.id);
+  return method;
 }
 
 /** Generate the DEK, wrap it for a passkey+passphrase method and a recovery code, seal the items. */
@@ -114,13 +132,7 @@ export async function buildVault(input: BuildInput): Promise<{ doc: VaultDoc; de
   const dek = await subtle.importKey("raw", buf(dekRaw), "AES-GCM", false, ["encrypt"]);
   const now = new Date().toISOString();
 
-  const passkey: PasskeyMethod = {
-    type: "passkey", id: `pk-${b64url.enc(randomBytes(6))}`, label: input.label,
-    credentialId: input.credentialId, transports: input.transports, prfSalt: PRF_SALT,
-    passphrase: { name: "PBKDF2", hash: "SHA-256", iterations: PBKDF2_ITERATIONS, salt: b64.enc(randomBytes(16)) },
-    hkdfSalt: b64.enc(randomBytes(16)), wrapped: { iv: "", ct: "" }, createdAt: now,
-  };
-  passkey.wrapped = await sealWith(await passkeyKek(input.prf, input.passphrase, passkey), dekRaw, passkey.id);
+  const passkey = await wrapForPasskey(dekRaw, input, input.passphrase, input.label);
 
   const recoveryCode = generateRecoveryCode();
   const recovery: RecoveryMethod = {

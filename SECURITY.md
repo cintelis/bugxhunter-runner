@@ -48,6 +48,17 @@ API keys and other secrets the app holds are sealed at rest in `vault.json`
 - **The agent never sees the key.** In Docker it talks to a key-injecting proxy.
   In local mode the backend removes every secret from its environment before
   OpenCode is spawned, since the agent's shell inherits that environment.
+- **Sign-in is the passkey.** No passwords exist. With a vault present, every API
+  call needs a session issued for a WebAuthn assertion the server verified:
+  single-use challenge, allowed origin, relying-party hash, user-presence and
+  user-verification flags, signature against the public key captured at
+  enrolment, and a monotonic counter where the authenticator keeps one. The
+  recovery code signs in by proving possession of the vault key. Without a
+  vault the app is open, on localhost only, behind the Host-header guard.
+- **Break-glass is on the server only.** Losing the passkey and the recovery
+  code means the secrets are gone; `npm run vault:reset` deletes the vault from
+  the server's files and reopens the app for a new setup. No network request
+  can do that.
 - **Not covered.** A compromise of the running backend while unlocked exposes
   what it holds in memory; that is inherent to a server that uses the key. Model
   inputs and tool output go to the model provider in plaintext; the vault seals

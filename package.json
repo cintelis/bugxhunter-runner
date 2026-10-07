@@ -16,7 +16,8 @@
     "typecheck": "tsc --noEmit -p server && tsc --noEmit -p web",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
-    "check": "npm run typecheck && npm run lint && npm test"
+    "check": "npm run typecheck && npm run lint && npm test",
+    "vault:reset": "node scripts/vault-reset.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

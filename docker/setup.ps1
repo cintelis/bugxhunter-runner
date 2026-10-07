@@ -1,6 +1,6 @@
-# Creates .env for docker compose: a login password, a cookie secret, the
-# agent proxy token, and the SCX key (taken from `opencode auth login`).
+# Creates .env for docker compose: a cookie secret and the agent proxy token.
 # Existing values are kept, so re-running is safe. Secrets are not printed.
+# There is no password: sign-in uses the vault's passkey once you set it up in the UI.
 param([switch]$CopyScxKey)
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
@@ -27,8 +27,6 @@ if ($CopyScxKey -and -not $vals["SCX_API"]) {
   if (Test-Path $auth) { $vals["SCX_API"] = (Get-Content $auth -Raw | ConvertFrom-Json).scx.key }
   if (-not $vals["SCX_API"]) { throw "No SCX key found. Run 'opencode auth login' (provider id: scx) or add SCX_API=... to .env." }
 }
-$newPassword = -not $vals["OPEN_RUNNER_PASSWORD"]
-if ($newPassword) { $vals["OPEN_RUNNER_PASSWORD"] = New-Secret 12 }
 if (-not $vals["OPEN_RUNNER_SECRET"]) { $vals["OPEN_RUNNER_SECRET"] = New-Secret 32 }
 if (-not $vals["SCX_PROXY_TOKEN"]) { $vals["SCX_PROXY_TOKEN"] = New-Secret 32 }
 # A release's deploy bundle ships a VERSION file: pin `docker compose pull` to its images.
@@ -39,6 +37,5 @@ $out = ($vals.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -joi
 [IO.File]::WriteAllText($envFile, $out + "`n", (New-Object Text.UTF8Encoding $false))
 
 Write-Host "Wrote $envFile"
-if ($newPassword) { Write-Host "A login password was generated: see OPEN_RUNNER_PASSWORD in .env (change it if you like)." }
 Write-Host "Next: docker compose up -d --build   then open http://localhost:8790"
-if (-not $vals["SCX_API"]) { Write-Host "Then set up the vault in the sidebar (passphrase + passkey) and put your SCX key in it." }
+Write-Host "Then set up the vault in the sidebar (passphrase + passkey): it seals your SCX key and turns on passkey sign-in."
