@@ -154,12 +154,19 @@ export function normaliseOpenRouter(m: OpenRouterModel): SCXModel {
   };
 }
 
+/** OpenRouter's catalogue is public: no key needed, so limits are known even while the vault is sealed. */
+async function openRouterCatalogue(): Promise<OpenRouterModel[]> {
+  const r = await fetch(`${PROVIDERS.openrouter.baseUrl}/models`, { headers: PROVIDERS.openrouter.headers, signal: AbortSignal.timeout(10_000) });
+  if (!r.ok) throw new Error(`OpenRouter /models replied ${r.status}`);
+  return ((await r.json()) as { data: OpenRouterModel[] }).data ?? [];
+}
+
 /** Every model the Playground can use: SCX's, plus OpenRouter's when a key is configured. */
 export async function listModels(): Promise<SCXModel[]> {
   const scx = (await clients.scx.listModels()).map((m) => ({ ...m, provider: "scx" as const }));
   if (!configured("openrouter")) return scx;
   try {
-    const all = (await clients.openrouter.listModels() as unknown as OpenRouterModel[]).map(normaliseOpenRouter);
+    const all = (await openRouterCatalogue()).map(normaliseOpenRouter);
     const allow = new Set(OPENROUTER_MODELS.map((id) => `openrouter/${id}`));
     const picked = allow.size ? all.filter((m) => allow.has(m.id)) : all;
     return [...scx, ...picked.sort((a, b) => a.name.localeCompare(b.name))];
@@ -172,20 +179,19 @@ export async function listModels(): Promise<SCXModel[]> {
 /**
  * An OpenCode provider for the agent, calling back through the runner's
  * proxy with the proxy token, for the models in OPENROUTER_MODELS. Context
- * and output limits come from OpenRouter when the key allows; else defaults.
+ * and output limits come from OpenRouter's public catalogue; defaults if it
+ * is unreachable.
  */
 export async function openrouterOpencodeProvider(proxyBaseUrl: string): Promise<Record<string, unknown> | null> {
   if (!OPENROUTER_MODELS.length) return null;
   const limits = new Map<string, { context?: number | null; output?: number | null; images?: boolean }>();
-  if (configured("openrouter")) {
-    try {
-      const all = await clients.openrouter.listModels() as unknown as OpenRouterModel[];
-      for (const m of all) {
-        limits.set(m.id, { context: m.context_length, output: m.top_provider?.max_completion_tokens, images: m.architecture?.input_modalities?.includes("image") });
-      }
-    } catch (e) {
-      console.error("[openrouter] could not fetch model limits, using defaults:", (e as Error).message);
+  try {
+    for (const m of await openRouterCatalogue()) {
+      limits.set(m.id, { context: m.context_length, output: m.top_provider?.max_completion_tokens, images: m.architecture?.input_modalities?.includes("image") });
     }
+    for (const id of OPENROUTER_MODELS) if (!limits.has(id)) console.error(`[openrouter] OPENROUTER_MODELS: "${id}" is not in OpenRouter's catalogue (check the id)`);
+  } catch (e) {
+    console.error("[openrouter] could not fetch model limits, using defaults:", (e as Error).message);
   }
   const models: Record<string, unknown> = {};
   for (const id of OPENROUTER_MODELS) {
