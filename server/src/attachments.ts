@@ -31,7 +31,10 @@ const isText = (name: string, mime: string) =>
 
 /** A file name that is safe to create inside the project: basename only, no odd characters. */
 export function safeName(name: string) {
-  const base = path.basename(name).replace(/[^\w.\- ()]+/g, "_").replace(/^\.+/, "").slice(0, 120);
+  // Last segment after either separator style: the browser may be on Windows
+  // while this server runs on Linux, where path.basename ignores backslashes.
+  const last = name.split(/[\\/]/).pop() ?? "";
+  const base = last.replace(/[^\w.\- ()]+/g, "_").replace(/^\.+/, "").slice(0, 120);
   return base || "file";
 }
 
