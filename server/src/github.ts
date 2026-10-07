@@ -40,7 +40,7 @@ const execFileP = promisify(execFile);
 export const CONNECTION_ITEM = "GITHUB_OAUTH";
 /** The public BugXHunter GitHub App. Forks register their own and override these. */
 export const CLIENT_ID = process.env.GITHUB_CLIENT_ID ?? "Iv23lijniIcrEZ0ZFNWD";
-export const APP_SLUG = process.env.GITHUB_APP_SLUG ?? "bugxhunter";
+export const APP_SLUG = process.env.GITHUB_APP_SLUG ?? "bugxhunterapp";
 const API_BASE = process.env.GITHUB_API_BASE ?? "https://api.github.com";
 const OAUTH_BASE = process.env.GITHUB_OAUTH_BASE ?? "https://github.com";
 /** Overridable so tests can clone from a local bare repository. */
