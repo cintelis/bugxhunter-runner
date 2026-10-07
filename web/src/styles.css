@@ -129,7 +129,7 @@ body.resizing iframe { pointer-events: none; }
 .dot.y { background: var(--amber); }
 .dot.g { background: var(--green); }
 .term-title {
-  font-family: var(--mono); font-size: 11px; color: var(--muted); margin-left: 8px;
+  font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-left: 8px;
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .term-bar .head-actions { display: flex; align-items: center; gap: 8px; flex: none; }
@@ -315,7 +315,7 @@ select {
 
 /* ---------- Header pills ---------- */
 .status-pill, .token-pill {
-  display: inline-flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 11px; color: var(--muted);
+  display: inline-flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 11.5px; color: var(--muted);
   padding: 3px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); letter-spacing: 0.3px;
 }
 .status-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted-2); }
@@ -331,22 +331,24 @@ select {
 .composer { flex: none; }
 /* No overflow clip here: the slash menu opens upward out of the composer.
    The inner pieces (textarea, to-do list, attachment row) cap their own height. */
+/* The transcript's non-scrolling frame, so the jump button can sit at its bottom edge whatever the composer's height. */
+.transcript-wrap { position: relative; flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
 .jump-btn {
-  position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(var(--composer-h, 150px) + 14px); z-index: 4;
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 12px; z-index: 4;
   background: var(--panel-2); border: 1px solid var(--border); color: var(--cyan); border-radius: var(--radius);
-  padding: 6px 14px; font-family: var(--mono); font-size: 11px; cursor: pointer; box-shadow: var(--shadow);
+  padding: 6px 14px; font-family: var(--mono); font-size: 11.5px; cursor: pointer; box-shadow: var(--shadow);
 }
 .jump-btn:hover { border-color: var(--cyan); }
 .notice {
-  white-space: pre-wrap; font-family: var(--mono); font-size: 12px; line-height: 1.6; color: var(--cyan);
+  white-space: pre-wrap; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; color: var(--cyan);
   background: rgba(0, 229, 255, 0.08); border: 1px solid var(--cyan); border-radius: var(--radius); padding: 10px 14px; margin-left: 40px;
 }
-.empty-state { margin: auto; color: var(--muted); max-width: 560px; width: 100%; padding: 30px 0; }
+.empty-state { margin: auto; color: var(--muted); max-width: 820px; width: 100%; padding: 30px 0; }
 .empty-state .suggestions { display: flex; flex-direction: column; gap: 8px; margin-top: 22px; }
 .empty-state .error-banner { margin-top: 20px; text-align: left; }
 .chip {
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px;
-  cursor: pointer; font-family: var(--mono); font-size: 12px; color: var(--muted); text-align: left; transition: var(--transition);
+  cursor: pointer; font-family: var(--mono); font-size: 12.5px; color: var(--muted); text-align: left; transition: var(--transition);
   display: flex; align-items: center; gap: 8px;
 }
 .chip::before { content: ">"; color: var(--cyan); opacity: 0; margin-right: -8px; transition: var(--transition); }
@@ -364,11 +366,11 @@ select {
 .bubble { line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
 .user-bubble {
   max-width: 78%; background: var(--panel-2); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 10px 14px; font-family: var(--mono); font-size: 13px;
+  border-radius: var(--radius); padding: 10px 14px; font-family: var(--mono); font-size: 14px;
 }
 .queued-bubble { opacity: 0.6; border-style: dashed; }
 .queued-label { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 4px; }
-.msg-meta { display: flex; flex-wrap: wrap; gap: 12px; font-size: 11px; color: var(--muted); font-family: var(--mono); }
+.msg-meta { display: flex; flex-wrap: wrap; gap: 12px; font-size: 10.5px; color: var(--muted); font-family: var(--mono); }
 .sources { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; }
 .sources-label { font-family: var(--mono); font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
 
@@ -413,10 +415,10 @@ select {
 }
 .tool-head:disabled { cursor: default; }
 .tool-head:hover:not(:disabled) { background: var(--panel-2); }
-.tool-icon { width: 16px; text-align: center; color: var(--green); font-family: var(--mono); font-size: 12px; flex: none; }
+.tool-icon { width: 16px; display: grid; place-items: center; color: var(--green); flex: none; }
 .tool-name { font-family: var(--mono); font-weight: 500; color: var(--cyan); flex: none; }
 .tool-summary { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11.5px; flex: 1; min-width: 0; }
-.tool-state { font-family: var(--mono); font-size: 11px; color: var(--red); flex: none; }
+.tool-state { font-family: var(--mono); font-size: 11.5px; color: var(--red); flex: none; }
 .tool-output { margin: 0; padding: 10px 12px; border-top: 1px solid var(--border); background: var(--bg); font-family: var(--mono); font-size: 11.5px; line-height: 1.5; max-height: 340px; overflow: auto; white-space: pre-wrap; color: var(--text); }
 .chev { display: inline-block; color: var(--muted); transition: transform 0.15s; font-size: 14px; line-height: 1; }
 .chev.open { transform: rotate(90deg); }
@@ -438,7 +440,7 @@ select {
   background: var(--panel-2); border: 1px solid var(--amber); border-radius: var(--radius); padding: 13px 15px; margin-left: 40px;
   box-shadow: 0 0 24px rgba(255, 179, 0, 0.08);
 }
-.perm-title { font-family: var(--mono); font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--amber); }
+.perm-title { font-family: var(--mono); font-weight: 700; font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; color: var(--amber); }
 .perm-title::before { content: "[!] "; }
 .perm-body { margin: 7px 0 12px; font-family: var(--mono); font-size: 12.5px; word-break: break-all; }
 .perm-type { color: var(--cyan); }
@@ -459,7 +461,7 @@ select {
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--mono); font-size: 11.5px;
 }
 .attach-chip img { width: 28px; height: 28px; object-fit: cover; border-radius: 4px; }
-.attach-icon { width: 28px; text-align: center; }
+.attach-icon { width: 28px; display: grid; place-items: center; color: var(--cyan); }
 .attach-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attach-size { color: var(--muted); font-size: 11px; flex: none; }
 .attach-x { background: none; border: none; color: var(--muted); cursor: pointer; padding: 0 2px; font-size: 11px; }
@@ -487,7 +489,7 @@ select {
 .todo-panel { max-width: 820px; margin: 0 auto 10px; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .todo-head {
   width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 12px;
-  background: none; border: none; cursor: pointer; text-align: left; font-family: var(--mono); font-size: 12px;
+  background: none; border: none; cursor: pointer; text-align: left; font-family: var(--mono); font-size: 12.5px;
 }
 .todo-title { font-weight: 700; text-transform: uppercase; letter-spacing: 1px; font-size: 10.5px; color: var(--muted); }
 .todo-count { color: var(--cyan); font-size: 11.5px; }

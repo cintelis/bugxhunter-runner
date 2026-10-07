@@ -10,6 +10,7 @@ import { Composer, LOCAL_COMMANDS, type AgentName } from "./Composer";
 import { formatBytes, formatTokens } from "./format";
 import { TodoPanel } from "./TodoPanel";
 import { BootSequence, TerminalBar, type BootLine } from "./Terminal";
+import { FileTextIcon, ToolIcon } from "./icons";
 import { DiffModal } from "./DiffModal";
 import { QuestionCard, type QuestionReq } from "./QuestionCard";
 
@@ -477,6 +478,7 @@ export function AgentPanel({
         <button className="btn ghost sm" onClick={newSession} disabled={busy}>new_session</button>
       </TerminalBar>
 
+      <div className="transcript-wrap">
       <div className="transcript grid-bg" ref={scrollRef} onScroll={onScroll}>
         <div className="transcript-inner">
           {loading && <p className="muted center mono">Loading session…</p>}
@@ -536,6 +538,7 @@ export function AgentPanel({
       {!atBottom && (
         <button className="jump-btn" onClick={() => scrollToBottom()} aria-label="Scroll to latest">↓ latest</button>
       )}
+      </div>
 
       <div className="composer">
         <TodoPanel todos={todos} />
@@ -575,7 +578,7 @@ function AgentRow({ msg }: { msg: AgentMessage }) {
             <div className="attach-row right">
               {files.map((f) => (
                 <span className="attach-chip" key={f.id} title={f.filename}>
-                  {f.url ? <img src={f.url} alt="" /> : <span className="attach-icon">📄</span>}
+                  {f.url ? <img src={f.url} alt="" /> : <span className="attach-icon"><FileTextIcon /></span>}
                   <span className="attach-name">{f.filename}</span>
                   {f.size ? <span className="attach-size">{formatBytes(f.size)}</span> : null}
                 </span>
@@ -623,10 +626,6 @@ function Reasoning({ text }: { text: string }) {
   );
 }
 
-const TOOL_ICON: Record<string, string> = {
-  read: "📄", write: "✎", edit: "✎", patch: "✎", apply_patch: "✎", bash: "$", grep: "⌕", glob: "⌕", list: "☰",
-  webfetch: "🌐", websearch: "🔎", todowrite: "☑", todoread: "☑", task: "↗", question: "?",
-};
 
 function ToolCard({ t }: { t: ToolPart }) {
   const [open, setOpen] = useState(false);
@@ -635,7 +634,7 @@ function ToolCard({ t }: { t: ToolPart }) {
   return (
     <div className={"tool s-" + t.status}>
       <button className="tool-head" onClick={() => hasBody && setOpen((v) => !v)} disabled={!hasBody}>
-        <span className="tool-icon">{TOOL_ICON[t.tool] ?? "⚙"}</span>
+        <span className="tool-icon"><ToolIcon tool={t.tool} /></span>
         <span className="tool-name">{t.tool}</span>
         <span className="tool-summary">{summary.slice(0, 120)}</span>
         <span className="tool-state">{t.status === "running" || t.status === "pending" ? <span className="spin" /> : t.status === "error" ? "failed" : ""}</span>

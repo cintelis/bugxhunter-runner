@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentModel, FileUpload, SlashCommand } from "./agentApi";
 import { formatBytes, formatTokens } from "./format";
+import { FileTextIcon, PaperclipIcon } from "./icons";
 
 export type AgentName = "build" | "plan";
 
@@ -251,7 +252,7 @@ export function Composer({ agent, setAgent, model, setModel, models, commands, b
           <div className="attach-row">
             {files.map((f, i) => (
               <span className="attach-chip" key={i} title={`${f.name} · ${formatBytes(f.size)}`}>
-                {f.preview ? <img src={f.preview} alt="" /> : <span className="attach-icon">📄</span>}
+                {f.preview ? <img src={f.preview} alt="" /> : <span className="attach-icon"><FileTextIcon /></span>}
                 <span className="attach-name">{f.name}</span>
                 <button className="attach-x" onClick={() => setFiles((cur) => cur.filter((_, j) => j !== i))} aria-label={`Remove ${f.name}`}>✕</button>
               </span>
@@ -269,9 +270,7 @@ export function Composer({ agent, setAgent, model, setModel, models, commands, b
         />
         <div className="composer-bar">
           <button className="icon-btn attach-btn" onClick={() => fileRef.current?.click()} title="Attach files (or paste / drop them)" aria-label="Attach files">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-            </svg>
+            <PaperclipIcon size={20} />
           </button>
           <input ref={fileRef} type="file" multiple hidden onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }} />
           <div className="agent-switch" role="tablist">
