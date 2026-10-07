@@ -47,7 +47,8 @@ const pkg = {
   description: "BugXHunter: an AI security-testing agent with a sandboxed runner, a passkey-sealed key vault and read-only GitHub access. `npx bugxhunter` runs it on your machine.",
   license: rootPkg.license,
   homepage: rootPkg.homepage,
-  repository: rootPkg.repository,
+  // npm's canonical form; anything else is "auto-corrected" with a warning at publish time.
+  repository: { type: "git", url: "git+https://github.com/cintelis/bugxhunter-runner.git" },
   bugs: { url: "https://github.com/cintelis/bugxhunter-runner/issues" },
   keywords: ["security", "pentest", "bug-bounty", "ai-agent", "opencode", "vulnerability-scanner", "code-review"],
   type: "module",
