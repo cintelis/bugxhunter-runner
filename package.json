@@ -3,7 +3,7 @@
   "version": "0.3.0",
   "private": true,
   "license": "MIT",
-  "description": "BugXHunter — security-testing agent runner: a web UI for the OpenCode agent on open-weight models via SCX",
+  "description": "BugXHunter \u2014 security-testing agent runner: a web UI for the OpenCode agent on open-weight models via SCX",
   "workspaces": [
     "server",
     "web"
@@ -17,12 +17,15 @@
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
     "check": "npm run typecheck && npm run lint && npm test",
-    "vault:reset": "node scripts/vault-reset.mjs"
+    "vault:reset": "node scripts/vault-reset.mjs",
+    "start": "node bin/bugxhunter.mjs",
+    "pack:npm": "node scripts/pack-npm.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
     "eslint": "^9.39.5",
     "eslint-plugin-react-hooks": "^5.2.0",
+    "opencode-ai": "^1.18.35",
     "typescript-eslint": "^8.71.1",
     "vitest": "^3.2.7"
   },

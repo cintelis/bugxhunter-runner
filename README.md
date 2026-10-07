@@ -33,23 +33,39 @@ Playground — compare SCX models directly with full generation controls:
 
 ![BugXHunter — Playground](docs/images/playground.jpg)
 
-## Requirements
+## Install
+
+The quickest way, with Node 22+ installed, is the npm package (OpenCode comes with it):
+
+```bash
+npx bugxhunter            # runs the agent on this machine; UI opens at http://localhost:8790
+npx bugxhunter docker     # the sandboxed stack instead (needs Docker Desktop): pulls the signed
+                          # images for this version into ~/.config/bugxhunter/docker and starts them
+```
+
+`npm i -g bugxhunter` makes it a plain `bugxhunter` command; `bugxhunter --help` lists the
+options (`--port`, `--dir`, `--no-open`; `docker down|logs|ps`; `vault reset`). The current
+folder becomes the default project. Then, in the sidebar: set up the [vault](#key-vault) with a
+passkey, add your SCX.ai key as `SCX_API`, and [connect GitHub](#github-repositories-read-only).
+The package is published by the release workflow with npm provenance: `npm audit signatures`
+confirms it was built from this repository.
+
+## Requirements (from source)
 
 - Node 22+
-- OpenCode installed and on `PATH`: `npm i -g opencode-ai`
-- The SCX provider set up in `~/.config/opencode/opencode.jsonc` and its key stored with
-  `opencode auth login` (choose **Other**, provider id `scx`). In local mode OpenCode uses that
-  key itself; BugXHunter's own calls take the key from the [vault](#key-vault) once you set one
-  up, else from the same `auth.json` or `SCX_API` in a `.env` here.
+- OpenCode on `PATH`: `npm install` here provides it, or `npm i -g opencode-ai`
+- An SCX.ai key: in the [vault](#key-vault) (preferred), else `opencode auth login` (choose
+  **Other**, provider id `scx`) or `SCX_API` in a `.env` here.
 
-## Run
+## Run from source
 
 ```bash
 npm install
-npm run dev          # backend :8790 + web :5190
+npm run dev          # backend :8790 + web :5190, with hot reload
+npm start            # or: the compiled app, the same way `npx bugxhunter` runs it (npm run build first)
 ```
 
-Open **http://localhost:5190**.
+Open **http://localhost:5190** (dev) or **http://localhost:8790** (`npm start`).
 
 The backend starts its own OpenCode server on `127.0.0.1:8791` (it stops a stale one left on
 that port by a previous run). Everything listens on localhost only. There are no passwords:
@@ -58,8 +74,10 @@ vault's passkey.
 
 ## Docker (sandboxed agent + login)
 
+`npx bugxhunter docker` does all of this (any OS). By hand, from a checkout:
+
 ```powershell
-powershell -File docker/setup.ps1     # once: writes .env — login password and secrets
+powershell -File docker/setup.ps1     # once: writes .env — the secrets the two containers share
 docker compose up -d --build          # build locally, or `docker compose pull && docker compose up -d`
                                       # for the published images (set BXH_VERSION in .env to pin a signed release)
 ```
@@ -294,6 +312,10 @@ It asks for the key's passphrase once. Only admins can push `v*` tags.
 
 After publishing, the script regenerates the release table above (`scripts/release-table.sh`)
 and opens a pull request for it that merges itself once CI passes.
+
+The tag also publishes the npm package (`npm run pack:npm` assembles it from the same build;
+the workflow's `npm` job publishes it with provenance). That needs the package's **trusted
+publisher** on npmjs.com set to this repository and `release.yml`, once; no npm token is stored.
 
 ## Layout
 

@@ -134,3 +134,31 @@ jobs:
           fi
           gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/images.txt dist/checksums.txt \
             --draft --title "BugXHunter $GITHUB_REF_NAME" --generate-notes
+
+  # The same build, as `npx bugxhunter`. Published with npm provenance (the
+  # package is attested to this workflow run; `npm audit signatures` checks it).
+  # Needs the package's "trusted publisher" on npmjs.com to be this repository
+  # and this workflow file; no token is stored anywhere.
+  npm:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance + trusted publishing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm install -g npm@latest # trusted publishing needs npm 11.5+
+      - run: npm ci
+      - run: npm run build
+      - run: npm run pack:npm
+      - name: Smoke-test the package
+        run: |
+          set -eu
+          cd dist/npm && npm pack --silent >/dev/null
+          node bin/bugxhunter.mjs --version | grep -qx "$(node -p "require('./package.json').version")"
+      - run: npm publish dist/npm --provenance --access public
