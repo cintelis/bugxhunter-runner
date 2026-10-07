@@ -16,6 +16,12 @@ import { forgetDek, heldDek, rememberDek } from "./vault/session";
 export const MIN_PASSPHRASE = 10;
 const vaultLabel = () => `BugXHunter vault (${location.hostname})`;
 
+/** Secrets the app itself looks for; anything else is a custom item (e.g. a target's token). */
+const KNOWN_ITEMS = [
+  { name: "SCX_API", label: "SCX.ai model key — the default provider" },
+  { name: "OPENROUTER_API_KEY", label: "OpenRouter key — unlocks its model catalogue (optional)" },
+];
+
 export function VaultPanel() {
   const [status, setStatus] = useState<VaultStatus | null>(null);
   const [dialog, setDialog] = useState<"setup" | "unlock" | "manage" | null>(null);
@@ -386,19 +392,30 @@ function ManageDialog({ status, onChange, onClose }: { status: VaultStatus; onCh
 
   return (
     <Dialog title="vault --keys" onClose={onClose}>
-      <p>Secrets sealed in the vault. Values are never shown again; replace one by saving it under the same name. <code className="mono">SCX_API</code> is the model key the app uses; <code className="mono">OPENROUTER_API_KEY</code> adds OpenRouter's models.</p>
-      {status.items.length ? (
-        <div className="vault-items">
-          {status.items.map((n) => (
-            <div className="vault-item" key={n}>
-              <span className="ok" aria-hidden>✓</span><span className="name">{n}</span>
-              <button className="btn danger" disabled={busy} onClick={() => removeItem(n)} title="Remove">✕</button>
+      <p>Secrets sealed in the vault. Values are never shown again; replace one by saving it under the same name.</p>
+      <div className="vault-items">
+        {KNOWN_ITEMS.map((k) => {
+          const present = status.items.includes(k.name);
+          return (
+            <div className="vault-item" key={k.name}>
+              <span className={present ? "ok" : "missing"} aria-hidden>{present ? "✓" : "○"}</span>
+              <span className="name">{k.name}<span className="desc"> — {k.label}</span></span>
+              {present
+                ? <button className="btn danger" disabled={busy} onClick={() => removeItem(k.name)} title="Remove">✕</button>
+                : <button className="btn sm" disabled={busy} onClick={() => { setName(k.name); document.getElementById("v-value")?.focus(); }}>add</button>}
             </div>
-          ))}
-        </div>
-      ) : <div className="form-status error">No keys yet — add SCX_API so the app can call models.</div>}
+          );
+        })}
+        {status.items.filter((n) => !KNOWN_ITEMS.some((k) => k.name === n)).map((n) => (
+          <div className="vault-item" key={n}>
+            <span className="ok" aria-hidden>✓</span><span className="name">{n}</span>
+            <button className="btn danger" disabled={busy} onClick={() => removeItem(n)} title="Remove">✕</button>
+          </div>
+        ))}
+      </div>
       <label htmlFor="v-name">Name</label>
-      <input id="v-name" type="text" className="mono" value={name} onChange={(e) => setName(e.target.value)} spellCheck={false} />
+      <input id="v-name" type="text" className="mono" list="v-known" value={name} onChange={(e) => setName(e.target.value)} spellCheck={false} />
+      <datalist id="v-known">{KNOWN_ITEMS.map((k) => <option key={k.name} value={k.name} />)}</datalist>
       <label htmlFor="v-value">Value</label>
       <input id="v-value" type="password" autoComplete="off" value={value} onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => { if (e.key === "Enter" && value) saveItem(); }} />

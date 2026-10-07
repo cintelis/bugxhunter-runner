@@ -603,6 +603,9 @@ select {
 .vault-item { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 10px; border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--mono); font-size: 12px; }
 .vault-item .name { flex: 1; }
 .vault-item .ok { color: var(--green); }
+.vault-item .missing { color: var(--muted-2); }
+.vault-item .desc { color: var(--muted); font-family: var(--sans); font-size: 12px; }
+.vault-item .btn.sm { padding: 3px 10px; }
 .form-status.success { background: var(--green-soft); border: 1px solid var(--green); color: var(--green); padding: 10px 14px; border-radius: var(--radius); font-family: var(--mono); font-size: 12px; }
 
 /* ---------- Diff modal ---------- */
