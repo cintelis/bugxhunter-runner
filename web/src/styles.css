@@ -568,8 +568,9 @@ select {
 .vault-dialog p b { color: var(--text); }
 .vault-dialog label { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
 .vault-dialog .link-btn { font-family: var(--mono); font-size: 11px; }
-.vault-dialog .perm-actions.center { justify-content: center; margin-top: 6px; }
-.vault-dialog .btn.wide { min-width: 60%; padding: 11px 22px; font-size: 13px; }
+/* Primary call to action in dialogs and the sign-in card: wide and centred, like the site's hero buttons. */
+.perm-actions.center { justify-content: center; margin-top: 6px; }
+.btn.wide { min-width: 60%; padding: 11px 22px; font-size: 13px; }
 .steps { display: flex; gap: 10px; font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted-2); }
 .steps .on { color: var(--cyan); }
 .steps .done { color: var(--green); }

@@ -136,9 +136,11 @@ function Login({ onSuccess }: { onSuccess: () => void }) {
                 </>
               )}
               {!passkeysAvailable() && <div className="form-status error">This browser has no passkey support. Use Chrome, Edge or Safari, or a backup.</div>}
-              <button className="btn primary block" type="submit" autoFocus={!legacy} disabled={busy || !passkeysAvailable()}>
-                {busy ? "waiting for the passkey…" : "./sign_in --passkey →"}
-              </button>
+              <div className="perm-actions center">
+                <button className="btn primary wide" type="submit" autoFocus={!legacy} disabled={busy || !passkeysAvailable()}>
+                  {busy ? "waiting for the passkey…" : "./sign_in --passkey →"}
+                </button>
+              </div>
               <div className="login-links">
                 {hasPassword && <button type="button" className="link-btn" disabled={busy} onClick={() => { setMode("password"); setError(null); }}>use the backup passphrase</button>}
                 <button type="button" className="link-btn" disabled={busy} onClick={() => { setMode("recovery"); setError(null); }}>use the recovery code</button>
@@ -150,7 +152,9 @@ function Login({ onSuccess }: { onSuccess: () => void }) {
             <>
               <label htmlFor="bp">backup passphrase</label>
               <input id="bp" type="password" autoFocus autoComplete="current-password" value={pass} onChange={(e) => setPass(e.target.value)} />
-              <button className="btn primary block" type="submit" disabled={busy || !pass}>{busy ? "checking…" : "./sign_in --passphrase →"}</button>
+              <div className="perm-actions center">
+                <button className="btn primary wide" type="submit" disabled={busy || !pass}>{busy ? "checking…" : "./sign_in --passphrase →"}</button>
+              </div>
               <div className="login-links">
                 <button type="button" className="link-btn" disabled={busy} onClick={() => { setMode("passkey"); setError(null); }}>back to the passkey</button>
                 <button type="button" className="link-btn" disabled={busy} onClick={() => { setMode("recovery"); setError(null); }}>use the recovery code</button>
@@ -163,7 +167,9 @@ function Login({ onSuccess }: { onSuccess: () => void }) {
               <label htmlFor="rc">recovery code</label>
               <input id="rc" type="text" className="mono" autoFocus autoComplete="off" spellCheck={false} placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-X"
                 value={code} onChange={(e) => setCode(e.target.value)} />
-              <button className="btn primary block" type="submit" disabled={busy || !looksLikeRecoveryCode(code)}>{busy ? "checking…" : "./sign_in --recovery →"}</button>
+              <div className="perm-actions center">
+                <button className="btn primary wide" type="submit" disabled={busy || !looksLikeRecoveryCode(code)}>{busy ? "checking…" : "./sign_in --recovery →"}</button>
+              </div>
               <p className="hint" style={{ margin: 0 }}>This signs you in and unlocks the vault. Enrol a new passkey right after, from the keys dialog.</p>
               <div className="login-links">
                 <button type="button" className="link-btn" disabled={busy} onClick={() => { setMode("passkey"); setError(null); }}>back to the passkey</button>
