@@ -47,8 +47,13 @@ function translate(e: unknown): Error {
   if (err?.name === "OperationError") {
     return new PrfUnsupportedError("Another passkey request is pending in this tab. Close any stray OS dialog or reload, then try again.");
   }
-  if (err?.name === "SecurityError") return new PrfUnsupportedError(`Passkeys need a secure origin (https, or localhost). This page is ${location.origin}.`);
-  return err instanceof Error ? err : new Error(String(e));
+  if (err?.name === "SecurityError") {
+    return new PrfUnsupportedError(`The browser refused the passkey request (SecurityError: ${err.message}). Passkeys need https or localhost, and a relying-party name equal to the page's host (${location.hostname}).`);
+  }
+  if (err?.name === "NotSupportedError" || err?.name === "ConstraintError") {
+    return new PrfUnsupportedError(`The authenticator can't do this (${err.name}: ${err.message}).`);
+  }
+  return err instanceof Error ? new Error(`${err.name ?? "Error"}: ${err.message}`) : new Error(String(e));
 }
 
 const prfExtension = (prfSalt: string) => ({ prf: { eval: { first: enc.encode(prfSalt) } } }) as AuthenticationExtensionsClientInputs;
@@ -103,11 +108,15 @@ export async function createPasskeyWithPrf(label: string, prfSalt: string): Prom
  */
 export async function assertPasskey(c: AuthChallenge, prfSalt: string): Promise<{ assertion: PasskeyAssertion; prf?: Uint8Array }> {
   if (!passkeysAvailable()) throw new PrfUnsupportedError("This browser has no passkey support.");
+  // The relying-party id must equal this page's host; the server's value is
+  // only a hint (behind a proxy it may see a different Host).
+  const id = rpId();
+  if (c.rpId && c.rpId !== id) console.warn(`[vault] server suggested rpId ${c.rpId}; using the page's host ${id}`);
   let cred: PublicKeyCredential | null;
   try {
     cred = (await navigator.credentials.get({
       publicKey: {
-        rpId: c.rpId,
+        rpId: id,
         challenge: b64url.dec(c.challenge),
         allowCredentials: c.allowCredentials.map((a) => ({ type: "public-key" as const, id: b64url.dec(a.id), transports: a.transports as AuthenticatorTransport[] | undefined })),
         userVerification: "required",

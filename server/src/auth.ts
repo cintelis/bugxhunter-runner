@@ -174,9 +174,13 @@ export function mountAuth(app: express.Express, allowedHosts: Set<string>) {
   app.post("/api/auth/challenge", (req, res) => {
     const creds = vault.loginCredentials();
     if (!creds.length) { issueSession(req, res); return res.json({ open: true }); }
+    // The page's own host is the relying-party id. Prefer the Origin header
+    // (a dev proxy rewrites Host but not Origin); the browser re-derives it anyway.
+    let rpId = "localhost";
+    try { rpId = hostOf(req.headers.origin || `http://${(req.headers.host ?? "localhost").toLowerCase()}`); } catch { /* keep default */ }
     const body: AuthChallenge = {
       challenge: issueChallenge(),
-      rpId: hostOf(`http://${(req.headers.host ?? "localhost").toLowerCase()}`),
+      rpId,
       allowCredentials: creds.map((c) => ({ id: c.credentialId, transports: c.transports })),
     };
     res.json(body);
