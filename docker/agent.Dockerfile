@@ -62,12 +62,12 @@ RUN if [ "$SECTOOLS" = "1" ]; then set -eux; \
       mkdir -p /opt/wordlists; \
       for W in \
         "Discovery/Web-Content/common.txt" \
-        "Discovery/Web-Content/api-endpoints.txt" \
+        "Discovery/Web-Content/common-api-endpoints-mazen160.txt" \
         "Discovery/Web-Content/raft-medium-directories.txt" \
         "Discovery/DNS/subdomains-top1million-5000.txt" \
         "Fuzzing/LFI/LFI-Jhaddix.txt" \
-        "Fuzzing/SQLi/Generic-SQLi.txt" \
-        "Fuzzing/XSS/XSS-Jhaddix.txt"; do \
+        "Fuzzing/Databases/SQLi/Generic-SQLi.txt" \
+        "Fuzzing/XSS/robot-friendly/XSS-Jhaddix.txt"; do \
         curl -fsSL "https://raw.githubusercontent.com/danielmiessler/SecLists/${SECLISTS_REF}/${W}" -o "/opt/wordlists/$(basename $W)"; \
       done; \
     fi

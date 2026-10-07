@@ -6,13 +6,22 @@ updates:
     schedule:
       interval: weekly
     groups:
-      minor-and-patch:
+      npm-minor-and-patch:
         update-types: [minor, patch]
+      npm-major:
+        update-types: [major]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
   - package-ecosystem: docker
     directory: /docker
     schedule:
       interval: weekly
+    ignore:
+      # Stay on the Node LTS line the app is built and tested against.
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]

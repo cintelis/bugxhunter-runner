@@ -6,12 +6,11 @@
  * browser only ever talks to this server. Streams are forwarded as
  * Server-Sent Events.
  */
+import "./env.js"; // first: loads .env before the modules below read process.env
 import express from "express";
-import dotenv from "dotenv";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { SCXClient, SCXError, type ChatParams } from "./scx.js";
 import { KnowledgeBase, buildContextBlock } from "./rag.js";
 import {
@@ -22,10 +21,6 @@ import type { PendingRequests, SessionSummary, SlashCommand, StoredMessage, Todo
 import { mountAuth, authRequired } from "./auth.js";
 import { audit, followOpencode, LOG_DIR } from "./audit.js";
 import { saveAttachments, type Attachment } from "./attachments.js";
-
-// Optional repo-root .env (server runs from /server).
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 
 /** The key `opencode auth login` stored for the scx provider, if any. */
 function opencodeAuthKey(): string {

@@ -335,11 +335,18 @@ export function Sidebar({
         </div>
       </div>
       )}
-      {authOn && (
-        <div className="sidebar-foot">
-          <button className="btn ghost sm block" onClick={logout}>Sign out</button>
-        </div>
-      )}
+      <div className="sidebar-foot">
+        {authOn && <button className="btn ghost sm block" onClick={logout}>Sign out</button>}
+        <a
+          className="ai-badge"
+          href="https://claude.com/claude-code"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="This app was built with Claude Code and its code reviewed and hardened with Claude Mythos 5.1."
+        >
+          <span className="k">built with</span> Claude Code <span className="sep">·</span> <span className="k">reviewed with</span> Claude Mythos 5.1
+        </a>
+      </div>
     </aside>
   );
 }

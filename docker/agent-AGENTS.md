@@ -32,8 +32,9 @@ Local tools (no network):
   for a plain folder, or `gitleaks detect --source .` for a git repo. Save the report under the
   project folder.
 
-Wordlists: `/opt/wordlists` (common.txt, api-endpoints.txt, raft-medium-directories.txt,
-subdomains-top1million-5000.txt, LFI/SQLi/XSS lists). Save findings under the project folder.
+Wordlists: `/opt/wordlists` (common.txt, common-api-endpoints-mazen160.txt,
+raft-medium-directories.txt, subdomains-top1million-5000.txt, LFI-Jhaddix.txt, Generic-SQLi.txt,
+XSS-Jhaddix.txt). Save findings under the project folder.
 
 ## Running scans efficiently (important — scans are slow if done naively)
 
