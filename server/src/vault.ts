@@ -12,7 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import type { PasskeyMethod, PublicMethod, Sealed, VaultDoc, VaultMethod, VaultStatus } from "../../shared/vault.js";
 import { audit } from "./audit.js";
-import { httpError } from "./opencode.js";
+import { httpError } from "./errors.js";
 
 export const VAULT_FILE =
   process.env.OPEN_RUNNER_VAULT_FILE ?? path.join(os.homedir(), ".config", "bugxhunter", "vault.json");

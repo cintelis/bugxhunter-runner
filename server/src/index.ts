@@ -9,9 +9,9 @@
 import "./env.js"; // first: loads .env before the modules below read process.env
 import express from "express";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { SCXClient, SCXError, type ChatParams } from "./scx.js";
+import { SCXError, type ChatParams } from "./scx.js";
+import { PROVIDERS, PROXY_TOKEN, PORT, OPENROUTER_MODELS, apiKey, clients, clientFor, keySource, listModels } from "./providers.js";
 import { KnowledgeBase, buildContextBlock } from "./rag.js";
 import {
   getClient, serverUrl, resolveDirectory, listAgentModels, toUiEvent, toUiMessages, parseModelId, oc, query, httpError,
@@ -22,55 +22,10 @@ import { mountAuth, authRequired, issueSession } from "./auth.js";
 import { audit, followOpencode, LOG_DIR } from "./audit.js";
 import { saveAttachments, type Attachment } from "./attachments.js";
 import * as vault from "./vault.js";
-import type { VaultStatus } from "../../shared/vault.js";
 
-/** The key `opencode auth login` stored for the scx provider, if any. */
-function opencodeAuthKey(): string {
-  try {
-    const file = path.join(os.homedir(), ".local", "share", "opencode", "auth.json");
-    return JSON.parse(fs.readFileSync(file, "utf8"))?.scx?.key ?? "";
-  } catch {
-    return "";
-  }
-}
-
-const ENV_KEY = process.env.SCX_API ?? process.env.SCX_API_KEY ?? "";
-const AUTH_KEY = opencodeAuthKey();
-const PROXY_TOKEN = process.env.SCX_PROXY_TOKEN ?? "";
-const BASE_URL = process.env.SCX_BASE_URL ?? "https://api.scx.ai/v1";
-const PORT = Number(process.env.PORT ?? 8790);
-
-// Secrets are read once, above and in auth.ts, then removed from the
-// environment. The OpenCode server is spawned with a copy of our environment,
-// and the agent's shell inherits that: anything left here is one
-// `echo $SCX_API` away from a prompt-injected agent.
-for (const k of ["SCX_API", "SCX_API_KEY", "SCX_PROXY_TOKEN", "OPEN_RUNNER_SECRET"]) {
-  delete process.env[k];
-}
-
-/** Where the model key comes from: the vault once one exists, else .env, else OpenCode's own store. */
-function keySource(): VaultStatus["keySource"] {
-  if (vault.isInitialised()) return "vault";
-  if (ENV_KEY) return "env";
-  if (AUTH_KEY) return "opencode-auth";
-  return "none";
-}
-
-/** The SCX key for this call. Throws a 503 the client can explain (vault sealed, no key). */
-function apiKey(): string {
-  switch (keySource()) {
-    case "vault": {
-      const k = vault.getItem("SCX_API"); // throws 503 while sealed
-      if (!k) throw httpError(503, "The vault has no SCX_API key yet. Add it under Vault in the sidebar.");
-      return k;
-    }
-    case "env": return ENV_KEY;
-    case "opencode-auth": return AUTH_KEY;
-    default: throw httpError(503, "No SCX API key. Set up the vault in the sidebar, or run `opencode auth login` (provider id: scx).");
-  }
-}
-
-const scx = new SCXClient({ apiKey, baseUrl: BASE_URL });
+// Keys, the proxy token and the provider clients live in providers.ts, which
+// also scrubs every secret from the environment before OpenCode is spawned.
+const scx = clients.scx;
 const kb = new KnowledgeBase(scx); // in-memory RAG store (POC scope)
 const app = express();
 app.disable("x-powered-by");
@@ -84,17 +39,18 @@ if (TRUST_PROXY) {
 }
 
 /**
- * SCX proxy for the sandboxed agent (Docker). The agent container holds no
- * SCX key: its OpenCode talks to this route with a shared proxy token, and we
- * forward chat/model calls to SCX with the real key. So the key never enters
- * the container the agent's shell runs in, even though that container has
- * direct internet. Mounted before the JSON parser so request bodies pass
- * through untouched.
+ * Key-injecting proxy for the agent, one route per provider (/scx/v1, and
+ * /openrouter/v1). The agent's OpenCode talks to these with the proxy token,
+ * and we forward chat/model calls upstream with the real key. So no provider
+ * key ever enters the container (or, locally, the process) the agent's shell
+ * runs in. Mounted before the JSON parser so request bodies pass through
+ * untouched.
  */
 const PROXY_PATHS = new Set(["/chat/completions", "/models"]);
-if (PROXY_TOKEN) {
-  app.all("/scx/v1/*", async (req, res) => {
-    const sub = req.path.slice("/scx/v1".length);
+for (const p of Object.values(PROVIDERS)) {
+  const prefix = `/${p.id}/v1`;
+  app.all(`${prefix}/*`, async (req, res) => {
+    const sub = req.path.slice(prefix.length);
     const auth = req.headers.authorization ?? "";
     if (auth !== `Bearer ${PROXY_TOKEN}`) return res.status(401).json({ error: { message: "bad proxy token" } });
     if (!PROXY_PATHS.has(sub)) return res.status(404).json({ error: { message: `not proxied: ${sub}` } });
@@ -103,10 +59,11 @@ if (PROXY_TOKEN) {
       for await (const c of req) chunks.push(c as Buffer);
       const ctrl = new AbortController();
       res.on("close", () => ctrl.abort());
-      const upstream = await fetch(BASE_URL + sub + (req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""), {
+      const upstream = await fetch(p.baseUrl + sub + (req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""), {
         method: req.method,
         headers: {
-          Authorization: `Bearer ${apiKey()}`,
+          Authorization: `Bearer ${apiKey(p.id)}`,
+          ...(p.headers ?? {}),
           "Content-Type": req.headers["content-type"] ?? "application/json",
           Accept: req.headers.accept ?? "*/*",
         },
@@ -168,13 +125,13 @@ const sendError = (res: express.Response, e: unknown) => {
   return res.status(500).json({ error: { message: String((e as Error)?.message ?? e) } });
 };
 
-app.get("/api/health", (_req, res) => res.json({ ok: true, baseUrl: BASE_URL }));
+app.get("/api/health", (_req, res) => res.json({ ok: true, baseUrl: PROVIDERS.scx.baseUrl }));
 
 // --- Key vault (see shared/vault.d.ts) --------------------------------------
 // The browser does the key derivation and wrapping; these routes only store
 // ciphertext, accept an unseal key into memory, and manage sealed items.
 
-app.get("/api/vault", (_req, res) => res.json(vault.status(keySource())));
+app.get("/api/vault", (_req, res) => res.json(vault.status(keySource("scx"))));
 
 app.post("/api/vault/init", (req, res) => {
   try {
@@ -183,7 +140,7 @@ app.post("/api/vault/init", (req, res) => {
     vault.initialise(doc, dek);
     // Creating the vault turns sign-in on; the browser that created it is signed in.
     issueSession(req, res);
-    res.json(vault.status(keySource()));
+    res.json(vault.status(keySource("scx")));
   } catch (e) {
     sendError(res, e);
   }
@@ -193,7 +150,7 @@ app.post("/api/vault/unseal", (req, res) => {
   try {
     if (typeof req.body?.dek !== "string") return res.status(400).json({ error: { message: "dek required" } });
     vault.unseal(req.body.dek);
-    res.json(vault.status(keySource()));
+    res.json(vault.status(keySource("scx")));
   } catch (e) {
     sendError(res, e);
   }
@@ -201,14 +158,14 @@ app.post("/api/vault/unseal", (req, res) => {
 
 app.post("/api/vault/seal", (_req, res) => {
   vault.sealVault();
-  res.json(vault.status(keySource()));
+  res.json(vault.status(keySource("scx")));
 });
 
 app.put("/api/vault/items/:name", (req, res) => {
   try {
     if (typeof req.body?.value !== "string") return res.status(400).json({ error: { message: "value required" } });
     vault.setItem(req.params.name, req.body.value);
-    res.json(vault.status(keySource()));
+    res.json(vault.status(keySource("scx")));
   } catch (e) {
     sendError(res, e);
   }
@@ -217,7 +174,7 @@ app.put("/api/vault/items/:name", (req, res) => {
 app.delete("/api/vault/items/:name", (req, res) => {
   try {
     vault.deleteItem(req.params.name);
-    res.json(vault.status(keySource()));
+    res.json(vault.status(keySource("scx")));
   } catch (e) {
     sendError(res, e);
   }
@@ -229,7 +186,7 @@ app.post("/api/vault/methods", (req, res) => {
     const { method, dek } = req.body ?? {};
     if (!method || typeof dek !== "string") return res.status(400).json({ error: { message: "method and dek required" } });
     vault.addMethod(method, dek);
-    res.json(vault.status(keySource()));
+    res.json(vault.status(keySource("scx")));
   } catch (e) {
     sendError(res, e);
   }
@@ -238,7 +195,7 @@ app.post("/api/vault/methods", (req, res) => {
 app.delete("/api/vault/methods/:id", (req, res) => {
   try {
     vault.removeMethod(req.params.id);
-    res.json(vault.status(keySource()));
+    res.json(vault.status(keySource("scx")));
   } catch (e) {
     sendError(res, e);
   }
@@ -253,7 +210,7 @@ app.delete("/api/vault", (req, res) => {
   try {
     if (typeof req.body?.dek !== "string") return res.status(400).json({ error: { message: "dek required" } });
     vault.destroy(req.body.dek);
-    res.json(vault.status(keySource()));
+    res.json(vault.status(keySource("scx")));
   } catch (e) {
     sendError(res, e);
   }
@@ -262,7 +219,7 @@ app.delete("/api/vault", (req, res) => {
 /** List models (with capabilities + pricing) for the playground's model picker. */
 app.get("/api/models", async (_req, res) => {
   try {
-    res.json({ data: await scx.listModels() });
+    res.json({ data: await listModels() });
   } catch (e) {
     sendError(res, e);
   }
@@ -290,8 +247,10 @@ app.post("/api/chat", async (req, res) => {
         }
       }
     }
+    const { client, model } = clientFor(String(params.model ?? ""));
+    const call = { ...params, model };
     if (params.stream) {
-      const upstream = await scx.chatStreamResponse(params);
+      const upstream = await client.chatStreamResponse(call);
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache, no-transform");
       res.setHeader("Connection", "keep-alive");
@@ -313,7 +272,7 @@ app.post("/api/chat", async (req, res) => {
       }
       res.end();
     } else {
-      const completion = await scx.chat(params);
+      const completion = await client.chat(call);
       res.json(retrieved.length
         ? { ...completion, scx_sources: retrieved.map((r) => ({ doc: r.doc, score: Number(r.score.toFixed(3)) })) }
         : completion);
@@ -735,15 +694,18 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 const server = app.listen(PORT, process.env.HOST ?? "127.0.0.1", () => {
   console.log(`\n  BugXHunter backend`);
   console.log(`  listening on http://${process.env.HOST ?? "127.0.0.1"}:${PORT}`);
-  console.log(`  SCX upstream: ${BASE_URL}`);
-  const src = keySource();
-  console.log(`  model key: ${{
-    vault: `vault (${vault.VAULT_FILE}, ${vault.isUnsealed() ? "unsealed" : "sealed — unlock it in the UI"})`,
-    env: ".env (SCX_API) — consider moving it into the vault",
-    "opencode-auth": "OpenCode's auth.json — consider moving it into the vault",
-    none: "none yet — set up the vault in the sidebar",
-  }[src]}`);
-  if (src === "vault" && (ENV_KEY || AUTH_KEY)) console.log("  note: a vault exists, so the key in .env / auth.json is ignored; remove it");
+  for (const p of Object.values(PROVIDERS)) {
+    const src = keySource(p.id);
+    const where = {
+      vault: "vault",
+      env: ".env — consider moving it into the vault",
+      "opencode-auth": "OpenCode's auth.json — consider moving it into the vault",
+      none: p.id === "scx" ? "none yet — set up the vault in the sidebar" : "not configured (optional)",
+    }[src];
+    console.log(`  ${p.name} key: ${where}`);
+  }
+  if (vault.isInitialised()) console.log(`  vault: ${vault.VAULT_FILE} (${vault.isUnsealed() ? "unsealed" : "sealed — unlock it in the UI"})`);
+  if (OPENROUTER_MODELS.length) console.log(`  OpenRouter models for the agent: ${OPENROUTER_MODELS.join(", ")}`);
   console.log(`  agent: ${REMOTE_URL ? `remote OpenCode at ${REMOTE_URL}` : "local OpenCode"}`);
   if (!REMOTE_URL) console.log(`  project roots: ${ALLOWED_ROOTS.length ? ALLOWED_ROOTS.join(", ") : "any folder (set OPEN_RUNNER_ALLOWED_ROOTS to restrict)"}`);
   console.log(`  sign-in: ${authRequired() ? "passkey (the vault's)" : "open — set up the vault in the sidebar to require a passkey"}`);

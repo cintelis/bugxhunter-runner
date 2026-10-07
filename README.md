@@ -131,6 +131,22 @@ access to the server's files runs `npm run vault:reset` (Docker: `docker compose
 /data/vault.json`): the vault and its secrets are gone and the app reopens for a fresh setup.
 Nothing on the network can do that, which is what keeps the lock meaningful.
 
+## Other models via OpenRouter
+
+SCX.ai is the default provider. To use anything from [OpenRouter's catalogue](https://openrouter.ai/models)
+as well:
+
+1. Add your OpenRouter key to the vault as `OPENROUTER_API_KEY` (keys dialog in the sidebar). The
+   **Playground** then lists OpenRouter's models under their own heading, addressed as
+   `openrouter/<id>`.
+2. For the **agent**, list the ids it may use in `OPENROUTER_MODELS` (comma-separated, e.g.
+   `anthropic/claude-sonnet-4.5,openai/gpt-5`), in `.env`. Only those appear in the Runner's model
+   picker, as `openrouter/…`. In Docker, both containers read the same variable.
+
+The agent never holds the key: its calls go to the runner's `/openrouter/v1` proxy with the proxy
+token, exactly like SCX, in both local and Docker modes. Pricing is OpenRouter's; the Playground
+shows each model's per-token rates.
+
 ## Security-testing tools (authorised use only)
 
 The agent image ships a standard pentest toolchain for **authorised** testing (your own sites,
@@ -167,6 +183,9 @@ you run this in — Docker's bridge NAT doesn't restrict outbound on its own.
 | `OPEN_RUNNER_AGENT_PORT` | `8791` | Port for the OpenCode server |
 | `PORT` | `8790` | Backend port |
 | `SCX_API` | the vault, else `opencode auth login` | SCX key in the clear; ignored once a vault exists (preferred) |
+| `OPENROUTER_API_KEY` | the vault, else unset | OpenRouter key in the clear; prefer the vault item of the same name |
+| `OPENROUTER_MODELS` | unset | Comma list of OpenRouter model ids the agent may use; becomes an OpenCode provider through the proxy |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter endpoint |
 | `OPEN_RUNNER_VAULT_FILE` | `~/.config/bugxhunter/vault.json` | The sealed vault (Docker: `/data/vault.json` on the `runner-data` volume) |
 | `OPEN_RUNNER_VAULT_IDLE_MINUTES` | `120` | Auto-lock after this long without a model call or API write; `0` = never |
 | `OPEN_RUNNER_SECRET` | random per start | Signs session cookies; set it to keep sign-ins across restarts |

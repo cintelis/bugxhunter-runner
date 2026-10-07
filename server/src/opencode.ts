@@ -19,6 +19,8 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createOpencodeServer, createOpencodeClient } from "@opencode-ai/sdk";
 import type { AgentEvent, AgentModel, MessagePart, StoredMessage } from "../../shared/agent.js";
+import { httpError } from "./errors.js";
+import { openrouterOpencodeProvider, OPENROUTER_MODELS, PORT } from "./providers.js";
 
 export type { AgentEvent, AgentModel, StoredMessage };
 
@@ -37,14 +39,23 @@ export const DEFAULT_DIRECTORY = process.env.OPEN_RUNNER_DIR ?? (REMOTE_URL ? WO
 
 export const DEFAULT_MODEL = process.env.OPEN_RUNNER_MODEL ?? "scx/GLM-5.3";
 
-const INLINE_CONFIG = {
-  model: DEFAULT_MODEL,
-  agent: {
-    build: { model: DEFAULT_MODEL },
-    plan: { model: DEFAULT_MODEL },
-  },
-  permission: { edit: "ask", bash: "ask" },
-};
+/**
+ * Config layered on the user's own OpenCode setup. With OPENROUTER_MODELS set,
+ * it adds an `openrouter` provider that calls back through this server's
+ * key-injecting proxy, so the OpenRouter key stays in the vault.
+ */
+async function inlineConfig() {
+  const openrouter = await openrouterOpencodeProvider(`http://127.0.0.1:${PORT}/openrouter/v1`);
+  return {
+    model: DEFAULT_MODEL,
+    agent: {
+      build: { model: DEFAULT_MODEL },
+      plan: { model: DEFAULT_MODEL },
+    },
+    permission: { edit: "ask", bash: "ask" },
+    ...(openrouter ? { provider: { openrouter } } : {}),
+  };
+}
 
 type Client = ReturnType<typeof createOpencodeClient>;
 
@@ -128,7 +139,8 @@ function getServer() {
   if (REMOTE_URL) return Promise.resolve({ url: REMOTE_URL, close() {} });
   if (!server) {
     server = stopStaleServer()
-      .then(() => createOpencodeServer({ hostname: "127.0.0.1", port: AGENT_PORT, timeout: 15000, config: INLINE_CONFIG as any }))
+      .then(inlineConfig)
+      .then((config) => createOpencodeServer({ hostname: "127.0.0.1", port: AGENT_PORT, timeout: 15000, config: config as any }))
       .then((s) => {
         closeServer = () => {
           try { s.close(); } catch { /* already gone */ }
@@ -144,8 +156,7 @@ function getServer() {
   return server;
 }
 
-/** An Error that sendError() turns into an HTTP status. */
-export const httpError = (status: number, message: string) => Object.assign(new Error(message), { status });
+export { httpError };
 const notFound = (dir: string) => httpError(400, `Folder not found: ${dir}`);
 
 /**
@@ -231,13 +242,20 @@ export function parseModelId(id?: string): { providerID: string; modelID: string
   return { providerID: id.slice(0, i), modelID: id.slice(i + 1) };
 }
 
-/** Every model OpenCode can use, as "provider/model" ids. */
+/**
+ * Every model OpenCode can use, as "provider/model" ids. OpenCode merges our
+ * `openrouter` provider with its own catalogue of that provider (hundreds of
+ * models, all routed through the proxy); the picker shows only the ids in
+ * OPENROUTER_MODELS so it stays usable.
+ */
 export async function listAgentModels(client: Client): Promise<AgentModel[]> {
   const r: any = await client.config.providers();
   const providers: any[] = r?.data?.providers ?? [];
   const out: AgentModel[] = [];
+  const allowed = new Set(OPENROUTER_MODELS);
   for (const p of providers) {
     for (const [mid, m] of Object.entries<any>(p.models ?? {})) {
+      if (p.id === "openrouter" && allowed.size && !allowed.has(mid)) continue;
       out.push({
         id: `${p.id}/${mid}`,
         name: m.name ?? mid,

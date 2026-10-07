@@ -32,6 +32,10 @@ services:
       # Model key: prefer the vault (set up in the UI, sealed in the runner-data
       # volume). SCX_API in .env still works but sits in the clear.
       SCX_API: ${SCX_API:-}
+      # Optional second provider (https://openrouter.ai/models): key in the vault
+      # (OPENROUTER_API_KEY) or here; OPENROUTER_MODELS lists the ids the agent may use.
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODELS: ${OPENROUTER_MODELS:-}
       OPEN_RUNNER_VAULT_FILE: /data/vault.json
       OPEN_RUNNER_VAULT_IDLE_MINUTES: ${OPEN_RUNNER_VAULT_IDLE_MINUTES:-120}
       OPEN_RUNNER_SECRET: ${OPEN_RUNNER_SECRET:-}
@@ -63,6 +67,7 @@ services:
     environment:
       SCX_PROXY_TOKEN: ${SCX_PROXY_TOKEN:?run docker/setup.ps1 first}
       OPENCODE_ENABLE_EXA: "1"           # turns on OpenCode's websearch tool (Exa)
+      OPENROUTER_MODELS: ${OPENROUTER_MODELS:-}   # same list as runner: becomes an OpenCode provider via runner's proxy
     networks: [net]
     volumes:
       - workspace:/workspace

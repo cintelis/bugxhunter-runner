@@ -75,18 +75,22 @@ export interface SCXClientOptions {
   baseUrl?: string;
   /** Per-request timeout in ms (default 120s). */
   timeoutMs?: number;
+  /** Extra headers on every request (e.g. OpenRouter's attribution headers). */
+  headers?: Record<string, string>;
 }
 
 export class SCXClient {
   readonly baseUrl: string;
   private readonly key: () => string;
   private readonly timeoutMs: number;
+  private readonly extraHeaders: Record<string, string>;
 
   constructor(opts: SCXClientOptions) {
     if (!opts.apiKey) throw new Error("SCXClient: apiKey is required");
     this.key = typeof opts.apiKey === "function" ? opts.apiKey : () => opts.apiKey as string;
     this.baseUrl = (opts.baseUrl ?? SCX_DEFAULT_BASE_URL).replace(/\/$/, "");
     this.timeoutMs = opts.timeoutMs ?? 120_000;
+    this.extraHeaders = opts.headers ?? {};
   }
 
   /** Low-level fetch that injects auth, JSON headers, and a timeout. */
@@ -104,6 +108,7 @@ export class SCXClient {
         signal: ctrl.signal,
         headers: {
           Authorization: `Bearer ${apiKey}`,
+          ...this.extraHeaders,
           ...(json !== undefined ? { "Content-Type": "application/json" } : {}),
           ...headers,
         },

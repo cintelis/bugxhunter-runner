@@ -386,7 +386,7 @@ function ManageDialog({ status, onChange, onClose }: { status: VaultStatus; onCh
 
   return (
     <Dialog title="vault --keys" onClose={onClose}>
-      <p>Secrets sealed in the vault. Values are never shown again; replace one by saving it under the same name. <code className="mono">SCX_API</code> is the model key the app uses.</p>
+      <p>Secrets sealed in the vault. Values are never shown again; replace one by saving it under the same name. <code className="mono">SCX_API</code> is the model key the app uses; <code className="mono">OPENROUTER_API_KEY</code> adds OpenRouter's models.</p>
       {status.items.length ? (
         <div className="vault-items">
           {status.items.map((n) => (

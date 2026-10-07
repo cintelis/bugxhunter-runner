@@ -100,8 +100,11 @@ export function Sidebar({
   const supportsJson = features.includes("json_mode");
   const supportsReasoning = features.includes("reasoning");
 
-  // group models by primary modality for a tidy picker
+  // Text models, grouped by provider (SCX first, then OpenRouter when configured).
   const textModels = models.filter((m) => m.output_modalities.includes("text"));
+  const modelGroups = (["scx", "openrouter"] as const)
+    .map((p) => [p, textModels.filter((m) => (m.provider ?? "scx") === p)] as const)
+    .filter(([, list]) => list.length > 0);
 
   function updateTool(i: number, patch: Partial<ToolDef["function"]>) {
     setConfig((c) => {
@@ -191,11 +194,15 @@ export function Sidebar({
         <div className="field">
           <label>Model</label>
           <select value={config.model} onChange={(e) => set("model", e.target.value)}>
-            {textModels.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name}
-                {m.context_length ? ` · ${Math.round(m.context_length / 1000)}k ctx` : ""}
-              </option>
+            {modelGroups.map(([provider, list]) => (
+              <optgroup key={provider} label={provider === "openrouter" ? "OpenRouter" : "SCX.ai"}>
+                {list.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                    {m.context_length ? ` · ${Math.round(m.context_length / 1000)}k ctx` : ""}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
           {modelError && <div className="hint" style={{ color: "var(--danger)" }}>{modelError}</div>}
