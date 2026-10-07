@@ -8,7 +8,8 @@
 #   - `agent` has direct internet so scan tools run at full speed (nmap, ping
 #     and raw DNS work too via NET_RAW). Outbound traffic is logged, not gated.
 #   - `agent` holds NO SCX key: model calls go to runner's /scx/v1 proxy, which
-#     injects the key, so the key never enters the sandbox.
+#     injects the key, so the key never enters the sandbox. Same for the GitHub
+#     token: `runner` clones into /workspace, the agent gets a credential-free copy.
 #   - No host folders are mounted: projects live in the `workspace` volume.
 #   - Both run as non-root with no-new-privileges; the agent drops all caps
 #     except NET_RAW, and bash/edit actions are approved in the UI.
@@ -36,6 +37,9 @@ services:
       # (OPENROUTER_API_KEY) or here; OPENROUTER_MODELS lists the ids the agent may use.
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODELS: ${OPENROUTER_MODELS:-}
+      # Optional GitHub fine-grained token (read-only clones into /workspace):
+      # prefer the vault item GITHUB_TOKEN. Runner only; the agent never gets it.
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       OPEN_RUNNER_VAULT_FILE: /data/vault.json
       OPEN_RUNNER_VAULT_IDLE_MINUTES: ${OPEN_RUNNER_VAULT_IDLE_MINUTES:-120}
       OPEN_RUNNER_SECRET: ${OPEN_RUNNER_SECRET:-}

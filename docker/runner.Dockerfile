@@ -1,5 +1,6 @@
-# BugXHunter — web UI + API container. Holds the SCX key, serves the login and
-# the built web app, and proxies the agent's model calls to SCX.
+# BugXHunter — web UI + API container. Holds the keys (vault), serves the
+# sign-in and the built web app, proxies the agent's model calls, and clones
+# GitHub repositories into the shared workspace.
 #
 # Stage 1 compiles both workspaces; stage 2 ships only the compiled output and
 # production dependencies (no TypeScript, tsx or Vite at runtime).
@@ -17,6 +18,9 @@ RUN npm run build
 FROM node:22-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=8790
+# git: the GitHub integration clones into /workspace from here, so the token
+# never enters the agent container.
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates  && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 COPY server/package.json server/
 COPY web/package.json web/

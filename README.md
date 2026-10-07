@@ -147,6 +147,28 @@ The agent never holds the key: its calls go to the runner's `/openrouter/v1` pro
 token, exactly like SCX, in both local and Docker modes. Pricing is OpenRouter's; the Playground
 shows each model's per-token rates.
 
+## GitHub repositories (read-only)
+
+To review a repository, clone it into the workspace from the sidebar (**clone from GitHub** under
+the project folder). The reach is yours to set, on GitHub, when you mint the token:
+
+1. [Create a fine-grained personal access token](https://github.com/settings/personal-access-tokens/new):
+   Repository access **Only select repositories**, Permissions **Contents: Read-only** (Metadata
+   comes with it). Give it an expiry.
+2. Add it to the vault as `GITHUB_TOKEN` (keys dialog). No GitHub App, no callback URL.
+
+The dialog lists exactly the repositories the token was granted (change the list on GitHub any
+time), with a branch picker. A clone lands in `<workspace>/<owner>/<repo>` (Docker: the shared
+`workspace` volume; locally `~/bugxhunter/repos`, or `OPEN_RUNNER_WORKSPACE`) and becomes the
+project folder. Cloning again fast-forwards it and never resets local edits.
+
+**The runner does the cloning, the agent gets a working copy.** The token is passed to git as a
+process-scoped header, so it is in neither the command line nor the clone's `.git/config`, and
+the `GITHUB_TOKEN` variable is scrubbed from the environment before the agent starts. The agent
+can read, grep and scan the code (gitleaks over the history included) and edit it locally, but
+nothing in the sandbox can fetch, push, open issues or see any other repository. Pushing results
+back is deliberately not built: findings leave through the UI, not through your GitHub account.
+
 ## Security-testing tools (authorised use only)
 
 The agent image ships a standard pentest toolchain for **authorised** testing (your own sites,
@@ -186,6 +208,7 @@ you run this in — Docker's bridge NAT doesn't restrict outbound on its own.
 | `OPENROUTER_API_KEY` | the vault, else unset | OpenRouter key in the clear; prefer the vault item of the same name |
 | `OPENROUTER_MODELS` | unset | Comma list of OpenRouter model ids the agent may use; becomes an OpenCode provider through the proxy |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter endpoint |
+| `GITHUB_TOKEN` | the vault, else unset | GitHub fine-grained token in the clear; prefer the vault item of the same name. Read-only clones only |
 | `OPEN_RUNNER_VAULT_FILE` | `~/.config/bugxhunter/vault.json` | The sealed vault (Docker: `/data/vault.json` on the `runner-data` volume) |
 | `OPEN_RUNNER_VAULT_IDLE_MINUTES` | `120` | Auto-lock after this long without a model call or API write; `0` = never |
 | `OPEN_RUNNER_SECRET` | random per start | Signs session cookies; set it to keep sign-ins across restarts |
@@ -195,7 +218,7 @@ you run this in — Docker's bridge NAT doesn't restrict outbound on its own.
 | `ALLOWED_HOSTS` | localhost only | Extra `Host` header values to accept (comma list), e.g. the domain a reverse proxy serves. Everything else gets 403, which blocks DNS-rebinding attacks |
 | `OPEN_RUNNER_ALLOWED_ROOTS` | any folder | Local mode: folders the UI may open, PATH-style list (`;` on Windows, `:` elsewhere). Set it before sharing the app |
 | `OPENCODE_URL` | unset (spawn locally) | Use a remote OpenCode server (Docker sets `http://agent:4096`) |
-| `OPEN_RUNNER_WORKSPACE` | `/workspace` | Remote mode: projects must live under this folder |
+| `OPEN_RUNNER_WORKSPACE` | `/workspace` (local: `~/bugxhunter/repos`) | Remote mode: projects must live under this folder. Both modes: where GitHub clones land |
 | `SCX_PROXY_TOKEN` | unset | Enables the `/scx/v1` key proxy for the sandboxed agent |
 
 Releases are on the [releases page](https://github.com/cintelis/bugxhunter-runner/releases).

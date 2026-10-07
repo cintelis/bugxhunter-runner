@@ -14,6 +14,7 @@
  * per folder.
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -172,6 +173,17 @@ const isInside = (abs: string, root: string) => {
   const [a, r] = process.platform === "win32" ? [abs.toLowerCase(), root.toLowerCase()] : [abs, root];
   return a === r || a.startsWith(r.endsWith(path.sep) ? r : r + path.sep);
 };
+
+/**
+ * Where GitHub clones land (github.ts): `<CLONE_ROOT>/<owner>/<repo>`. In
+ * Docker that is the workspace volume, which the agent mounts at the same
+ * path. Locally it is OPEN_RUNNER_WORKSPACE, else ~/bugxhunter/repos, and a
+ * restricted install (OPEN_RUNNER_ALLOWED_ROOTS) may always open what it cloned.
+ */
+export const CLONE_ROOT = REMOTE_URL
+  ? WORKSPACE_ROOT
+  : path.resolve(process.env.OPEN_RUNNER_WORKSPACE ?? path.join(os.homedir(), "bugxhunter", "repos"));
+if (!REMOTE_URL && ALLOWED_ROOTS.length && !ALLOWED_ROOTS.some((r) => isInside(CLONE_ROOT, r))) ALLOWED_ROOTS.push(CLONE_ROOT);
 
 /** Normalise and validate a project folder from the browser. */
 export async function resolveDirectory(dir?: unknown): Promise<string> {

@@ -22,6 +22,7 @@ import { mountAuth, authRequired, issueSession } from "./auth.js";
 import { audit, followOpencode, LOG_DIR } from "./audit.js";
 import { saveAttachments, type Attachment } from "./attachments.js";
 import * as vault from "./vault.js";
+import * as github from "./github.js";
 
 // Keys, the proxy token and the provider clients live in providers.ts, which
 // also scrubs every secret from the environment before OpenCode is spawned.
@@ -217,6 +218,28 @@ app.delete("/api/vault", (req, res) => {
 });
 
 /** List models (with capabilities + pricing) for the playground's model picker. */
+// --- GitHub, read-only (see shared/github.d.ts) ------------------------------
+app.get("/api/github", async (_req, res) => {
+  try { res.json(await github.status()); } catch (e) { sendError(res, e); }
+});
+app.get("/api/github/repos", async (_req, res) => {
+  try { res.json({ repos: await github.listRepos() }); } catch (e) { sendError(res, e); }
+});
+app.get("/api/github/branches", async (req, res) => {
+  try { res.json({ branches: await github.listBranches(req.query.repo) }); } catch (e) { sendError(res, e); }
+});
+/** Clone into the workspace, or fast-forward the clone already there. Slow: a big repository takes a while. */
+app.post("/api/github/clone", async (req, res) => {
+  try {
+    const result = await github.cloneOrUpdate({ repo: req.body?.repo, branch: req.body?.branch });
+    audit("github.clone", { repo: req.body?.repo, ...result });
+    res.json(result);
+  } catch (e) {
+    audit("github.clone.failed", { repo: req.body?.repo, error: String((e as Error).message ?? e) });
+    sendError(res, e);
+  }
+});
+
 app.get("/api/models", async (_req, res) => {
   try {
     res.json({ data: await listModels() });

@@ -67,6 +67,18 @@ API keys and other secrets the app holds are sealed at rest in `vault.json`
   inputs and tool output go to the model provider in plaintext; the vault seals
   secrets, not engagements.
 
+## The GitHub token
+
+The GitHub integration is read-only on both sides. On GitHub's side, use a fine-grained personal
+access token limited to the repositories you choose with **Contents: Read-only**; the runner never
+asks for more, and never writes (no pushes, no issues, no API calls beyond listing repositories and
+branches). On the runner's side, the token lives in the vault like the model keys, is handed to git
+through a process-scoped config entry (`GIT_CONFIG_*`, so it is not on a command line and not in
+the clone's `.git/config`; credential helpers are disabled so nothing caches it), and is scrubbed
+from the environment before OpenCode is spawned. The agent container receives a plain working copy
+in the shared workspace with an `https://github.com/...` origin and no credentials: it can read and
+scan the code, and cannot fetch, push or reach any other repository.
+
 ## Verifying a release yourself
 
 The release public key:

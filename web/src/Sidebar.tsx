@@ -8,6 +8,8 @@ import type { RunnerSettings } from "./App";
 import { logout } from "./Login";
 import { newToolId } from "./tools";
 import { VaultPanel } from "./VaultPanel";
+import { GitHubDialog } from "./GitHubDialog";
+import { GitHubIcon } from "./icons";
 
 export type Mode = "runner" | "playground";
 
@@ -376,6 +378,7 @@ function RunnerSidebar({ runner, status, statusError, onOpen, sessions }: {
   const [draft, setDraft] = useState(runner.directory);
   const [err, setErr] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
+  const [github, setGithub] = useState(false);
 
   useEffect(() => setDraft(runner.directory), [runner.directory]);
 
@@ -406,6 +409,8 @@ function RunnerSidebar({ runner, status, statusError, onOpen, sessions }: {
         </form>
         {err && <div className="hint danger">{err}</div>}
         <div className="hint">The agent reads, edits and runs commands in this folder. Switching folders starts a new session.</div>
+        <button className="btn sm gh-open" onClick={() => setGithub(true)} title="Clone a repository into the workspace (read-only)"><GitHubIcon size={13} /> clone from GitHub</button>
+        {github && <GitHubDialog onOpen={(dir) => open(dir)} onClose={() => setGithub(false)} />}
       </div>
 
       {recent.length > 0 && (

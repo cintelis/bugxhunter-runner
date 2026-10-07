@@ -6,7 +6,8 @@
  * passphrase, delete). All key derivation happens here in the browser
  * (vault/crypto.ts, vault/prf.ts); the server stores ciphertext.
  */
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { Dialog } from "./Dialog";
 import type { PasskeyMethod, PasswordMethod, RecoveryMethod, VaultStatus } from "../../shared/vault";
 import { vaultAddMethod, vaultDeleteItem, vaultDestroy, vaultInit, vaultRemoveMethod, vaultSeal, vaultSetItem, vaultStatus, vaultUnseal } from "./vault/api";
 import { b64, buildVault, looksLikeRecoveryCode, PRF_SALT, unwrapWithPasskey, unwrapWithPassword, unwrapWithRecovery, wrapForPasskey, wrapForPassword } from "./vault/crypto";
@@ -21,6 +22,7 @@ const CUSTOM = "__custom__";
 const KNOWN_ITEMS = [
   { name: "SCX_API", label: "SCX.ai model key — the default provider" },
   { name: "OPENROUTER_API_KEY", label: "OpenRouter key — unlocks its model catalogue (optional)" },
+  { name: "GITHUB_TOKEN", label: "GitHub fine-grained token — clone the repositories you pick, read-only (optional)" },
 ];
 
 export function VaultPanel() {
@@ -113,26 +115,6 @@ const ShieldKeyholeIcon = () => (
 function remaining(ms: number) {
   const m = Math.max(0, Math.round(ms / 60_000));
   return m >= 60 ? `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m` : `${m}m`;
-}
-
-function Dialog({ title, onClose, children }: { title: string; onClose?: () => void; children: ReactNode }) {
-  useEffect(() => {
-    if (!onClose) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  return (
-    <div className="overlay vault-dialog" onClick={onClose}>
-      <div className="modal" role="dialog" aria-label={title} onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <span className="modal-title"><span className="dot y" aria-hidden />{title}</span>
-          {onClose && <button className="icon-btn close-x" onClick={onClose} aria-label="Close" title="Close (Esc)">✕</button>}
-        </div>
-        <div className="modal-body">{children}</div>
-      </div>
-    </div>
-  );
 }
 
 // --- setup wizard ------------------------------------------------------------

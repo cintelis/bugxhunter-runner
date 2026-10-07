@@ -599,6 +599,26 @@ select {
 .recovery-code.copied .copy-hint { color: var(--green); }
 .check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); text-transform: none; letter-spacing: 0; font-family: var(--sans); }
 .check input { accent-color: var(--green); }
+/* GitHub dialog (github --clone) */
+.gh-open { margin-top: 8px; display: inline-flex; align-items: center; gap: 6px; }
+.gh-open svg { display: block; }
+.gh-steps { margin: 0; padding-left: 20px; color: var(--muted); font-size: 13px; line-height: 1.55; display: flex; flex-direction: column; gap: 6px; }
+.gh-steps b { color: var(--text); }
+.gh-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.gh-head b { color: var(--green); font-weight: 500; }
+.gh-list { max-height: 38vh; overflow: auto; display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--border); border-radius: var(--radius); padding: 4px; min-height: 64px; }
+.gh-list > .hint { margin: 8px 6px; }
+.gh-repo {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; width: 100%; min-width: 0;
+  background: transparent; border: 1px solid transparent; border-radius: var(--radius); padding: 7px 9px; cursor: pointer; transition: var(--transition); color: var(--text);
+}
+.gh-repo:hover { background: var(--panel-2); border-color: var(--border); }
+.gh-repo.selected { background: var(--panel-2); border-color: var(--cyan); }
+.gh-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-family: var(--mono); font-size: 12.5px; font-weight: 500; }
+.gh-desc { font-size: 12px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gh-meta { display: inline-flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+.gh-clone { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; }
+.gh-clone select { min-width: 0; }
 .vault-items { display: flex; flex-direction: column; gap: 6px; }
 .vault-item { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 10px; border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--mono); font-size: 12px; }
 .vault-item .name { flex: 1; }
