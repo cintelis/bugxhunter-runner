@@ -1,6 +1,7 @@
 # Creates .env for docker compose: a login password, a cookie secret, the
 # agent proxy token, and the SCX key (taken from `opencode auth login`).
 # Existing values are kept, so re-running is safe. Secrets are not printed.
+param([switch]$CopyScxKey)
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 $envFile = Join-Path $root ".env"
@@ -18,7 +19,10 @@ if (Test-Path $envFile) {
   }
 }
 
-if (-not $vals["SCX_API"]) {
+# The SCX key is best kept in the vault (set it up in the UI after the first
+# start): it is then sealed at rest instead of sitting in .env. Pass -CopyScxKey
+# to copy the key from `opencode auth login` into .env anyway.
+if ($CopyScxKey -and -not $vals["SCX_API"]) {
   $auth = Join-Path $HOME ".local\share\opencode\auth.json"
   if (Test-Path $auth) { $vals["SCX_API"] = (Get-Content $auth -Raw | ConvertFrom-Json).scx.key }
   if (-not $vals["SCX_API"]) { throw "No SCX key found. Run 'opencode auth login' (provider id: scx) or add SCX_API=... to .env." }
@@ -37,3 +41,4 @@ $out = ($vals.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -joi
 Write-Host "Wrote $envFile"
 if ($newPassword) { Write-Host "A login password was generated: see OPEN_RUNNER_PASSWORD in .env (change it if you like)." }
 Write-Host "Next: docker compose up -d --build   then open http://localhost:8790"
+if (-not $vals["SCX_API"]) { Write-Host "Then set up the vault in the sidebar (passphrase + passkey) and put your SCX key in it." }

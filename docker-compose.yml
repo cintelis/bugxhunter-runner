@@ -29,8 +29,13 @@ services:
       context: .
       dockerfile: docker/runner.Dockerfile
     environment:
-      SCX_API: ${SCX_API:?run docker/setup.ps1 first}
-      OPEN_RUNNER_PASSWORD: ${OPEN_RUNNER_PASSWORD:?run docker/setup.ps1 first}
+      # Model key: prefer the vault (set up in the UI, sealed in the runner-data
+      # volume). SCX_API in .env still works but sits in the clear.
+      SCX_API: ${SCX_API:-}
+      OPEN_RUNNER_VAULT_FILE: /data/vault.json
+      OPEN_RUNNER_VAULT_IDLE_MINUTES: ${OPEN_RUNNER_VAULT_IDLE_MINUTES:-120}
+      OPEN_RUNNER_PASSWORD: ${OPEN_RUNNER_PASSWORD:-}
+      OPEN_RUNNER_PASSWORD_HASH: ${OPEN_RUNNER_PASSWORD_HASH:-}
       OPEN_RUNNER_SECRET: ${OPEN_RUNNER_SECRET:-}
       SCX_PROXY_TOKEN: ${SCX_PROXY_TOKEN:?run docker/setup.ps1 first}
       OPENCODE_URL: http://agent:4096
@@ -39,6 +44,7 @@ services:
     volumes:
       - workspace:/workspace               # same volume as the agent: attachments
       - logs:/logs                         # audit + egress logs; NOT mounted in the agent, so it can't edit them
+      - runner-data:/data                  # the sealed key vault (ciphertext only; see SECURITY.md)
     ports:
       - "127.0.0.1:${OPEN_RUNNER_PORT:-8790}:8790"   # localhost only; put TLS in front before exposing
     networks: [net]
@@ -104,4 +110,5 @@ networks:
 volumes:
   workspace: {}
   agent-data: {}
-  logs: {}      # read with: docker compose cp runner:/logs ./logs
+  logs: {}         # read with: docker compose cp runner:/logs ./logs
+  runner-data: {}  # vault.json: wrapped keys + ciphertext, useless without an unlock

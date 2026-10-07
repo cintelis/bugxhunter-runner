@@ -23,8 +23,9 @@ COPY web/package.json web/
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build --chown=node:node /app/server/dist server/dist
 COPY --from=build --chown=node:node /app/web/dist web/dist
-# /logs holds the audit log (its own volume in docker-compose.yml, not visible to the agent).
-RUN mkdir -p /logs && chown node:node /logs
+# /logs holds the audit log and /data the sealed key vault (both their own
+# volumes in docker-compose.yml, neither visible to the agent).
+RUN mkdir -p /logs /data && chown node:node /logs /data
 USER node
 EXPOSE 8790
 CMD ["node", "server/dist/index.js"]

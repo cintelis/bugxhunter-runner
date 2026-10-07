@@ -21,6 +21,8 @@ import type { PendingRequests, SessionSummary, SlashCommand, StoredMessage, Todo
 import { mountAuth, authRequired } from "./auth.js";
 import { audit, followOpencode, LOG_DIR } from "./audit.js";
 import { saveAttachments, type Attachment } from "./attachments.js";
+import * as vault from "./vault.js";
+import type { VaultStatus } from "../../shared/vault.js";
 
 /** The key `opencode auth login` stored for the scx provider, if any. */
 function opencodeAuthKey(): string {
@@ -32,18 +34,43 @@ function opencodeAuthKey(): string {
   }
 }
 
-const API_KEY = process.env.SCX_API ?? process.env.SCX_API_KEY ?? opencodeAuthKey();
+const ENV_KEY = process.env.SCX_API ?? process.env.SCX_API_KEY ?? "";
+const AUTH_KEY = opencodeAuthKey();
+const PROXY_TOKEN = process.env.SCX_PROXY_TOKEN ?? "";
 const BASE_URL = process.env.SCX_BASE_URL ?? "https://api.scx.ai/v1";
 const PORT = Number(process.env.PORT ?? 8790);
 
-if (!API_KEY) {
-  console.error(
-    "\n[fatal] No SCX API key found. Run `opencode auth login` (provider id: scx), or set SCX_API in .env.\n",
-  );
-  process.exit(1);
+// Secrets are read once, above and in auth.ts, then removed from the
+// environment. The OpenCode server is spawned with a copy of our environment,
+// and the agent's shell inherits that: anything left here is one
+// `echo $SCX_API` away from a prompt-injected agent.
+for (const k of ["SCX_API", "SCX_API_KEY", "SCX_PROXY_TOKEN", "OPEN_RUNNER_PASSWORD", "OPEN_RUNNER_PASSWORD_HASH", "OPEN_RUNNER_SECRET"]) {
+  delete process.env[k];
 }
 
-const scx = new SCXClient({ apiKey: API_KEY, baseUrl: BASE_URL });
+/** Where the model key comes from: the vault once one exists, else .env, else OpenCode's own store. */
+function keySource(): VaultStatus["keySource"] {
+  if (vault.isInitialised()) return "vault";
+  if (ENV_KEY) return "env";
+  if (AUTH_KEY) return "opencode-auth";
+  return "none";
+}
+
+/** The SCX key for this call. Throws a 503 the client can explain (vault sealed, no key). */
+function apiKey(): string {
+  switch (keySource()) {
+    case "vault": {
+      const k = vault.getItem("SCX_API"); // throws 503 while sealed
+      if (!k) throw httpError(503, "The vault has no SCX_API key yet. Add it under Vault in the sidebar.");
+      return k;
+    }
+    case "env": return ENV_KEY;
+    case "opencode-auth": return AUTH_KEY;
+    default: throw httpError(503, "No SCX API key. Set up the vault in the sidebar, or run `opencode auth login` (provider id: scx).");
+  }
+}
+
+const scx = new SCXClient({ apiKey, baseUrl: BASE_URL });
 const kb = new KnowledgeBase(scx); // in-memory RAG store (POC scope)
 const app = express();
 app.disable("x-powered-by");
@@ -64,7 +91,6 @@ if (TRUST_PROXY) {
  * direct internet. Mounted before the JSON parser so request bodies pass
  * through untouched.
  */
-const PROXY_TOKEN = process.env.SCX_PROXY_TOKEN ?? "";
 const PROXY_PATHS = new Set(["/chat/completions", "/models"]);
 if (PROXY_TOKEN) {
   app.all("/scx/v1/*", async (req, res) => {
@@ -80,7 +106,7 @@ if (PROXY_TOKEN) {
       const upstream = await fetch(BASE_URL + sub + (req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""), {
         method: req.method,
         headers: {
-          Authorization: `Bearer ${API_KEY}`,
+          Authorization: `Bearer ${apiKey()}`,
           "Content-Type": req.headers["content-type"] ?? "application/json",
           Accept: req.headers.accept ?? "*/*",
         },
@@ -94,7 +120,7 @@ if (PROXY_TOKEN) {
       for await (const chunk of upstream.body as any) res.write(chunk);
       res.end();
     } catch (e) {
-      if (!res.headersSent) res.status(502).json({ error: { message: String((e as Error).message ?? e) } });
+      if (!res.headersSent) res.status((e as { status?: number }).status ?? 502).json({ error: { message: String((e as Error).message ?? e) } });
       else res.end();
     }
   });
@@ -120,6 +146,12 @@ app.use("/api", (req, res, next) => {
 app.use("/api/agent/prompt", express.json({ limit: "40mb" }));
 app.use(express.json({ limit: "4mb" }));
 mountAuth(app);
+// Any authenticated write counts as activity for the vault's auto-lock (reads
+// don't, so the sidebar's status polling can't keep it open).
+app.use("/api", (req, _res, next) => {
+  if (req.method !== "GET") vault.touch();
+  next();
+});
 
 const sendError = (res: express.Response, e: unknown) => {
   if (e instanceof SCXError) {
@@ -132,6 +164,57 @@ const sendError = (res: express.Response, e: unknown) => {
 };
 
 app.get("/api/health", (_req, res) => res.json({ ok: true, baseUrl: BASE_URL }));
+
+// --- Key vault (see shared/vault.d.ts) --------------------------------------
+// The browser does the key derivation and wrapping; these routes only store
+// ciphertext, accept an unseal key into memory, and manage sealed items.
+
+app.get("/api/vault", (_req, res) => res.json(vault.status(keySource())));
+
+app.post("/api/vault/init", (req, res) => {
+  try {
+    const { doc, dek } = req.body ?? {};
+    if (!doc || typeof dek !== "string") return res.status(400).json({ error: { message: "doc and dek required" } });
+    vault.initialise(doc, dek);
+    res.json(vault.status(keySource()));
+  } catch (e) {
+    sendError(res, e);
+  }
+});
+
+app.post("/api/vault/unseal", (req, res) => {
+  try {
+    if (typeof req.body?.dek !== "string") return res.status(400).json({ error: { message: "dek required" } });
+    vault.unseal(req.body.dek);
+    res.json(vault.status(keySource()));
+  } catch (e) {
+    sendError(res, e);
+  }
+});
+
+app.post("/api/vault/seal", (_req, res) => {
+  vault.sealVault();
+  res.json(vault.status(keySource()));
+});
+
+app.put("/api/vault/items/:name", (req, res) => {
+  try {
+    if (typeof req.body?.value !== "string") return res.status(400).json({ error: { message: "value required" } });
+    vault.setItem(req.params.name, req.body.value);
+    res.json(vault.status(keySource()));
+  } catch (e) {
+    sendError(res, e);
+  }
+});
+
+app.delete("/api/vault/items/:name", (req, res) => {
+  try {
+    vault.deleteItem(req.params.name);
+    res.json(vault.status(keySource()));
+  } catch (e) {
+    sendError(res, e);
+  }
+});
 
 /** List models (with capabilities + pricing) for the playground's model picker. */
 app.get("/api/models", async (_req, res) => {
@@ -610,6 +693,14 @@ const server = app.listen(PORT, process.env.HOST ?? "127.0.0.1", () => {
   console.log(`\n  BugXHunter backend`);
   console.log(`  listening on http://${process.env.HOST ?? "127.0.0.1"}:${PORT}`);
   console.log(`  SCX upstream: ${BASE_URL}`);
+  const src = keySource();
+  console.log(`  model key: ${{
+    vault: `vault (${vault.VAULT_FILE}, ${vault.isUnsealed() ? "unsealed" : "sealed — unlock it in the UI"})`,
+    env: ".env (SCX_API) — consider moving it into the vault",
+    "opencode-auth": "OpenCode's auth.json — consider moving it into the vault",
+    none: "none yet — set up the vault in the sidebar",
+  }[src]}`);
+  if (src === "vault" && (ENV_KEY || AUTH_KEY)) console.log("  note: a vault exists, so the key in .env / auth.json is ignored; remove it");
   console.log(`  agent: ${REMOTE_URL ? `remote OpenCode at ${REMOTE_URL}` : "local OpenCode"}`);
   if (!REMOTE_URL) console.log(`  project roots: ${ALLOWED_ROOTS.length ? ALLOWED_ROOTS.join(", ") : "any folder (set OPEN_RUNNER_ALLOWED_ROOTS to restrict)"}`);
   console.log(`  login: ${authRequired ? "password required" : "off (set OPEN_RUNNER_PASSWORD to enable)"}`);

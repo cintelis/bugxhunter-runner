@@ -70,7 +70,8 @@ export interface ChatCompletion {
 // ---------------------------------------------------------------------------
 
 export interface SCXClientOptions {
-  apiKey: string;
+  /** The key, or a function that returns it per request (so a vault can supply it after an unlock). */
+  apiKey: string | (() => string);
   baseUrl?: string;
   /** Per-request timeout in ms (default 120s). */
   timeoutMs?: number;
@@ -78,12 +79,12 @@ export interface SCXClientOptions {
 
 export class SCXClient {
   readonly baseUrl: string;
-  private readonly apiKey: string;
+  private readonly key: () => string;
   private readonly timeoutMs: number;
 
   constructor(opts: SCXClientOptions) {
     if (!opts.apiKey) throw new Error("SCXClient: apiKey is required");
-    this.apiKey = opts.apiKey;
+    this.key = typeof opts.apiKey === "function" ? opts.apiKey : () => opts.apiKey as string;
     this.baseUrl = (opts.baseUrl ?? SCX_DEFAULT_BASE_URL).replace(/\/$/, "");
     this.timeoutMs = opts.timeoutMs ?? 120_000;
   }
@@ -94,6 +95,7 @@ export class SCXClient {
     init: RequestInit & { json?: unknown } = {},
   ): Promise<Response> {
     const { json, headers, ...rest } = init;
+    const apiKey = this.key(); // may throw (vault sealed): before any network call
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), this.timeoutMs);
     try {
@@ -101,7 +103,7 @@ export class SCXClient {
         ...rest,
         signal: ctrl.signal,
         headers: {
-          Authorization: `Bearer ${this.apiKey}`,
+          Authorization: `Bearer ${apiKey}`,
           ...(json !== undefined ? { "Content-Type": "application/json" } : {}),
           ...headers,
         },

@@ -25,6 +25,34 @@ Don't open a public issue for security problems.
   image's security tools are pinned to specific versions. CodeQL scans every
   change and weekly, and Dependabot tracks updates.
 
+## The key vault
+
+API keys and other secrets the app holds are sealed at rest in `vault.json`
+(`shared/vault.d.ts` is the format). What an attacker who copies the file, the
+`runner-data` volume or the whole container gets is ciphertext and wrapped keys.
+
+- **Two factors to unlock.** The key-encryption key is HKDF-SHA-256 over the
+  concatenation of the passkey's WebAuthn PRF output (an HMAC computed inside
+  the authenticator; the seed never leaves it) and PBKDF2-SHA-256 of the
+  passphrase. Neither factor alone unwraps anything. A recovery code (128 random
+  bits, shown once) is the alternative, for a lost passkey.
+- **Symmetric only.** AES-256-GCM, HKDF-SHA-256, PBKDF2-SHA-256 (600k iterations)
+  and the PRF. No RSA or elliptic-curve step protects the data, so the design does
+  not depend on anything a quantum computer is expected to break; 256-bit
+  symmetric keys keep their margin against Grover's algorithm.
+- **The server never sees a factor.** The browser derives the key-encryption key,
+  unwraps the data key and hands only that to the backend, which keeps it in memory
+  until the vault is locked, the process exits, or `OPEN_RUNNER_VAULT_IDLE_MINUTES`
+  (default 120) pass without a model call or an API write. Items are bound to their
+  names (AES-GCM additional data), so a ciphertext can't be moved between names.
+- **The agent never sees the key.** In Docker it talks to a key-injecting proxy.
+  In local mode the backend removes every secret from its environment before
+  OpenCode is spawned, since the agent's shell inherits that environment.
+- **Not covered.** A compromise of the running backend while unlocked exposes
+  what it holds in memory; that is inherent to a server that uses the key. Model
+  inputs and tool output go to the model provider in plaintext; the vault seals
+  secrets, not engagements.
+
 ## Verifying a release yourself
 
 The release public key:

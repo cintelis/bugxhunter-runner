@@ -37,8 +37,9 @@ Playground — compare SCX models directly with full generation controls:
 - Node 22+
 - OpenCode installed and on `PATH`: `npm i -g opencode-ai`
 - The SCX provider set up in `~/.config/opencode/opencode.jsonc` and its key stored with
-  `opencode auth login` (choose **Other**, provider id `scx`). BugXHunter reads the same key, so
-  the CLI and the web UI always agree. Alternatively set `SCX_API=...` in a `.env` here.
+  `opencode auth login` (choose **Other**, provider id `scx`). In local mode OpenCode uses that
+  key itself; BugXHunter's own calls take the key from the [vault](#key-vault) once you set one
+  up, else from the same `auth.json` or `SCX_API` in a `.env` here.
 
 ## Run
 
@@ -59,12 +60,14 @@ locally too.
 ## Docker (sandboxed agent + login)
 
 ```powershell
-powershell -File docker/setup.ps1     # once: writes .env — login password, secrets, SCX key
+powershell -File docker/setup.ps1     # once: writes .env — login password and secrets
 docker compose up -d --build          # build locally, or `docker compose pull && docker compose up -d`
                                       # for the published images (set BXH_VERSION in .env to pin a signed release)
 ```
 
-Open **http://localhost:8790** and sign in with `OPEN_RUNNER_PASSWORD` from `.env`.
+Open **http://localhost:8790**, sign in with `OPEN_RUNNER_PASSWORD` from `.env`, then set up the
+[vault](#key-vault) in the sidebar and put your SCX key in it. (`setup.ps1 -CopyScxKey` copies
+the key into `.env` instead, in the clear.)
 
 Two containers:
 
@@ -97,6 +100,28 @@ Two containers:
   `docker compose cp runner:/logs ./logs`.
 - Port 8790 is published on localhost only. Put TLS (a reverse proxy) in front and set
   `COOKIE_SECURE=1`, `TRUST_PROXY=1` and `ALLOWED_HOSTS=<your domain>` before exposing it to anyone else.
+
+## Key vault
+
+The SCX key (and any other secret the agent needs) lives in a vault that is **sealed at rest**: on
+disk there is only ciphertext and wrapped keys, so a copied `.env`, volume or container yields
+nothing. Set it up from the sidebar after the first start; it takes a minute:
+
+1. **Passphrase** — something you know.
+2. **Passkey** — something you have: Windows Hello, Touch ID, Android, or a security key. The
+   authenticator derives a secret (WebAuthn PRF) that never leaves the device. Chrome, Edge and
+   Safari 18+; Firefox can't do this yet. Open the app as `http://localhost:…`, not by IP.
+3. **Recovery code** — shown once, stored nowhere. Keep it offline. It opens the vault if the
+   passkey is lost.
+
+Unlocking needs **both** the passphrase and the passkey (or the recovery code alone). The
+decryption key then lives only in the backend's memory, so after every restart, and after
+**2 hours without activity** (`OPEN_RUNNER_VAULT_IDLE_MINUTES`), someone has to unlock it before the
+agent can call a model. The crypto is symmetric only (AES-256-GCM, HKDF-SHA-256, PBKDF2-SHA-256),
+which keeps it out of reach of a quantum attacker; see [SECURITY.md](SECURITY.md#the-key-vault).
+
+While the vault is locked, model calls fail with a clear "vault is sealed" message. Without a vault
+the app falls back to `SCX_API` in `.env` or OpenCode's `auth.json`, in the clear.
 
 ## Security-testing tools (authorised use only)
 
@@ -133,8 +158,11 @@ you run this in — Docker's bridge NAT doesn't restrict outbound on its own.
 | `OPEN_RUNNER_DIR` | this folder | Default project folder |
 | `OPEN_RUNNER_AGENT_PORT` | `8791` | Port for the OpenCode server |
 | `PORT` | `8790` | Backend port |
-| `SCX_API` | key from `opencode auth login` | SCX key for the Playground (and the agent proxy in Docker) |
+| `SCX_API` | the vault, else `opencode auth login` | SCX key in the clear; ignored once a vault exists (preferred) |
+| `OPEN_RUNNER_VAULT_FILE` | `~/.config/bugxhunter/vault.json` | The sealed vault (Docker: `/data/vault.json` on the `runner-data` volume) |
+| `OPEN_RUNNER_VAULT_IDLE_MINUTES` | `120` | Auto-lock after this long without a model call or API write; `0` = never |
 | `OPEN_RUNNER_PASSWORD` | unset (no login) | Enables the login screen |
+| `OPEN_RUNNER_PASSWORD_HASH` | unset | Same, but only the scrypt hash is stored: `node scripts/hash-password.mjs` |
 | `OPEN_RUNNER_SECRET` | random per start | Signs session cookies; set it to keep sessions across restarts |
 | `COOKIE_SECURE` | unset | `1` marks the session cookie `Secure` (behind TLS) |
 | `TRUST_PROXY` | unset | Behind a reverse proxy: `1` (hop count), `loopback`, or a CIDR list — so the login rate limit sees real client IPs |

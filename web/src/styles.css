@@ -549,6 +549,39 @@ select {
 .q-desc { font-size: 12px; color: var(--muted); }
 .q-custom { font-size: 13px !important; }
 
+/* ---------- Key vault ---------- */
+.vault-row { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; }
+.vault-state {
+  display: inline-flex; align-items: center; gap: 6px; flex: 1; min-width: 0; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.vault-state::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--muted-2); flex: none; }
+.vault-state.sealed { color: var(--amber); }
+.vault-state.sealed::before { background: var(--amber); }
+.vault-state.open { color: var(--green); }
+.vault-state.open::before { background: var(--green); box-shadow: 0 0 0 3px rgba(0, 255, 65, 0.18); }
+.vault-dialog .modal { width: min(540px, 94vw); }
+.vault-dialog .modal-body { gap: 12px; }
+.vault-dialog p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+.vault-dialog p b { color: var(--text); }
+.vault-dialog label { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+.vault-dialog .link-btn { font-family: var(--mono); font-size: 11px; }
+.steps { display: flex; gap: 10px; font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted-2); }
+.steps .on { color: var(--cyan); }
+.steps .done { color: var(--green); }
+.steps .done::before { content: "✓ "; }
+.recovery-code {
+  font-family: var(--mono); font-size: 17px; letter-spacing: 1px; text-align: center; padding: 14px 10px;
+  background: var(--bg); border: 1px dashed var(--amber); border-radius: var(--radius); color: var(--text); user-select: all; word-break: break-all;
+}
+.check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); text-transform: none; letter-spacing: 0; font-family: var(--sans); }
+.check input { accent-color: var(--green); }
+.vault-items { display: flex; flex-direction: column; gap: 6px; }
+.vault-item { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 10px; border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--mono); font-size: 12px; }
+.vault-item .name { flex: 1; }
+.vault-item .ok { color: var(--green); }
+.form-status.success { background: var(--green-soft); border: 1px solid var(--green); color: var(--green); padding: 10px 14px; border-radius: var(--radius); font-family: var(--mono); font-size: 12px; }
+
 /* ---------- Diff modal ---------- */
 .overlay { position: fixed; inset: 0; background: rgba(10, 14, 20, 0.75); backdrop-filter: blur(3px); display: grid; place-items: center; z-index: 20; }
 .modal { width: min(980px, 94vw); max-height: 86vh; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); display: flex; flex-direction: column; overflow: hidden; }

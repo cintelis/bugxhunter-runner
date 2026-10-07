@@ -7,6 +7,7 @@ import type { BotConfig, KBDoc, SCXModel, ToolDef } from "./types";
 import type { RunnerSettings } from "./App";
 import { logout } from "./Login";
 import { newToolId } from "./tools";
+import { VaultPanel } from "./VaultPanel";
 
 export type Mode = "runner" | "playground";
 
@@ -336,6 +337,7 @@ export function Sidebar({
       </div>
       )}
       <div className="sidebar-foot">
+        <VaultPanel />
         {authOn && <button className="btn ghost sm block" onClick={logout}>Sign out</button>}
         {/* Same treatment as cisoai.au's "Powered by Claude": Anthropic's ivory Claude
             wordmark from its press kit, unaltered, on a dark ground with clear space. */}
