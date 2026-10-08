@@ -207,7 +207,7 @@ export function mountAuth(app: express.Express, allowedHosts: Set<string>) {
   app.post("/api/auth/recover", (req, res) => {
     if (typeof req.body?.dek !== "string") return res.status(400).json({ error: { message: "dek required" } });
     try {
-      vault.unseal(req.body.dek); // throws 401 if it doesn't open the verifier
+      vault.unseal(req.body?.dek); // throws 401 if it doesn't open the verifier
       issueSession(req, res);
       audit("auth.signin", { method: "recovery" });
       res.json({ ok: true });

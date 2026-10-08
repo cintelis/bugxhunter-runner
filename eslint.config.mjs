@@ -18,6 +18,16 @@ export default tseslint.config(
   {
     files: ["web/src/**/*.{ts,tsx}"],
     plugins: { "react-hooks": reactHooks },
-    rules: reactHooks.configs.recommended.rules,
+    rules: {
+      ...reactHooks.configs.recommended.rules,
+      // v7 adds React Compiler constraints (no setState in effects, no refs
+      // or impure calls during render, …). This app is not compiled, and the
+      // flagged spots are deliberate (prop → draft state, queue refs). Keep
+      // the two classic rules strict; revisit these when adopting the compiler.
+      "react-hooks/set-state-in-effect": "off",
+      "react-hooks/refs": "off",
+      "react-hooks/purity": "off",
+      "react-hooks/immutability": "off",
+    },
   },
 );

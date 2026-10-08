@@ -50,7 +50,7 @@ if (TRUST_PROXY) {
 const PROXY_PATHS = new Set(["/chat/completions", "/models"]);
 for (const p of Object.values(PROVIDERS)) {
   const prefix = `/${p.id}/v1`;
-  app.all(`${prefix}/*`, async (req, res) => {
+  app.all(`${prefix}/*path`, async (req, res) => { // Express 5: a wildcard needs a name
     const sub = req.path.slice(prefix.length);
     const auth = req.headers.authorization ?? "";
     if (auth !== `Bearer ${PROXY_TOKEN}`) return res.status(401).json({ error: { message: "bad proxy token" } });
@@ -150,7 +150,7 @@ app.post("/api/vault/init", (req, res) => {
 app.post("/api/vault/unseal", (req, res) => {
   try {
     if (typeof req.body?.dek !== "string") return res.status(400).json({ error: { message: "dek required" } });
-    vault.unseal(req.body.dek);
+    vault.unseal(req.body?.dek);
     res.json(vault.status(keySource("scx")));
   } catch (e) {
     sendError(res, e);
@@ -165,7 +165,7 @@ app.post("/api/vault/seal", (_req, res) => {
 app.put("/api/vault/items/:name", (req, res) => {
   try {
     if (typeof req.body?.value !== "string") return res.status(400).json({ error: { message: "value required" } });
-    vault.setItem(req.params.name, req.body.value);
+    vault.setItem(req.params.name, req.body?.value);
     res.json(vault.status(keySource("scx")));
   } catch (e) {
     sendError(res, e);
@@ -210,7 +210,7 @@ app.delete("/api/vault/methods/:id", (req, res) => {
 app.delete("/api/vault", (req, res) => {
   try {
     if (typeof req.body?.dek !== "string") return res.status(400).json({ error: { message: "dek required" } });
-    vault.destroy(req.body.dek);
+    vault.destroy(req.body?.dek);
     res.json(vault.status(keySource("scx")));
   } catch (e) {
     sendError(res, e);
