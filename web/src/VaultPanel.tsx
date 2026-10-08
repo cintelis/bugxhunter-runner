@@ -20,9 +20,10 @@ const vaultLabel = () => `BugXHunter vault (${location.hostname})`;
 /** Secrets the app itself looks for; anything else is a custom item (e.g. a target's token). */
 const CUSTOM = "__custom__";
 const KNOWN_ITEMS = [
-  { name: "SCX_API", label: "SCX.ai model key — the default provider" },
-  { name: "OPENROUTER_API_KEY", label: "OpenRouter key — unlocks its model catalogue (optional)" },
+  { name: "SCX_API", short: "SCX.ai — the default provider", label: "SCX.ai model key — the default provider" },
+  { name: "OPENROUTER_API_KEY", short: "OpenRouter — one key, its whole catalogue", label: "OpenRouter key — unlocks its model catalogue (optional)" },
 ];
+const KEY_PLACEHOLDER: Record<string, string> = { SCX_API: "sk-scx-…", OPENROUTER_API_KEY: "sk-or-…" };
 
 export function VaultPanel() {
   const [status, setStatus] = useState<VaultStatus | null>(null);
@@ -124,7 +125,8 @@ const STEPS: Step[] = ["passkey", "key", "backups"];
 function SetupDialog({ onClose }: { onClose: () => void }) {
   const [step, setStep] = useState<Step>("passkey");
   const [enrolled, setEnrolled] = useState<EnrolledPasskey | null>(null);
-  const [scxKey, setScxKey] = useState("");
+  const [keyName, setKeyName] = useState("SCX_API");
+  const [keyValue, setKeyValue] = useState("");
   const [pass, setPass] = useState("");
   const [pass2, setPass2] = useState("");
   const [built, setBuilt] = useState<Awaited<ReturnType<typeof buildVault>> | null>(null);
@@ -150,7 +152,7 @@ function SetupDialog({ onClose }: { onClose: () => void }) {
     if (!enrolled) return;
     setBusy(true); setError(null);
     try {
-      setBuilt(await buildVault({ ...enrolled, label: vaultLabel(), items: scxKey.trim() ? { SCX_API: scxKey.trim() } : {} }));
+      setBuilt(await buildVault({ ...enrolled, label: vaultLabel(), items: keyValue.trim() ? { [keyName]: keyValue.trim() } : {} }));
       setStep("backups");
     } catch (e) {
       setError((e as Error).message);
@@ -194,9 +196,13 @@ function SetupDialog({ onClose }: { onClose: () => void }) {
 
       {step === "key" && (
         <>
-          <p>Passkey enrolled. Add the SCX API key now, or later from the keys dialog. It goes straight into the sealed vault; <code className="mono">.env</code> can then drop <code className="mono">SCX_API</code>.</p>
-          <label htmlFor="v-scx">SCX API key (optional)</label>
-          <input id="v-scx" type="password" autoFocus autoComplete="off" placeholder="sk-scx-…" value={scxKey} onChange={(e) => setScxKey(e.target.value)} />
+          <p>Passkey enrolled. Add a model key now, or later from the keys dialog (where you can add the other provider too). It goes straight into the sealed vault; <code className="mono">.env</code> can then drop the key.</p>
+          <label htmlFor="v-provider">Provider</label>
+          <select id="v-provider" className="mono" value={keyName} onChange={(e) => setKeyName(e.target.value)}>
+            {KNOWN_ITEMS.map((k) => <option key={k.name} value={k.name}>{k.short}</option>)}
+          </select>
+          <label htmlFor="v-key">{keyName} (optional)</label>
+          <input id="v-key" type="password" autoFocus autoComplete="off" placeholder={KEY_PLACEHOLDER[keyName] ?? ""} value={keyValue} onChange={(e) => setKeyValue(e.target.value)} />
           <div className="perm-actions center"><button className="btn primary wide" disabled={busy} onClick={toBackups}>{busy ? "sealing…" : "next →"}</button></div>
         </>
       )}
