@@ -15,11 +15,17 @@ RUN apt-get update \
 COPY docker/egress-logger.mjs /usr/local/lib/egress-logger.mjs
 
 ARG OPENCODE_VERSION=1.18.34
-RUN npm install -g opencode-ai@${OPENCODE_VERSION} && npm cache clean --force
+# opencode-ai's postinstall hard-links the CPU-matched binary into bin/ and
+# leaves the x64 "baseline" (no-AVX2) package behind as a second 178 MB copy.
+# Every x86 CPU since 2013 has AVX2, so that copy is dropped (no-op on arm64).
+RUN npm install -g opencode-ai@${OPENCODE_VERSION} && npm cache clean --force \
+ && rm -rf /usr/local/lib/node_modules/opencode-ai/node_modules/opencode-*-baseline
 
-# ── Security-testing toolchain (opt-in: --build-arg SECTOOLS=0 to skip) ───────
+# ── Security-testing toolchain (--build-arg SECTOOLS=0 builds the `-slim` flavour) ──
 # Standard open-source pentest tools for AUTHORISED testing only. Baked into the
-# image so a fresh container is ready to scan without downloading anything.
+# image so a fresh container is ready to scan without downloading anything. The
+# slim flavour (ghcr.io/…/bugxhunter-agent:<tag>-slim) skips them: half the
+# download, for code review of repositories only.
 # Raw-socket tools (nmap, ping, traceroute) rely on the NET_RAW capability
 # granted in docker-compose.yml.
 ARG SECTOOLS=1

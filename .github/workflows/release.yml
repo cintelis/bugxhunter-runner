@@ -3,9 +3,11 @@
 # until the maintainer verifies and signs it offline (scripts/sign-release.sh).
 #
 # Images are built natively for linux/amd64 and linux/arm64 (Apple Silicon,
-# Graviton) on GitHub's own runners of each architecture, pushed by digest,
-# and joined into one multi-arch tag per image; the attestation is on that
-# manifest list, which is what images.txt pins and `docker compose pull` gets.
+# Graviton) on GitHub's own runners of each architecture, pushed by digest
+# with zstd-compressed layers, and joined into one multi-arch tag per image;
+# the attestation is on that manifest list, which is what images.txt pins and
+# `docker compose pull` gets. The agent comes in two flavours: the default
+# with the scan toolchain, and `-slim` without it.
 name: Release
 
 on:
@@ -20,7 +22,7 @@ env:
   IMAGE_AGENT: ghcr.io/${{ github.repository_owner }}/bugxhunter-agent
 
 jobs:
-  # Fail fast, before four image builds: the tag must be the package version.
+  # Fail fast, before six image builds: the tag must be the package version.
   prepare:
     runs-on: ubuntu-latest
     outputs:
@@ -45,9 +47,14 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        image: [runner, agent]
-        arch: [amd64, arm64]
-    # native runners: no QEMU, so the agent image's toolchain and OpenCode warm-up run at full speed
+        include:
+          - { image: runner, flavor: "",      arch: amd64 }
+          - { image: runner, flavor: "",      arch: arm64 }
+          - { image: agent,  flavor: "",      arch: amd64 }
+          - { image: agent,  flavor: "",      arch: arm64 }
+          - { image: agent,  flavor: "-slim", arch: amd64 }
+          - { image: agent,  flavor: "-slim", arch: arm64 }
+    # native runners: no QEMU, so the agent toolchain and the OpenCode warm-up run at full speed
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     permissions:
       contents: read
@@ -66,16 +73,18 @@ jobs:
           context: .
           file: docker/${{ matrix.image }}.Dockerfile
           platforms: linux/${{ matrix.arch }}
+          build-args: SECTOOLS=${{ matrix.flavor == '-slim' && '0' || '1' }}
           tags: ghcr.io/${{ github.repository_owner }}/bugxhunter-${{ matrix.image }}
-          outputs: type=image,push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ matrix.arch }}
+          # zstd layers: 10-15% smaller than gzip and faster to unpack (Docker 23+)
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=true,compression=zstd,compression-level=3,force-compression=true
+          cache-from: type=gha,scope=${{ matrix.image }}${{ matrix.flavor }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}${{ matrix.flavor }}-${{ matrix.arch }}
       - run: |
           mkdir -p /tmp/digests
-          echo "${{ steps.build.outputs.digest }}" > "/tmp/digests/${{ matrix.image }}-${{ matrix.arch }}"
+          echo "${{ steps.build.outputs.digest }}" > "/tmp/digests/${{ matrix.image }}${{ matrix.flavor }}-${{ matrix.arch }}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: digest-${{ matrix.image }}-${{ matrix.arch }}
+          name: digest-${{ matrix.image }}${{ matrix.flavor }}-${{ matrix.arch }}
           path: /tmp/digests/*
           retention-days: 1
 
@@ -90,6 +99,7 @@ jobs:
     outputs:
       runner_digest: ${{ steps.join.outputs.runner_digest }}
       agent_digest: ${{ steps.join.outputs.agent_digest }}
+      agent_slim_digest: ${{ steps.join.outputs.agent_slim_digest }}
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -108,15 +118,17 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -eu
-          for image in runner agent; do
+          # key = image + flavour suffix, as the digest files are named
+          for key in runner agent agent-slim; do
+            image="${key%-slim}"; flavor="${key#"$image"}"
             ref="ghcr.io/${{ github.repository_owner }}/bugxhunter-$image"
             refs=""
-            for f in /tmp/digests/$image-*; do refs="$refs $ref@$(cat "$f")"; done
+            for f in /tmp/digests/$key-amd64 /tmp/digests/$key-arm64; do refs="$refs $ref@$(cat "$f")"; done
             # shellcheck disable=SC2086
-            docker buildx imagetools create -t "$ref:v$VERSION" $refs
-            digest=$(docker buildx imagetools inspect "$ref:v$VERSION" --format '{{json .Manifest.Digest}}' | tr -d '"')
-            echo "$image: $ref:v$VERSION@$digest"
-            echo "${image}_digest=$digest" >> "$GITHUB_OUTPUT"
+            docker buildx imagetools create -t "$ref:v$VERSION$flavor" $refs
+            digest=$(docker buildx imagetools inspect "$ref:v$VERSION$flavor" --format '{{json .Manifest.Digest}}' | tr -d '"')
+            echo "$key: $ref:v$VERSION$flavor@$digest"
+            echo "$(echo "$key" | tr - _)_digest=$digest" >> "$GITHUB_OUTPUT"
           done
       # verifiable with: gh attestation verify oci://ghcr.io/cintelis/bugxhunter-runner:vX.Y.Z --repo cintelis/bugxhunter-runner
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -128,6 +140,11 @@ jobs:
         with:
           subject-name: ${{ env.IMAGE_AGENT }}
           subject-digest: ${{ steps.join.outputs.agent_digest }}
+          push-to-registry: true
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_AGENT }}
+          subject-digest: ${{ steps.join.outputs.agent_slim_digest }}
           push-to-registry: true
 
   release:
@@ -179,6 +196,7 @@ jobs:
           {
             echo "${IMAGE_RUNNER}:v${VERSION}@${{ needs.manifests.outputs.runner_digest }}"
             echo "${IMAGE_AGENT}:v${VERSION}@${{ needs.manifests.outputs.agent_digest }}"
+            echo "${IMAGE_AGENT}:v${VERSION}-slim@${{ needs.manifests.outputs.agent_slim_digest }}"
           } > dist/images.txt
           (cd dist && for f in *.tar.gz images.txt; do sha256sum "$f"; done > checksums.txt && cat images.txt checksums.txt)
 
@@ -207,7 +225,7 @@ jobs:
   # The same build, as `npx bugxhunter`. Published with npm provenance (the
   # package is attested to this workflow run; `npm audit signatures` checks it).
   # Needs the package's "trusted publisher" on npmjs.com to be this repository
-  # and this workflow file; no token is stored anywhere.
+  # and this workflow file, with direct publishing allowed; no token is stored.
   npm:
     needs: release
     runs-on: ubuntu-latest

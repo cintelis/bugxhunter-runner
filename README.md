@@ -44,7 +44,8 @@ npx bugxhunter docker     # the sandboxed stack instead (needs Docker Desktop): 
 ```
 
 `npm i -g bugxhunter` makes it a plain `bugxhunter` command; `bugxhunter --help` lists the
-options (`--port`, `--dir`, `--no-open`; `docker down|logs|ps`; `vault reset`). The current
+options (`--port`, `--dir`, `--no-open`; `docker --slim|--full`, `docker down|logs|ps`;
+`vault reset`). The current
 folder becomes the default project. Then, in the sidebar: set up the [vault](#key-vault) with a
 passkey, add your SCX.ai key as `SCX_API`, and [connect GitHub](#github-repositories-read-only).
 The package is published by the release workflow with npm provenance: `npm audit signatures`
@@ -83,8 +84,12 @@ docker compose up -d --build          # build locally, or `docker compose pull &
 ```
 
 The images are multi-arch (linux/amd64 and linux/arm64, so Apple Silicon and Graviton run them
-natively). Open **http://localhost:8790** and set up the [vault](#key-vault) in the sidebar: it
-seals your SCX key and turns on passkey sign-in. (`setup.ps1 -CopyScxKey` copies
+natively) with zstd-compressed layers (Docker 23+). The agent image comes in two flavours: the
+default carries the scan toolchain (nuclei, nmap, httpx, katana, ffuf, gitleaks, testssl and
+wordlists, about 400 MB to download); **`-slim`** leaves it out for code review only, about half
+the size (`npx bugxhunter docker --slim`, or `BXH_AGENT_FLAVOR=-slim` in `.env`). Open
+**http://localhost:8790** and set up the [vault](#key-vault) in the sidebar: it seals your SCX
+key and turns on passkey sign-in. (`setup.ps1 -CopyScxKey` copies
 the key into `.env` instead, in the clear.)
 
 Two containers:

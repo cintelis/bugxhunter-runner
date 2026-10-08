@@ -61,7 +61,8 @@ services:
     restart: unless-stopped
 
   agent:
-    image: ghcr.io/cintelis/bugxhunter-agent:${BXH_VERSION:-latest}
+    # BXH_AGENT_FLAVOR=-slim picks the image without the scan toolchain (code review only).
+    image: ghcr.io/cintelis/bugxhunter-agent:${BXH_VERSION:-latest}${BXH_AGENT_FLAVOR:-}
     build:
       context: .
       dockerfile: docker/agent.Dockerfile
@@ -92,7 +93,7 @@ services:
   # /logs/egress-<date>.jsonl. Log-only — it never blocks traffic and
   # is not in the data path, so scans keep full speed.
   egress-logger:
-    image: ghcr.io/cintelis/bugxhunter-agent:${BXH_VERSION:-latest}
+    image: ghcr.io/cintelis/bugxhunter-agent:${BXH_VERSION:-latest}${BXH_AGENT_FLAVOR:-}
     command: ["node", "/usr/local/lib/egress-logger.mjs"]
     network_mode: "service:agent"        # see the agent's connections
     user: root                           # needs CAP_NET_RAW effective (agent image defaults to non-root)

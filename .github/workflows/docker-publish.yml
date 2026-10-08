@@ -1,8 +1,9 @@
-# Publishes the two images to GitHub Container Registry on every push to master:
-#   ghcr.io/<owner>/bugxhunter-runner  and  ghcr.io/<owner>/bugxhunter-agent
-# Tags: `latest` and `sha-<short>`, each a multi-arch manifest (linux/amd64 +
-# linux/arm64, built natively on runners of each architecture). Versioned,
-# signed images come from release.yml instead.
+# Publishes the images to GitHub Container Registry on every push to master:
+#   ghcr.io/<owner>/bugxhunter-runner, bugxhunter-agent and bugxhunter-agent:*-slim
+# Tags: `latest` and `sha-<short>` (plus `latest-slim` / `sha-<short>-slim` for
+# the agent without the scan toolchain), each a multi-arch manifest
+# (linux/amd64 + linux/arm64, built natively on runners of each architecture)
+# with zstd-compressed layers. Versioned, signed images come from release.yml.
 name: Docker publish
 
 on:
@@ -18,8 +19,13 @@ jobs:
   build:
     strategy:
       matrix:
-        image: [runner, agent]
-        arch: [amd64, arm64]
+        include:
+          - { image: runner, flavor: "",      arch: amd64 }
+          - { image: runner, flavor: "",      arch: arm64 }
+          - { image: agent,  flavor: "",      arch: amd64 }
+          - { image: agent,  flavor: "",      arch: arm64 }
+          - { image: agent,  flavor: "-slim", arch: amd64 }
+          - { image: agent,  flavor: "-slim", arch: arm64 }
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
@@ -35,16 +41,17 @@ jobs:
           context: .
           file: docker/${{ matrix.image }}.Dockerfile
           platforms: linux/${{ matrix.arch }}
+          build-args: SECTOOLS=${{ matrix.flavor == '-slim' && '0' || '1' }}
           tags: ghcr.io/${{ github.repository_owner }}/bugxhunter-${{ matrix.image }}
-          outputs: type=image,push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ matrix.arch }}
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=true,compression=zstd,compression-level=3,force-compression=true
+          cache-from: type=gha,scope=${{ matrix.image }}${{ matrix.flavor }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}${{ matrix.flavor }}-${{ matrix.arch }}
       - run: |
           mkdir -p /tmp/digests
-          echo "${{ steps.build.outputs.digest }}" > "/tmp/digests/${{ matrix.image }}-${{ matrix.arch }}"
+          echo "${{ steps.build.outputs.digest }}" > "/tmp/digests/${{ matrix.image }}${{ matrix.flavor }}-${{ matrix.arch }}"
       - uses: actions/upload-artifact@v4
         with:
-          name: digest-${{ matrix.image }}-${{ matrix.arch }}
+          name: digest-${{ matrix.image }}${{ matrix.flavor }}-${{ matrix.arch }}
           path: /tmp/digests/*
           retention-days: 1
 
@@ -67,11 +74,12 @@ jobs:
         run: |
           set -eu
           short="${GITHUB_SHA::7}"
-          for image in runner agent; do
+          for key in runner agent agent-slim; do
+            image="${key%-slim}"; flavor="${key#"$image"}"
             ref="ghcr.io/${{ github.repository_owner }}/bugxhunter-$image"
             refs=""
-            for f in /tmp/digests/$image-*; do refs="$refs $ref@$(cat "$f")"; done
+            for f in /tmp/digests/$key-amd64 /tmp/digests/$key-arm64; do refs="$refs $ref@$(cat "$f")"; done
             # shellcheck disable=SC2086
-            docker buildx imagetools create -t "$ref:latest" -t "$ref:sha-$short" $refs
-            docker buildx imagetools inspect "$ref:latest" | head -20
+            docker buildx imagetools create -t "$ref:latest$flavor" -t "$ref:sha-$short$flavor" $refs
+            docker buildx imagetools inspect "$ref:latest$flavor" | head -12
           done

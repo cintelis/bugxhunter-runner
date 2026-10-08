@@ -4,7 +4,7 @@
  *
  *   bugxhunter                      run the runner here, UI on http://localhost:8790
  *   bugxhunter [--port N] [--dir P] [--no-open]
- *   bugxhunter docker [compose args] the sandboxed stack: writes ~/.config/bugxhunter/docker
+ *   bugxhunter docker [--slim|--full] the sandboxed stack: writes ~/.config/bugxhunter/docker
  *                                   (compose file + .env secrets), pulls the signed images
  *                                   matching this version, starts it, opens the UI.
  *                                   With args, runs `docker compose <args>` there (down, logs…).
@@ -39,6 +39,8 @@ if (flag("--help") || flag("-h")) {
     --no-open                      don't open the browser
   bugxhunter docker                the sandboxed stack via Docker (writes ~/.config/bugxhunter/docker, pulls the
                                    signed images for v${pkg.version}, starts, opens the UI)
+    --slim                         the agent image without the scan toolchain: half the download, code review only
+    --full                         back to the full image (the default)
   bugxhunter docker <args>         docker compose <args> in that folder, e.g. down, logs -f, ps
   bugxhunter vault reset           delete the key vault when every unlock factor is lost
 
@@ -110,6 +112,8 @@ function openBrowser(url) {
 // --- docker mode ----------------------------------------------------------------------
 
 async function dockerMode(rest) {
+  const slim = flag("--slim"), full = flag("--full");
+  rest = rest.filter((a) => a !== "--slim" && a !== "--full");
   const dir = path.join(CONFIG_DIR, "docker");
   if (spawnSync("docker", ["compose", "version"], { stdio: "ignore" }).error) {
     console.error("Docker is not installed or not running. Install Docker Desktop (https://docs.docker.com/get-docker/) and try again.");
@@ -131,12 +135,16 @@ async function dockerMode(rest) {
   if (!vals.get("OPEN_RUNNER_SECRET")) vals.set("OPEN_RUNNER_SECRET", crypto.randomBytes(32).toString("base64url"));
   if (!vals.get("SCX_PROXY_TOKEN")) vals.set("SCX_PROXY_TOKEN", crypto.randomBytes(32).toString("base64url"));
   vals.set("BXH_VERSION", `v${pkg.version}`);
+  // The agent flavour sticks until changed: `--slim` once, then plain `docker` keeps it.
+  if (slim) vals.set("BXH_AGENT_FLAVOR", "-slim");
+  if (full) vals.delete("BXH_AGENT_FLAVOR");
+  const flavor = vals.get("BXH_AGENT_FLAVOR") ?? "";
   fs.writeFileSync(envFile, [...vals].map(([k, v]) => `${k}=${v}`).join("\n") + "\n", { mode: 0o600 });
   console.log(`${fresh ? "Created" : "Updated"} ${dir} (compose file + .env; secrets are random and never printed)`);
 
   const compose = (a) => spawnSync("docker", ["compose", ...a], { cwd: dir, stdio: "inherit" }).status ?? 1;
   if (rest.length) process.exit(compose(rest));
-  console.log(`Pulling the signed images for v${pkg.version} (the agent image is large the first time)…`);
+  console.log(`Pulling the signed images for v${pkg.version}${flavor ? " (slim agent: no scan toolchain)" : " (the agent image is large the first time; --slim halves it)"}…`);
   if (compose(["pull"]) !== 0) process.exit(1);
   if (compose(["up", "-d"]) !== 0) process.exit(1);
   const port = vals.get("OPEN_RUNNER_PORT") ?? "8790";
