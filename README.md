@@ -44,8 +44,8 @@ npx bugxhunter docker     # the sandboxed stack instead (needs Docker Desktop): 
 ```
 
 `npm i -g bugxhunter` makes it a plain `bugxhunter` command; `bugxhunter --help` lists the
-options (`--port`, `--dir`, `--no-open`; `docker --slim|--full`, `docker down|logs|ps`;
-`vault reset`). The current
+options (`--port`, `--dir`, `--no-open`; `docker --slim|--full`, `docker down|logs|ps`,
+`docker export <path> [dest]`; `vault reset`). The current
 folder becomes the default project. Then, in the sidebar: set up the [vault](#key-vault) with a
 passkey, add your SCX.ai key as `SCX_API`, and [connect GitHub](#github-repositories-read-only).
 The package is published by the release workflow with npm provenance: `npm audit signatures`
@@ -111,6 +111,12 @@ Two containers:
   ```
 
   (Plain `docker compose cp` also copies in, but leaves files owned by root, so the agent can't edit them.)
+- **Getting files out**: `/workspace` is a Docker volume, so there is no host folder to open. Any
+  file path the agent prints under the project (for example "Saved as
+  `/workspace/acme/app/analysis.md`") is a download link in the UI, served only for files inside
+  the project folder. From a terminal, `npx bugxhunter@latest docker export acme/app/analysis.md`
+  (or an absolute `/workspace/...` path; optional destination as the second argument) copies a file
+  or folder out.
 - **The agent has direct internet** so scan tools run at full speed (`nmap`/`ping`/raw DNS work
   via `NET_RAW`). Outbound connections are logged, not restricted — **only point the agent at targets you are authorised to test, and run this on a
   trusted machine/VM.**

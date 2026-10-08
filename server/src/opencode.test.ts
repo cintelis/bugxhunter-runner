@@ -1,5 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { parseModelId, query, toUiEvent, toUiMessages } from "./opencode.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { parseModelId, projectFile, query, toUiEvent, toUiMessages } from "./opencode.js";
+
+describe("projectFile", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bxh-proj-"));
+  fs.mkdirSync(path.join(dir, "out"));
+  fs.writeFileSync(path.join(dir, "out", "report.md"), "# r");
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "bxh-outside-"));
+  fs.writeFileSync(path.join(outside, "secret.txt"), "x");
+
+  it("accepts an absolute or project-relative path to a file inside the project", () => {
+    const want = fs.realpathSync(path.join(dir, "out", "report.md"));
+    expect(projectFile(dir, path.join(dir, "out", "report.md"))).toBe(want);
+    expect(projectFile(dir, "out/report.md")).toBe(want);
+  });
+  it("refuses escapes, folders, missing files and empty paths", () => {
+    expect(() => projectFile(dir, "../" + path.basename(outside) + "/secret.txt")).toThrow(/Not inside/);
+    expect(() => projectFile(dir, path.join(outside, "secret.txt"))).toThrow(/Not inside/);
+    expect(() => projectFile(dir, "out")).toThrow(/Not a file/);
+    expect(() => projectFile(dir, "out/missing.md")).toThrow(/No such file/);
+    expect(() => projectFile(dir, "")).toThrow(/path required/);
+  });
+});
 
 describe("parseModelId", () => {
   it("splits provider/model at the first slash", () => {

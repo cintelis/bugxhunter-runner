@@ -6,6 +6,7 @@ import {
 } from "./agentApi";
 import type { FilePart, MessagePart, PermissionRequest, ToolPart } from "../../shared/agent";
 import { Markdown } from "./Markdown";
+import { setFileRoots } from "./filelinks";
 import { Composer, LOCAL_COMMANDS, type AgentName } from "./Composer";
 import { formatBytes, formatTokens } from "./format";
 import { TodoPanel } from "./TodoPanel";
@@ -100,6 +101,8 @@ export function AgentPanel({
 
   useEffect(() => {
     agentCommands(directory).then(setCommands).catch(() => {});
+    // Paths the agent prints under the project (or /workspace in Docker) become download links.
+    setFileRoots(directory, ["/workspace"]);
   }, [directory]);
 
   // --- scrolling: follow new output only while the user is at the bottom ---
@@ -598,7 +601,7 @@ function AgentRow({ msg }: { msg: AgentMessage }) {
         {msg.parts.map((p, i) =>
           p.type === "tool" ? <ToolCard key={p.callID} t={p} />
           : p.type === "reasoning" ? <Reasoning key={p.id} text={p.text} />
-          : p.type === "text" ? <Markdown key={p.id} text={p.text} />
+          : p.type === "text" ? <Markdown key={p.id} text={p.text} files />
           : <span key={p.id ?? i} />,
         )}
         {msg.error && <div className="error-banner">{msg.error}</div>}

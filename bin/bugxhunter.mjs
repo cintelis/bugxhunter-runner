@@ -8,6 +8,8 @@
  *                                   (compose file + .env secrets), pulls the signed images
  *                                   matching this version, starts it, opens the UI.
  *                                   With args, runs `docker compose <args>` there (down, logs…).
+ *   bugxhunter docker export <path> [dest]  copy a file or folder out of /workspace (a Docker volume
+ *                                   Finder cannot open) into dest, default: here
  *   bugxhunter vault reset           break-glass: delete the key vault (see scripts/vault-reset.mjs)
  *
  * Local mode runs the agent on this machine: OpenCode is a dependency of this
@@ -42,6 +44,9 @@ if (flag("--help") || flag("-h")) {
     --slim                         the agent image without the scan toolchain: half the download, code review only
     --full                         back to the full image (the default)
   bugxhunter docker <args>         docker compose <args> in that folder, e.g. down, logs -f, ps
+  bugxhunter docker export <path> [dest]
+                                   copy a file or folder out of /workspace into dest (default: here);
+                                   <path> may be absolute (/workspace/acme/app/report.md) or relative to /workspace
   bugxhunter vault reset           delete the key vault when every unlock factor is lost
 
 Docs: https://github.com/cintelis/bugxhunter-runner`);
@@ -143,6 +148,16 @@ async function dockerMode(rest) {
   console.log(`${fresh ? "Created" : "Updated"} ${dir} (compose file + .env; secrets are random and never printed)`);
 
   const compose = (a) => spawnSync("docker", ["compose", ...a], { cwd: dir, stdio: "inherit" }).status ?? 1;
+  if (rest[0] === "export") {
+    const src = rest[1];
+    if (!src) { console.error("usage: bugxhunter docker export <path-in-workspace> [dest]"); process.exit(2); }
+    const inside = src.startsWith("/") ? path.posix.normalize(src) : path.posix.join("/workspace", src);
+    if (!inside.startsWith("/workspace/")) { console.error("the path must be inside /workspace"); process.exit(2); }
+    const dest = path.resolve(rest[2] ?? path.posix.basename(inside));
+    const code = compose(["cp", `agent:${inside}`, dest]);
+    if (code === 0) console.log(`copied ${inside} → ${dest}`);
+    process.exit(code);
+  }
   if (rest.length) process.exit(compose(rest));
   console.log(`Pulling the signed images for v${pkg.version}${flavor ? " (slim agent: no scan toolchain)" : " (the agent image is large the first time; --slim halves it)"}…`);
   if (compose(["pull"]) !== 0) process.exit(1);

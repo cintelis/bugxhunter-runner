@@ -207,6 +207,26 @@ export async function resolveDirectory(dir?: unknown): Promise<string> {
   return abs;
 }
 
+/**
+ * A file inside a (validated) project folder, for the download route. The
+ * path may be absolute (as the agent prints it) or relative to the project;
+ * either way it must stay inside the project, after symlinks are resolved,
+ * and it must be a regular file. In Docker the runner mounts the same
+ * workspace volume at the same path, so the agent's paths are its own.
+ */
+export function projectFile(directory: string, file: unknown): string {
+  const raw = typeof file === "string" ? file.trim() : "";
+  if (!raw) throw httpError(400, "path required");
+  const P = REMOTE_URL ? path.posix : path;
+  const abs = P.isAbsolute(raw) ? P.normalize(raw) : P.resolve(directory, raw);
+  if (!isInside(abs, directory)) throw httpError(400, `Not inside the project: ${raw}`);
+  let real: string;
+  try { real = fs.realpathSync(abs); } catch { throw httpError(404, `No such file: ${raw}`); }
+  if (!isInside(real, fs.realpathSync(directory))) throw httpError(400, `Not inside the project: ${raw}`);
+  if (!fs.statSync(real).isFile()) throw httpError(400, `Not a file: ${raw}`);
+  return real;
+}
+
 /** SDK client scoped to one project folder. */
 export async function getClient(directory: string): Promise<Client> {
   const { url } = await getServer();

@@ -14,7 +14,7 @@ import { SCXError, type ChatParams } from "./scx.js";
 import { PROVIDERS, PROXY_TOKEN, PORT, OPENROUTER_MODELS, apiKey, clients, clientFor, keySource, listModels } from "./providers.js";
 import { KnowledgeBase, buildContextBlock } from "./rag.js";
 import {
-  getClient, serverUrl, resolveDirectory, listAgentModels, toUiEvent, toUiMessages, parseModelId, oc, query, httpError,
+  getClient, serverUrl, resolveDirectory, projectFile, listAgentModels, toUiEvent, toUiMessages, parseModelId, oc, query, httpError,
   DEFAULT_DIRECTORY, DEFAULT_MODEL, REMOTE_URL, REPO_ROOT, ALLOWED_ROOTS,
 } from "./opencode.js";
 import type { PendingRequests, SessionSummary, SlashCommand, StoredMessage, Todo } from "../../shared/agent.js";
@@ -390,6 +390,21 @@ app.get("/api/agent/status", async (_req, res) => {
 app.get("/api/agent/directory", async (req, res) => {
   try {
     res.json({ directory: await resolveDirectory(req.query.directory) });
+  } catch (e) {
+    sendError(res, e);
+  }
+});
+
+/**
+ * Download a file the agent wrote (the UI links paths it prints). The file
+ * must be inside the project folder; see projectFile.
+ */
+app.get("/api/agent/file", async (req, res) => {
+  try {
+    const directory = await resolveDirectory(req.query.directory);
+    const file = projectFile(directory, req.query.path);
+    audit("file.download", { directory, file });
+    res.download(file, path.basename(file));
   } catch (e) {
     sendError(res, e);
   }
