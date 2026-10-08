@@ -246,6 +246,7 @@ jobs:
       - name: Smoke-test the package
         run: |
           set -eu
-          cd dist/npm && npm pack --silent >/dev/null
+          # pack into a temp folder: a tarball left inside dist/npm would be published as part of the package
+          cd dist/npm && npm pack --silent --pack-destination "$RUNNER_TEMP" >/dev/null
           node bin/bugxhunter.mjs --version | grep -qx "$(node -p "require('./package.json').version")"
       - run: npm publish ./dist/npm --provenance --access public
