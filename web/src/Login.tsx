@@ -125,7 +125,7 @@ function Login({ onSuccess }: { onSuccess: () => void }) {
         <TerminalBar title="bugxhunter@redteam: ~/login" />
         <div className="login-body">
           <span className="logo login-mark" style={{ fontSize: 34 }} aria-label="BugXHunter"><Wordmark cursor /></span>
-          <div className="login-tag">Your Security Testing Partner</div>
+          <div className="login-tag">Open-source AI security testing</div>
 
           {mode === "passkey" && (
             <>
