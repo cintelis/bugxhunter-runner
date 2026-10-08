@@ -164,7 +164,7 @@ as well:
    **Playground** then lists OpenRouter's models under their own heading, addressed as
    `openrouter/<id>`.
 2. For the **agent**, list the ids it may use in `OPENROUTER_MODELS` (comma-separated, e.g.
-   `anthropic/claude-sonnet-4.5,openai/gpt-5`), in `.env`. Only those appear in the Runner's model
+   `anthropic/claude-sonnet-4.5,openai/gpt-6.1-sol`), in `.env`. Only those appear in the Runner's model
    picker, as `openrouter/…`. In Docker, both containers read the same variable.
 
 The agent never holds the key: its calls go to the runner's `/openrouter/v1` proxy with the proxy

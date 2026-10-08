@@ -51,7 +51,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   },
 };
 
-/** OpenRouter ids the agent may use (OPENROUTER_MODELS=anthropic/claude-sonnet-4.5,openai/gpt-5). */
+/** OpenRouter ids the agent may use (OPENROUTER_MODELS=anthropic/claude-sonnet-4.5,openai/gpt-6.1-sol). */
 export const OPENROUTER_MODELS = (process.env.OPENROUTER_MODELS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
 
 export const PORT = Number(process.env.PORT ?? 8790);
