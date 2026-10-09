@@ -36,6 +36,15 @@ Wordlists: `/opt/wordlists` (common.txt, common-api-endpoints-mazen160.txt,
 raft-medium-directories.txt, subdomains-top1million-5000.txt, LFI-Jhaddix.txt, Generic-SQLi.txt,
 XSS-Jhaddix.txt). Save findings under the project folder.
 
+## Screenshots and other images
+
+Not every model can view images (GLM-5.3 cannot; it receives the bytes as text). If a `read` of an
+image comes back as unreadable or you are told the model has no image input, do not guess and do
+not try to decode the file yourself: delegate to the **`vision`** subagent via the `task` tool with
+the file path(s) and what to look for (e.g. "read /workspace/x/shot.png — what is the chat widget's
+input placeholder and send-button label?"). It runs on an image-capable model and reports back
+what is visible. Models with image input can read image files directly.
+
 ## Optional: LLM red-teaming tools (not installed — add them when a task needs them)
 
 `promptfoo` and `garak` are deliberately NOT baked into the image: installed they are about

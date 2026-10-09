@@ -19,6 +19,18 @@
     },
     "plan": {
       "model": "scx/GLM-5.3"
+    },
+    "vision": {
+      "model": "scx/GLM-5.3-Flash",
+      "mode": "subagent",
+      "description": "Looks at screenshots and other images and reports exactly what they show. Use when the current model cannot view images: give it the file path(s) and what to look for.",
+      "prompt": "You look at images for another agent that cannot. Read the image file(s) you are given (screenshots, diagrams, photos) with the read tool and report precisely what they show: visible text verbatim, layout, UI elements and their labels/placement, error messages, colours where they matter. Do not speculate beyond what is visible. Do not run commands or edit files.",
+      "tools": {
+        "bash": false,
+        "edit": false,
+        "write": false,
+        "task": false
+      }
     }
   },
   "provider": {

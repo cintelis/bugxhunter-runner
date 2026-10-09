@@ -39,6 +39,19 @@ export const WORKSPACE_ROOT = process.env.OPEN_RUNNER_WORKSPACE ?? "/workspace";
 export const DEFAULT_DIRECTORY = process.env.OPEN_RUNNER_DIR ?? (REMOTE_URL ? WORKSPACE_ROOT : REPO_ROOT);
 
 export const DEFAULT_MODEL = process.env.OPEN_RUNNER_MODEL ?? "scx/GLM-5.3";
+/**
+ * Model for the `vision` subagent. Not every model takes images (SCX's GLM-5.3
+ * receives an attachment as base64 text and tries to decode it by hand);
+ * the main agent delegates screenshots to this one instead.
+ */
+export const VISION_MODEL = process.env.OPEN_RUNNER_VISION_MODEL ?? "scx/GLM-5.3-Flash";
+export const VISION_AGENT = {
+  model: VISION_MODEL,
+  mode: "subagent",
+  description: "Looks at screenshots and other images and reports exactly what they show. Use when the current model cannot view images: give it the file path(s) and what to look for.",
+  prompt: "You look at images for another agent that cannot. Read the image file(s) you are given (screenshots, diagrams, photos) with the read tool and report precisely what they show: visible text verbatim, layout, UI elements and their labels/placement, error messages, colours where they matter. Do not speculate beyond what is visible. Do not run commands or edit files.",
+  tools: { bash: false, edit: false, write: false, task: false },
+} as const;
 
 /**
  * Config layered on the user's own OpenCode setup. With OPENROUTER_MODELS set,
@@ -52,6 +65,7 @@ async function inlineConfig() {
     agent: {
       build: { model: DEFAULT_MODEL },
       plan: { model: DEFAULT_MODEL },
+      vision: VISION_AGENT,
     },
     permission: { edit: "ask", bash: "ask" },
     ...(openrouter ? { provider: { openrouter } } : {}),
