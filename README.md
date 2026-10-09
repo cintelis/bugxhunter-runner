@@ -215,6 +215,10 @@ labs, CTFs). Build with `--build-arg SECTOOLS=0` to leave them out.
   (passive).
 - **Secrets (local, no network):** `gitleaks` — scan copied-in repos and JS bundles for leaked keys.
 - **Raw-socket:** `nmap`, `ping`, `traceroute`, `dig`/`host` (incl. zone transfer).
+- **Not included — LLM red-teaming:** `promptfoo` (~1.4 GB installed) and `garak` (~2 GB with
+  CPU-only PyTorch, 5 GB+ if pip is left to pull the CUDA build) would more than double the image,
+  so the agent installs them on demand into the persistent `/workspace/.tools` volume. The recipe,
+  including pointing them at the runner's model proxy for grading, is in `docker/agent-AGENTS.md`.
 
 All tools run directly against targets. The agent's `AGENTS.md` tells it to confirm authorisation
 before scanning and to scan only hosts you name.

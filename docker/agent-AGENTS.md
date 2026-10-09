@@ -36,6 +36,34 @@ Wordlists: `/opt/wordlists` (common.txt, common-api-endpoints-mazen160.txt,
 raft-medium-directories.txt, subdomains-top1million-5000.txt, LFI-Jhaddix.txt, Generic-SQLi.txt,
 XSS-Jhaddix.txt). Save findings under the project folder.
 
+## Optional: LLM red-teaming tools (not installed — add them when a task needs them)
+
+`promptfoo` and `garak` are deliberately NOT baked into the image: installed they are about
+1.4 GB and 2 GB respectively, more than the rest of the image together. When the user wants to
+red-team an LLM app, chatbot or model endpoint, install them under `/workspace/.tools` — that
+path is a persistent volume, so a container restart keeps them (`/home/node` and `/usr/local` do
+not persist). Tell the user it is a one-off download of a few minutes, and only install the one
+the task needs.
+
+- **promptfoo** (LLM evals + red-team plugins; ~1.4 GB, 2–3 min):
+  `mkdir -p /workspace/.tools/promptfoo && cd /workspace/.tools/promptfoo && npm init -y >/dev/null && npm install promptfoo`
+  Run it as `/workspace/.tools/promptfoo/node_modules/.bin/promptfoo` (or add that dir to PATH).
+- **garak** (LLM probe scanner; ~2 GB, 3–5 min). Install CPU-only torch FIRST — a plain
+  `pip install garak` pulls the CUDA build of torch instead (5 GB+, useless here: no GPU):
+  `python3 -m venv /workspace/.tools/garak`
+  `/workspace/.tools/garak/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu`
+  `/workspace/.tools/garak/bin/pip install garak`
+  Run it as `/workspace/.tools/garak/bin/garak` (`--list_probes`; `--target_type rest -G cfg.json`
+  for an HTTP endpoint).
+
+Both can use the runner's model proxy as an OpenAI-compatible endpoint for attacker/grader
+models (only `/chat/completions` and `/models` are proxied): base URL `http://runner:8790/scx/v1`,
+API key `$SCX_PROXY_TOKEN`, model ids as in the Playground (e.g. `GLM-5.3`). promptfoo: provider
+`openai:chat:GLM-5.3` with `config.apiBaseUrl` and `config.apiKeyEnvar: SCX_PROXY_TOKEN`. garak:
+`--target_type openai.OpenAICompatible` with `OPENAICOMPATIBLE_API_KEY=$SCX_PROXY_TOKEN` and the
+`uri` option. Memory is capped at 4 GB: prefer API-backed detectors over garak's local
+HuggingFace models.
+
 ## Running scans efficiently (important — scans are slow if done naively)
 
 Scope beats speed. A blind full-template nuclei run fires thousands of requests, most irrelevant.
