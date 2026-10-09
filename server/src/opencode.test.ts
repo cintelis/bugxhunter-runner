@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { SessionFamily, parseModelId, projectFile, query, toUiEvent, toUiMessages } from "./opencode.js";
+import { SessionFamily, markInterrupted, parseModelId, projectFile, query, toUiEvent, toUiMessages } from "./opencode.js";
 
 describe("projectFile", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bxh-proj-"));
@@ -142,5 +142,24 @@ describe("SessionFamily", () => {
   it("seeds children listed before their parent", () => {
     const f = new SessionFamily("root", [{ id: "grandkid", parentID: "kid" }, { id: "kid", parentID: "root" }]);
     expect(f.has("grandkid")).toBe(true);
+  });
+});
+
+describe("markInterrupted", () => {
+  const msgs = [{
+    id: "m1", role: "assistant" as const,
+    parts: [
+      { type: "tool" as const, callID: "c1", tool: "bash", status: "running" },
+      { type: "tool" as const, callID: "c2", tool: "bash", status: "completed" },
+      { type: "text" as const, id: "t1", text: "x" },
+    ],
+  }];
+  it("marks running/pending tool calls of an idle session interrupted and leaves the rest", () => {
+    const out = markInterrupted(msgs, true);
+    expect(out[0].parts.map((p) => (p.type === "tool" ? p.status : p.type))).toEqual(["interrupted", "completed", "text"]);
+    expect(msgs[0].parts[0]).toMatchObject({ status: "running" }); // input untouched
+  });
+  it("leaves a busy session alone", () => {
+    expect(markInterrupted(msgs, false)).toBe(msgs);
   });
 });

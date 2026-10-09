@@ -507,6 +507,21 @@ export function toUiMessages(raw: any[]): StoredMessage[] {
   });
 }
 
+/**
+ * A tool call still "running" in a session that is idle was cut off (the turn
+ * was aborted, or OpenCode restarted mid-call): nothing will ever complete it,
+ * and the browser would spin on it forever. Mark such calls interrupted. A
+ * busy session's messages are returned unchanged.
+ */
+export function markInterrupted(messages: StoredMessage[], idle: boolean): StoredMessage[] {
+  if (!idle) return messages;
+  return messages.map((m) => ({
+    ...m,
+    parts: m.parts.map((p) =>
+      p.type === "tool" && (p.status === "running" || p.status === "pending") ? { ...p, status: "interrupted" } : p),
+  }));
+}
+
 /** Pull a readable message out of an OpenCode error payload. */
 function errorText(err: any): string {
   const msg = err?.data?.message ?? err?.message ?? err?.name;

@@ -194,6 +194,9 @@ export function AgentPanel({
         setQuestions((q) => q.filter((x) => x.requestID !== e.requestID));
         break;
       case "idle":
+        // Anything still "running" when the turn ends was cut off (abort,
+        // restart): stop it spinning.
+        setMessages((prev) => prev.map(interruptRunning));
         onSessionsChanged();
         endTurnRef.current();
         break;
@@ -568,6 +571,16 @@ export function AgentPanel({
   );
 }
 
+/** A message with any running/pending tool call marked interrupted (same object if none). */
+function interruptRunning(m: AgentMessage): AgentMessage {
+  if (!m.parts.some((p) => p.type === "tool" && (p.status === "running" || p.status === "pending"))) return m;
+  return {
+    ...m,
+    parts: m.parts.map((p) =>
+      p.type === "tool" && (p.status === "running" || p.status === "pending") ? { ...p, status: "interrupted" } : p),
+  };
+}
+
 /** Stored message (from the server) -> transcript message. */
 function fromStored(m: StoredMessage): AgentMessage {
   return { id: m.id, role: m.role, parts: m.parts as Part[], tokens: m.tokens, cost: m.cost, model: m.model, error: m.error, subagent: m.subagent };
@@ -644,7 +657,7 @@ function ToolCard({ t }: { t: ToolPart }) {
         <span className="tool-icon"><ToolIcon tool={t.tool} /></span>
         <span className="tool-name">{t.tool}</span>
         <span className="tool-summary">{summary.slice(0, 120)}</span>
-        <span className="tool-state">{t.status === "running" || t.status === "pending" ? <span className="spin" /> : t.status === "error" ? "failed" : ""}</span>
+        <span className="tool-state">{t.status === "running" || t.status === "pending" ? <span className="spin" /> : t.status === "error" ? "failed" : t.status === "interrupted" ? "interrupted" : ""}</span>
         {hasBody && <span className={"chev" + (open ? " open" : "")}>›</span>}
       </button>
       {open && hasBody && <pre className="tool-output">{t.error ? "error: " + t.error : t.output}</pre>}

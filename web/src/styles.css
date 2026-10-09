@@ -420,6 +420,8 @@ select {
 /* ---------- Agent tool cards ---------- */
 .tool { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; font-size: 12.5px; transition: var(--transition); }
 .tool.s-error { border-color: var(--red); }
+.tool.s-interrupted { border-style: dashed; }
+.tool.s-interrupted .tool-state { color: var(--amber); }
 .tool-head {
   width: 100%; display: flex; align-items: center; gap: 9px; padding: 7px 11px; cursor: pointer;
   background: none; border: none; text-align: left; color: inherit;

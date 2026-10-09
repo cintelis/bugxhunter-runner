@@ -15,7 +15,7 @@ import { PROVIDERS, PROXY_TOKEN, PORT, OPENROUTER_MODELS, apiKey, clients, clien
 import { KnowledgeBase, buildContextBlock } from "./rag.js";
 import {
   getClient, serverUrl, resolveDirectory, projectFile, listAgentModels, toUiEvent, toUiMessages, parseModelId, oc, query, httpError,
-  SessionFamily, childSessions,
+  SessionFamily, childSessions, markInterrupted,
   DEFAULT_DIRECTORY, DEFAULT_MODEL, REMOTE_URL, REPO_ROOT, ALLOWED_ROOTS,
 } from "./opencode.js";
 import type { PendingRequests, SessionSummary, SlashCommand, StoredMessage, Todo } from "../../shared/agent.js";
@@ -487,18 +487,23 @@ app.get("/api/agent/session/:id/messages", async (req, res) => {
     // with the subagent's title, so a resumed chat shows what the live stream
     // did. Their user messages (the delegation prompt) are skipped: the parent's
     // task tool call already shows it.
+    // Tool calls left "running" by an idle session were cut off: shown as
+    // interrupted rather than spinning forever. /session/status lists the
+    // non-idle sessions; one it doesn't mention is idle.
+    const status = await oc<Record<string, { type?: string }>>(`/session/status${query({ directory })}`).catch(() => ({} as Record<string, { type?: string }>));
+    const idle = (id: string) => (status?.[id]?.type ?? "idle") === "idle";
     const stamped: { at: number; msg: StoredMessage }[] = [];
-    const stamp = (raw: any[], subagent?: string) => {
-      const ui = toUiMessages(raw);
+    const stamp = (raw: any[], sessionID: string, subagent?: string) => {
+      const ui = markInterrupted(toUiMessages(raw), idle(sessionID));
       raw.forEach((m, i) => {
         if (subagent && m?.info?.role === "user") return;
         stamped.push({ at: m?.info?.time?.created ?? 0, msg: subagent ? { ...ui[i], subagent } : ui[i] });
       });
     };
-    stamp(msgs);
+    stamp(msgs, req.params.id);
     for (const child of await childSessions(directory, req.params.id)) {
       try {
-        stamp(unwrap<any[]>(await client.session.messages({ path: { id: child.id }, query: { directory } })) ?? [], child.title || "subagent");
+        stamp(unwrap<any[]>(await client.session.messages({ path: { id: child.id }, query: { directory } })) ?? [], child.id, child.title || "subagent");
       } catch { /* a vanished subagent session is not worth failing the resume */ }
     }
     const messages: StoredMessage[] = stamped.sort((a, b) => a.at - b.at).map((s) => s.msg);

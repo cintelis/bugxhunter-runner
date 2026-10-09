@@ -80,7 +80,8 @@ export interface ToolPart {
   type: "tool";
   callID: string;
   tool: string;
-  status: "pending" | "running" | "completed" | "error" | string;
+  /** "interrupted": left running by a turn that was cut off; nothing will complete it. */
+  status: "pending" | "running" | "completed" | "error" | "interrupted" | string;
   title?: string;
   input?: Record<string, unknown>;
   output?: string;
