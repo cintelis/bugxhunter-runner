@@ -25,6 +25,8 @@ interface AgentMessage {
   cost?: number;
   model?: string;
   error?: string;
+  /** Produced by a subagent (task tool): that session's title. */
+  subagent?: string;
 }
 type PermReq = PermissionRequest;
 
@@ -125,7 +127,7 @@ export function AgentPanel({
   }, [messages, perms, questions]);
 
   // --- transcript mutation helpers ----------------------------------------
-  const upsert = useCallback((id: string, patch: (m: AgentMessage) => void) => {
+  const upsert = useCallback((id: string, patch: (m: AgentMessage) => void, subagent?: string) => {
     setMessages((prev) => {
       const next = prev.slice();
       let i = next.findIndex((m) => m.id === id);
@@ -134,6 +136,7 @@ export function AgentPanel({
         i = next.length - 1;
       }
       const copy = { ...next[i], parts: next[i].parts.slice() };
+      if (subagent) copy.subagent = subagent;
       patch(copy);
       next[i] = copy;
       return next;
@@ -145,7 +148,7 @@ export function AgentPanel({
       case "message":
         roleRef.current[e.messageID] = e.role;
         if (e.role === "assistant") {
-          upsert(e.messageID, (m) => { m.tokens = e.tokens; m.cost = e.cost; m.model = e.model; });
+          upsert(e.messageID, (m) => { m.tokens = e.tokens; m.cost = e.cost; m.model = e.model; }, e.subagent);
         }
         break;
       case "text":
@@ -160,7 +163,7 @@ export function AgentPanel({
           const part = { type: e.kind, id: pid, text: e.text } as Part;
           if (i === -1) m.parts.push(part);
           else m.parts[i] = part;
-        });
+        }, e.subagent);
         break;
       }
       case "tool":
@@ -169,7 +172,7 @@ export function AgentPanel({
           const part: ToolPart = { type: "tool", callID: e.callID, tool: e.tool, status: e.status, title: e.title, input: e.input, output: e.output, error: e.error };
           if (i === -1) m.parts.push(part);
           else m.parts[i] = { ...(m.parts[i] as ToolPart), ...part };
-        });
+        }, e.subagent);
         break;
       case "todo":
         setTodos(e.todos);
@@ -185,7 +188,7 @@ export function AgentPanel({
         break;
       case "question":
         // OpenCode may announce the same question in two event formats.
-        setQuestions((q) => (q.some((x) => x.requestID === e.requestID) ? q : [...q, { requestID: e.requestID, questions: e.questions }]));
+        setQuestions((q) => (q.some((x) => x.requestID === e.requestID) ? q : [...q, { requestID: e.requestID, questions: e.questions, subagent: e.subagent }]));
         break;
       case "question-closed":
         setQuestions((q) => q.filter((x) => x.requestID !== e.requestID));
@@ -251,7 +254,7 @@ export function AgentPanel({
       if (qs.length) {
         setQuestions((cur) => {
           const have = new Set(cur.map((q) => q.requestID));
-          return [...cur, ...qs.filter((q) => !have.has(q.requestID)).map((q) => ({ requestID: q.requestID, questions: q.questions }))];
+          return [...cur, ...qs.filter((q) => !have.has(q.requestID)).map((q) => ({ requestID: q.requestID, questions: q.questions, subagent: q.subagent }))];
         });
         setBusy(true);
       }
@@ -503,7 +506,7 @@ export function AgentPanel({
 
           {perms.map((p) => (
             <div className="perm-card" key={p.permissionID}>
-              <div className="perm-title">Approval needed</div>
+              <div className="perm-title">Approval needed{p.subagent && <span className="perm-sub">subagent · {p.subagent}</span>}</div>
               <div className="perm-body">
                 <span className="perm-type">{p.permType ?? "action"}</span>{" "}
                 {p.title ?? (Array.isArray(p.pattern) ? p.pattern.join(", ") : p.pattern) ?? ""}
@@ -567,7 +570,7 @@ export function AgentPanel({
 
 /** Stored message (from the server) -> transcript message. */
 function fromStored(m: StoredMessage): AgentMessage {
-  return { id: m.id, role: m.role, parts: m.parts as Part[], tokens: m.tokens, cost: m.cost, model: m.model, error: m.error };
+  return { id: m.id, role: m.role, parts: m.parts as Part[], tokens: m.tokens, cost: m.cost, model: m.model, error: m.error, subagent: m.subagent };
 }
 
 function AgentRow({ msg }: { msg: AgentMessage }) {
@@ -595,9 +598,10 @@ function AgentRow({ msg }: { msg: AgentMessage }) {
   }
   if (!msg.parts.length && !msg.error) return null;
   return (
-    <div className="msg assistant">
-      <div className="avatar" aria-hidden>▶</div>
+    <div className={"msg assistant" + (msg.subagent ? " subagent" : "")}>
+      <div className="avatar" aria-hidden>{msg.subagent ? "↳" : "▶"}</div>
       <div className="msg-body">
+        {msg.subagent && <div className="subagent-tag" title={msg.subagent}>subagent · {msg.subagent}</div>}
         {msg.parts.map((p, i) =>
           p.type === "tool" ? <ToolCard key={p.callID} t={p} />
           : p.type === "reasoning" ? <Reasoning key={p.id} text={p.text} />

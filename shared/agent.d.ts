@@ -106,6 +106,8 @@ export interface StoredMessage {
   cost?: number;
   model?: string;
   error?: string;
+  /** Set when a subagent (task tool) produced it: that session's title. */
+  subagent?: string;
 }
 
 // --- Live events (GET /api/agent/events) -------------------------------------
@@ -118,6 +120,8 @@ export interface PermissionRequest {
   title?: string;
   pattern?: string | string[];
   callID?: string;
+  /** Raised by a subagent of the chat's session: that session's title. */
+  subagent?: string;
 }
 
 export interface QuestionRequest {
@@ -126,9 +130,17 @@ export interface QuestionRequest {
   requestID: string;
   questions: AgentQuestion[];
   callID?: string;
+  subagent?: string;
 }
 
-export type AgentEvent =
+/**
+ * Live events. Anything a subagent session produces (the task tool spawns one
+ * per delegation) is relayed with `subagent` set to that session's title, so
+ * the browser can show it under the parent chat and answer its prompts.
+ */
+export type AgentEvent = AgentEventBase & { subagent?: string };
+
+type AgentEventBase =
   | { kind: "open" }
   | { kind: "message"; messageID: string; role: "user" | "assistant" | string; tokens?: Tokens; cost?: number; model?: string }
   | { kind: "text"; messageID: string; partID?: string; text: string }

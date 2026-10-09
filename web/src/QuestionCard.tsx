@@ -5,6 +5,8 @@ import type { AgentQuestion } from "./agentApi";
 export interface QuestionReq {
   requestID: string;
   questions: AgentQuestion[];
+  /** Asked by a subagent (task tool): that session's title. */
+  subagent?: string;
 }
 
 export function QuestionCard({ req, onAnswer, onDismiss }: {
@@ -32,7 +34,7 @@ export function QuestionCard({ req, onAnswer, onDismiss }: {
 
   return (
     <div className="question-card">
-      <div className="perm-title">The agent has a question</div>
+      <div className="perm-title">The agent has a question{req.subagent && <span className="perm-sub">subagent · {req.subagent}</span>}</div>
       {req.questions.map((q, qi) => (
         <div className="q-block" key={qi}>
           {q.header && <span className="q-header">{q.header}</span>}

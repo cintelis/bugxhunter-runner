@@ -397,6 +397,79 @@ export function toUiEvent(evt: any): AgentEvent | null {
   }
 }
 
+/** The bits of an OpenCode session record the family tracker needs. */
+export interface SessionInfo { id: string; parentID?: string; title?: string }
+
+/**
+ * One chat's sessions: the root session plus the subagent sessions it spawns
+ * (OpenCode's task tool creates a child session per delegation, with
+ * `parentID` set). Without this the browser only ever saw the root: a
+ * subagent's output was invisible and its approval prompts went unanswered,
+ * leaving the chat "spinning" forever.
+ */
+export class SessionFamily {
+  private readonly titles = new Map<string, string>();
+
+  constructor(readonly rootID: string, children: SessionInfo[] = []) {
+    // Parents may be listed after their children; a second pass catches grandchildren.
+    for (let i = 0; i < 2; i++) for (const c of children) this.add(c);
+  }
+
+  /** Adopt a session if its parent is in the family. Returns true when adopted. */
+  add(s: SessionInfo): boolean {
+    if (!s?.id || !s.parentID) return false;
+    if (s.parentID !== this.rootID && !this.titles.has(s.parentID)) return false;
+    this.titles.set(s.id, s.title || "subagent");
+    return true;
+  }
+  has(sessionID: string): boolean {
+    return sessionID === this.rootID || this.titles.has(sessionID);
+  }
+  /** The subagent's title, or undefined for the root session itself. */
+  subagent(sessionID: string): string | undefined {
+    return this.titles.get(sessionID);
+  }
+
+  /**
+   * What the browser gets for a raw OpenCode event: the root's events as they
+   * are, a subagent's tagged with its title, everything else dropped. A
+   * subagent's idle/error must not end the parent's turn, and its session and
+   * todo updates are not the chat's.
+   */
+  relay(evt: any): AgentEvent | null {
+    const p = evt?.properties;
+    if ((evt?.type === "session.created" || evt?.type === "session.updated") && p?.info?.id) this.add(p.info);
+    const ui = toUiEvent(evt);
+    if (!ui) return null;
+    // Events carry the session id in different spots; some (permission.replied
+    // on older servers, question.*) carry none and pass through.
+    const sid: string | undefined =
+      p?.part?.sessionID ?? p?.sessionID ?? p?.info?.sessionID ?? p?.permission?.sessionID ?? (ui as { sessionID?: string }).sessionID;
+    if (!sid || sid === this.rootID) return ui;
+    const title = this.titles.get(sid);
+    if (!title) return null;
+    if (ui.kind === "idle" || ui.kind === "error" || ui.kind === "session" || ui.kind === "todo") return null;
+    return { ...ui, subagent: title };
+  }
+}
+
+/**
+ * Every subagent session under `rootID` (children, grandchildren, …), via
+ * OpenCode's children endpoint. Depth-limited; a failure yields an empty list
+ * so the chat still works without the subagent view.
+ */
+export async function childSessions(directory: string, rootID: string, depth = 3): Promise<SessionInfo[]> {
+  if (depth <= 0) return [];
+  const kids = await oc<any[]>(`/session/${encodeURIComponent(rootID)}/children${query({ directory })}`).catch(() => [] as any[]);
+  const out: SessionInfo[] = [];
+  for (const k of kids ?? []) {
+    if (!k?.id) continue;
+    out.push({ id: k.id, parentID: k.parentID ?? rootID, title: k.title });
+    out.push(...(await childSessions(directory, k.id, depth - 1)));
+  }
+  return out;
+}
+
 /**
  * Stored messages (GET /session/:id/message) -> the same shape the browser
  * builds from live events, so a resumed chat renders like a live one.

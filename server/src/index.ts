@@ -15,6 +15,7 @@ import { PROVIDERS, PROXY_TOKEN, PORT, OPENROUTER_MODELS, apiKey, clients, clien
 import { KnowledgeBase, buildContextBlock } from "./rag.js";
 import {
   getClient, serverUrl, resolveDirectory, projectFile, listAgentModels, toUiEvent, toUiMessages, parseModelId, oc, query, httpError,
+  SessionFamily, childSessions,
   DEFAULT_DIRECTORY, DEFAULT_MODEL, REMOTE_URL, REPO_ROOT, ALLOWED_ROOTS,
 } from "./opencode.js";
 import type { PendingRequests, SessionSummary, SlashCommand, StoredMessage, Todo } from "../../shared/agent.js";
@@ -480,9 +481,27 @@ app.get("/api/agent/session/:id/messages", async (req, res) => {
   try {
     const directory = await resolveDirectory(req.query.directory);
     const client = await getClient(directory);
-    const msgs = unwrap<any[]>(await client.session.messages({ path: { id: req.params.id }, query: { directory } }));
+    const msgs = unwrap<any[]>(await client.session.messages({ path: { id: req.params.id }, query: { directory } })) ?? [];
     const todos = await oc<Todo[]>(`/session/${encodeURIComponent(req.params.id)}/todo${query({ directory })}`).catch(() => []);
-    const messages: StoredMessage[] = toUiMessages(msgs ?? []);
+    // Subagent sessions' messages are merged in by creation time and tagged
+    // with the subagent's title, so a resumed chat shows what the live stream
+    // did. Their user messages (the delegation prompt) are skipped: the parent's
+    // task tool call already shows it.
+    const stamped: { at: number; msg: StoredMessage }[] = [];
+    const stamp = (raw: any[], subagent?: string) => {
+      const ui = toUiMessages(raw);
+      raw.forEach((m, i) => {
+        if (subagent && m?.info?.role === "user") return;
+        stamped.push({ at: m?.info?.time?.created ?? 0, msg: subagent ? { ...ui[i], subagent } : ui[i] });
+      });
+    };
+    stamp(msgs);
+    for (const child of await childSessions(directory, req.params.id)) {
+      try {
+        stamp(unwrap<any[]>(await client.session.messages({ path: { id: child.id }, query: { directory } })) ?? [], child.title || "subagent");
+      } catch { /* a vanished subagent session is not worth failing the resume */ }
+    }
+    const messages: StoredMessage[] = stamped.sort((a, b) => a.at - b.at).map((s) => s.msg);
     res.json({ messages, todos });
   } catch (e) {
     sendError(res, e);
@@ -563,6 +582,9 @@ app.get("/api/agent/pending", async (req, res) => {
   try {
     const sessionID = String(req.query.sessionID || "");
     const directory = await resolveDirectory(req.query.directory);
+    // A subagent's prompt blocks the chat just like the root session's own.
+    const family = sessionID ? new SessionFamily(sessionID, await childSessions(directory, sessionID)) : null;
+    const inScope = (sid: string) => !family || family.has(sid);
 
     const permsRaw = await oc<any[]>(`/permission${query({ directory })}`).catch(() => []);
     // GET /question lists every pending question request (same shape as the
@@ -571,7 +593,7 @@ app.get("/api/agent/pending", async (req, res) => {
 
     const pending: PendingRequests = {
       permissions: permsRaw
-        .filter((p) => !sessionID || p.sessionID === sessionID)
+        .filter((p) => inScope(p.sessionID))
         .map((p) => ({
           kind: "permission",
           sessionID: p.sessionID,
@@ -580,15 +602,17 @@ app.get("/api/agent/pending", async (req, res) => {
           title: p.metadata?.command ?? p.title,
           pattern: p.patterns ?? p.pattern,
           callID: p.callID,
+          subagent: family?.subagent(p.sessionID),
         })),
       questions: qRaw
-        .filter((q) => !sessionID || q.sessionID === sessionID)
+        .filter((q) => inScope(q.sessionID))
         .map((q) => ({
           kind: "question",
           sessionID: q.sessionID,
           requestID: q.id,
           questions: q.questions ?? [],
           callID: q.tool?.callID,
+          subagent: family?.subagent(q.sessionID),
         })),
     };
     res.json(pending);
@@ -701,15 +725,13 @@ app.get("/api/agent/events", async (req, res) => {
     let closed = false;
     req.on("close", () => { closed = true; clearInterval(keepAlive); sub.stream.return?.(undefined); });
 
+    // This session's events plus its subagents' (tagged), seeded with the
+    // subagents that already exist; ones spawned later announce themselves on
+    // the stream. Without a session id everything is forwarded.
+    const family = sessionID ? new SessionFamily(sessionID, await childSessions(directory, sessionID)) : null;
     for await (const evt of sub.stream) {
       if (closed) break;
-      // Filter to this session (events carry the id in different spots).
-      const sid =
-        (evt as any)?.properties?.part?.sessionID ??
-        (evt as any)?.properties?.sessionID ??
-        (evt as any)?.properties?.info?.sessionID;
-      if (sessionID && sid && sid !== sessionID) continue;
-      const ui = toUiEvent(evt);
+      const ui = family ? family.relay(evt) : toUiEvent(evt);
       if (ui) res.write(`data: ${JSON.stringify(ui)}\n\n`);
     }
     clearInterval(keepAlive);

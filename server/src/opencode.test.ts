@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { parseModelId, projectFile, query, toUiEvent, toUiMessages } from "./opencode.js";
+import { SessionFamily, parseModelId, projectFile, query, toUiEvent, toUiMessages } from "./opencode.js";
 
 describe("projectFile", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bxh-proj-"));
@@ -94,5 +94,53 @@ describe("toUiMessages", () => {
       { type: "file", id: "f1", filename: "a.png", mime: "image/png", url: "data:image/png;base64,AAAA" },
       { type: "file", id: "f2", filename: "a.txt", mime: "text/plain", url: undefined },
     ]);
+  });
+});
+
+describe("SessionFamily", () => {
+  const text = (sessionID: string, id = "p1") =>
+    ({ type: "message.part.updated", properties: { part: { type: "text", id, messageID: "m-" + sessionID, sessionID, text: "hi" } } });
+  const perm = (sessionID: string) =>
+    ({ type: "permission.asked", properties: { id: "perm-" + sessionID, sessionID, type: "bash", title: "ls", pattern: "ls *" } });
+
+  it("passes the root session's events through untouched", () => {
+    const f = new SessionFamily("root");
+    expect(f.relay(text("root"))).toEqual({ kind: "text", messageID: "m-root", partID: "p1", text: "hi" });
+    expect(f.relay(perm("root"))).toMatchObject({ kind: "permission", sessionID: "root" });
+    expect(f.relay(perm("root"))).not.toHaveProperty("subagent");
+  });
+
+  it("tags a subagent's output and prompts with its title, and drops strangers", () => {
+    const f = new SessionFamily("root", [{ id: "kid", parentID: "root", title: "Find endpoints (@explore subagent)" }]);
+    expect(f.relay(text("kid"))).toMatchObject({ kind: "text", messageID: "m-kid", subagent: "Find endpoints (@explore subagent)" });
+    expect(f.relay(perm("kid"))).toMatchObject({ kind: "permission", sessionID: "kid", subagent: "Find endpoints (@explore subagent)" });
+    expect(f.relay(text("other"))).toBeNull();
+    expect(f.has("kid")).toBe(true);
+    expect(f.has("other")).toBe(false);
+    expect(f.subagent("root")).toBeUndefined();
+  });
+
+  it("adopts subagents announced on the stream, grandchildren included", () => {
+    const f = new SessionFamily("root");
+    expect(f.relay(text("kid"))).toBeNull();
+    expect(f.relay({ type: "session.created", properties: { info: { id: "kid", parentID: "root", title: "kid" } } })).toBeNull();
+    expect(f.relay(text("kid"))).toMatchObject({ subagent: "kid" });
+    expect(f.relay({ type: "session.updated", properties: { info: { id: "grandkid", parentID: "kid" } } })).toBeNull();
+    expect(f.relay(text("grandkid"))).toMatchObject({ subagent: "subagent" });
+    // The root's own session.updated still reaches the UI (title changes).
+    expect(f.relay({ type: "session.updated", properties: { info: { id: "root", title: "T" } } })).toEqual({ kind: "session", sessionID: "root", title: "T" });
+  });
+
+  it("never lets a subagent's idle, error or todos end or hijack the parent's turn", () => {
+    const f = new SessionFamily("root", [{ id: "kid", parentID: "root", title: "kid" }]);
+    expect(f.relay({ type: "session.idle", properties: { sessionID: "kid" } })).toBeNull();
+    expect(f.relay({ type: "session.error", properties: { sessionID: "kid", error: { name: "E" } } })).toBeNull();
+    expect(f.relay({ type: "todo.updated", properties: { sessionID: "kid", todos: [] } })).toBeNull();
+    expect(f.relay({ type: "session.idle", properties: { sessionID: "root" } })).toEqual({ kind: "idle", sessionID: "root" });
+  });
+
+  it("seeds children listed before their parent", () => {
+    const f = new SessionFamily("root", [{ id: "grandkid", parentID: "kid" }, { id: "kid", parentID: "root" }]);
+    expect(f.has("grandkid")).toBe(true);
   });
 });

@@ -363,6 +363,13 @@ select {
   font-family: var(--mono); font-size: 11px; font-weight: 700; background: var(--panel-2); color: var(--green); border: 1px solid var(--border); margin-top: 2px;
 }
 .avatar.fn { color: var(--cyan); }
+/* A subagent's turn (task tool): indented under the parent, with its session title. */
+.msg.subagent { margin-left: 24px; padding-left: 12px; border-left: 2px solid var(--border); }
+.msg.subagent .avatar { color: var(--amber); }
+.subagent-tag {
+  font-family: var(--mono); font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .bubble { line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
 .user-bubble {
   max-width: 78%; background: var(--panel-2); border: 1px solid var(--border);
@@ -448,6 +455,7 @@ select {
 .perm-title::before { content: "[!] "; }
 .perm-body { margin: 7px 0 12px; font-family: var(--mono); font-size: 12.5px; word-break: break-all; }
 .perm-type { color: var(--cyan); }
+.perm-sub { color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; margin-left: 8px; }
 .perm-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* ---------- Composer: attachments + slash menu ---------- */
