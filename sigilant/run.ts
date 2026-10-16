@@ -5,6 +5,7 @@
 //   node sigilant/run.ts --pr cintelis/sigilant#42
 //   node sigilant/run.ts --prompt "Test what the last deploy changed on erp:9443."
 //   node sigilant/run.ts --discover                    # the scope in BXH_SCOPE_REPOS and BXH_SCOPE_TARGETS
+//   node sigilant/run.ts --deploy erp:9443 --version 1.4.2 --changed /api/orders,/api/invoices   # a deploy to retest
 //
 // | Variable | |
 // |---|---|
@@ -39,6 +40,35 @@ export function reviewPrompt(repo: string, pr: number): string {
     "If a finding is critical, block the merge with repo.block and say that a tester confirms it.",
     "Do nothing outside this pull request.",
   ].join(" ");
+}
+
+/** What a deploy says of itself: the target, and what it changed, as far as it says. */
+export interface Deploy {
+  /** `host:port`, as the scope names it. */
+  target: string;
+  version?: string;
+  /** Paths the deploy changed, where it says; empty, the whole target is retested. */
+  changed?: string[];
+  note?: string;
+}
+
+/** The prompt a deploy of a target starts: retest what it changed, and nothing it did not. */
+export function deployPrompt(deploy: Deploy): string {
+  const where = `${deploy.target}${deploy.version ? ` at version ${deploy.version}` : ""}`;
+  const changed = deploy.changed?.length
+    ? `It changed: ${deploy.changed.join(", ")}. Retest those paths first, then what depends on them.`
+    : "It did not say what changed: retest the target as a whole, starting from /, /health and /mcp and what they lead to.";
+  return [
+    `A deploy of ${where} has just happened; retest it, as a governed run.`,
+    changed,
+    `Use target.request (target "${deploy.target}"): GET each path and check that it still answers as it should, that it still requires authentication where it did, and that nothing is disclosed that was not before.`,
+    "A request that could change state needs a person's approval; make one only where the test needs it, and carry on with the rest while it waits.",
+    "Record each finding with finding.record at a severity.",
+    deploy.note ? `The deploy's note: ${deploy.note}` : "",
+    "End with a short summary: what was retested, what changed in its behaviour since before the deploy as far as you can tell, and what was recorded.",
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 /** The prompt a discovery run starts with: the scope, as the engagement has it. */
@@ -105,13 +135,21 @@ if (import.meta.main) {
   const pr = at("--pr");
   const prompt = at("--prompt");
   const discover = args.includes("--discover");
+  const deploy = at("--deploy");
   const parsed = pr ? parsePr(pr) : undefined;
-  if ((pr && !parsed) || (!parsed && !prompt && !discover)) {
-    console.error("usage: node sigilant/run.ts --pr owner/name#number | --prompt <text> | --discover");
+  if ((pr && !parsed) || (!parsed && !prompt && !discover && !deploy)) {
+    console.error("usage: node sigilant/run.ts --pr owner/name#number | --prompt <text> | --discover | --deploy host:port [--version v] [--changed /a,/b] [--note …]");
     process.exit(2);
   }
-  const list = (name: string) => (process.env[name] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  const text = parsed ? reviewPrompt(parsed.repo, parsed.pr) : discover ? discoverPrompt(list("BXH_SCOPE_REPOS"), list("BXH_SCOPE_TARGETS")) : prompt!;
+  const split = (value: string | undefined) => (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const list = (name: string) => split(process.env[name]);
+  const text = parsed
+    ? reviewPrompt(parsed.repo, parsed.pr)
+    : discover
+      ? discoverPrompt(list("BXH_SCOPE_REPOS"), list("BXH_SCOPE_TARGETS"))
+      : deploy
+        ? deployPrompt({ target: deploy, version: at("--version"), changed: split(at("--changed")), note: at("--note") })
+        : prompt!;
   const runner = process.env.BXH_RUNNER?.trim() || "http://bxh-runner:8790";
   const directory = process.env.BXH_DIRECTORY?.trim() || "/workspace/engagement";
   // The engagement's folder in the shared workspace, which the runner expects to find.

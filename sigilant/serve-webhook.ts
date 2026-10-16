@@ -5,6 +5,7 @@
 // | `WEBHOOK_PORT` | 8796 unless set |
 // | `WEBHOOK_SECRET_FILE` | the secret GitHub signs deliveries with |
 // | `WEBHOOK_REPOS` | the repositories served, `owner/name`, comma-separated |
+// | `WEBHOOK_TARGETS` | the targets whose deploys are retested, `host:port`, comma-separated; none unless set |
 // | `BXH_RUNNER` | the runner's API: `http://bxh-runner:8790` unless set |
 // | `BXH_DIRECTORY` | where each engagement's folder goes: `/workspace/engagement` unless set |
 // | `BXH_MODEL` | the model, as OpenCode names it; the runner's default unless set |
@@ -22,6 +23,7 @@ const log = (line: string) => console.log(`${new Date().toISOString()} [webhook]
 const secret = (await readFile(env("WEBHOOK_SECRET_FILE"), "utf8")).trim();
 if (!secret) throw new Error("WEBHOOK_SECRET_FILE is empty");
 const repos = new Set(env("WEBHOOK_REPOS").split(",").map((r) => r.trim()).filter(Boolean));
+const targets = new Set((process.env.WEBHOOK_TARGETS ?? "").split(",").map((t) => t.trim()).filter(Boolean));
 const runner = env("BXH_RUNNER", "http://bxh-runner:8790");
 const root = env("BXH_DIRECTORY", "/workspace/engagement");
 const model = process.env.BXH_MODEL?.trim() || undefined;
@@ -32,6 +34,7 @@ if (!report) log("no Sigilant identity is configured (SIGILANT_ISSUER, SIGILANT_
 const handle = webhookHandler({
   secret,
   repos,
+  targets,
   root,
   log,
   async start(run) {
@@ -48,5 +51,5 @@ const handle = webhookHandler({
 const port = Number(env("WEBHOOK_PORT", "8796"));
 const server = createServer((req, res) => void handle(req, res));
 await new Promise<void>((resolve) => server.listen(port, "0.0.0.0", resolve));
-log(`listening on http://0.0.0.0:${port}/hooks/github for ${[...repos].join(", ")}, starting runs on ${runner}`);
+log(`listening on http://0.0.0.0:${port}/hooks/github for ${[...repos].join(", ")} and /hooks/deploy for ${[...targets].join(", ") || "no target"}, starting runs on ${runner}`);
 for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => process.exit(0));

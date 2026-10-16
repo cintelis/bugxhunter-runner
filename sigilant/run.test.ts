@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import type { ToolOutcome } from "@sigilant/sdk";
 
-import { discoverPrompt, parsePr, reviewPrompt, startRun, usageReporter } from "./run.ts";
+import { deployPrompt, discoverPrompt, parsePr, reviewPrompt, startRun, usageReporter } from "./run.ts";
 
 test("a run is a session in the folder, then the prompt to it", async () => {
   const posted: { path: string; body: Record<string, unknown> }[] = [];
@@ -46,6 +46,19 @@ test("a step's usage is reported as run.usage, and a gateway that will not take 
   assert.deepEqual(calls[0]!.args, step);
   assert.match(lines[0]!, /^reported m1: scx\/x, 1 in, 2 out/);
   assert.match(lines[1]!, /did not take m2's usage: denied \(policy\)/);
+});
+
+test("a deploy run is told what changed, or to retest the whole target, and to ask before changing anything", () => {
+  const named = deployPrompt({ target: "erp:9443", version: "1.4.2", changed: ["/api/orders", "/api/invoices"], note: "orders rewritten" });
+  assert.match(named, /A deploy of erp:9443 at version 1\.4\.2 has just happened/);
+  assert.match(named, /It changed: \/api\/orders, \/api\/invoices\. Retest those paths first/);
+  assert.match(named, /target\.request \(target "erp:9443"\)/);
+  assert.match(named, /needs a person's approval/);
+  assert.match(named, /The deploy's note: orders rewritten/);
+  const whole = deployPrompt({ target: "erp:9443" });
+  assert.match(whole, /A deploy of erp:9443 has just happened/);
+  assert.match(whole, /did not say what changed: retest the target as a whole, starting from \/, \/health and \/mcp/);
+  assert.doesNotMatch(whole, /note/);
 });
 
 test("a discovery run is told the scope as given, and that nothing outside it counts", () => {

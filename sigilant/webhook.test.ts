@@ -4,10 +4,12 @@ import { type Server, createServer } from "node:http";
 import { after, before, test } from "node:test";
 
 import type { Run } from "./run.ts";
-import { plan, verify, webhookHandler } from "./webhook.ts";
+import { postDeploy } from "./deploy.ts";
+import { plan, planDeploy, verify, webhookHandler } from "./webhook.ts";
 
 const SECRET = "s3cret";
 const REPOS = new Set(["cintelis/sigilant"]);
+const TARGETS = new Set(["erp:9443", "fleet-tools:9443"]);
 const sign = (body: string) => `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`;
 const opened = (repo = "cintelis/sigilant", action = "opened", draft = false) =>
   JSON.stringify({ action, repository: { full_name: repo }, pull_request: { number: 42, draft } });
@@ -52,11 +54,13 @@ before(async () => {
   const handle = webhookHandler({
     secret: SECRET,
     repos: REPOS,
+    targets: TARGETS,
     remember: 2,
     log: (l) => lines.push(l),
     start: async (run) => {
       started.push(run);
       if (run.directory.endsWith("pr-42")) return "ses_42";
+      if (run.directory.includes("/deploy-")) return "ses_deploy";
       throw new Error("the runner is down");
     },
   });
@@ -90,6 +94,49 @@ test("the same delivery again starts nothing; a bad signature is refused; a ping
   const ping = await deliver(JSON.stringify({ zen: "Keep it logically awesome." }), { "x-github-event": "ping", "x-github-delivery": "d-2" });
   assert.deepEqual(await ping.json(), { skipped: "ping" });
   assert.equal((await fetch(at)).status, 405);
+});
+
+test("a deploy of a target the receiver serves starts a retest of what it changed; the rest starts nothing", () => {
+  const now = () => Date.UTC(2026, 9, 17, 9, 30, 0);
+  const planned = planDeploy({ target: "erp:9443", version: "1.4.2", changed: ["/api/orders", " ", 7, "/api/invoices"], note: "orders rewritten" }, TARGETS, "/w", now);
+  assert.ok("run" in planned);
+  assert.equal(planned.run.directory, "/w/targets/erp-9443/deploy-1.4.2");
+  assert.equal(planned.why, "deploy of erp:9443 at 1.4.2 (2 paths changed)");
+  assert.match(planned.run.text, /It changed: \/api\/orders, \/api\/invoices\./);
+  const bare = planDeploy({ target: "fleet-tools:9443" }, TARGETS, "/w", now);
+  assert.ok("run" in bare);
+  assert.equal(bare.run.directory, "/w/targets/fleet-tools-9443/deploy-20261017T093000Z");
+  assert.equal(bare.why, "deploy of fleet-tools:9443");
+  for (const [payload, why] of [
+    [{ target: "bank.example:443" }, /not a target this receiver serves/],
+    [{ target: "../x" }, /without a target/],
+    [{}, /without a target/],
+    ["nonsense", /without a target/],
+  ] as const) {
+    const p = planDeploy(payload, TARGETS, "/w", now);
+    assert.ok("skipped" in p, JSON.stringify(payload));
+    assert.match(p.skipped, why);
+  }
+});
+
+test("a deploy posted to the webhook, signed and named, starts the retest once; another path is no hook", async () => {
+  const deployAt = at.replace("/hooks/github", "/hooks/deploy");
+  const before = started.length;
+  const first = await postDeploy(deployAt, SECRET, { target: "erp:9443", version: "9.9", changed: ["/api/orders"] });
+  assert.equal(first.status, 202);
+  assert.deepEqual(first.body, { started: "deploy of erp:9443 at 9.9 (1 path changed)" });
+  const again = await postDeploy(deployAt, SECRET, { target: "erp:9443", version: "9.9", changed: ["/api/orders"] });
+  assert.deepEqual(again.body, { seen: true }, "named by its target and version, the same deploy starts once");
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(started.length - before, 1);
+  assert.equal(started[started.length - 1]!.directory, "/workspace/engagement/targets/erp-9443/deploy-9.9");
+  const outside = await postDeploy(deployAt, SECRET, { target: "bank.example:443" }, { id: "d-x" });
+  assert.deepEqual(outside.body, { skipped: "bank.example:443: not a target this receiver serves" });
+  const forged = await postDeploy(deployAt, "not-the-secret", { target: "erp:9443" }, { id: "d-y" });
+  assert.equal(forged.status, 401);
+  const elsewhere = await fetch(at.replace("/hooks/github", "/hooks/other"), { method: "POST", body: "{}" });
+  assert.equal(elsewhere.status, 404);
+  assert.ok(lines.some((l) => /deploy of erp:9443 at 9\.9 \(1 path changed\): started/.test(l)));
 });
 
 test("a run the runner will not start is logged, not an error to GitHub", async () => {
