@@ -248,7 +248,8 @@ wait for a person, and each is written to a signed audit chain. Two processes, o
 | `serve-bridge.ts` | an MCP server the agent is pointed at (`mcp.sigilant` in OpenCode's config), which holds the runner's identity and puts every call through the gateway |
 
 The package stands on its own (`cd sigilant && npm install && npm run typecheck && npm test`), with `@sigilant/sdk`
-from a Sigilant checkout beside this one. Sigilant's `deploy/compose/bugxhunter.yaml` runs both beside its stack.
+from a Sigilant checkout beside this one; the image takes the SDK built from an image of Sigilant's
+(`SIGILANT_SDK_IMAGE`). Sigilant's `deploy/compose/bugxhunter.yaml` runs both beside its stack.
 
 ## Configuration (environment variables)
 
