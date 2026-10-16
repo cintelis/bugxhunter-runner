@@ -44,6 +44,13 @@ export interface BridgeOptions {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Tools the runner's own process calls — run.ts, reporting each step's usage
+ * — and the model is not offered: listed to it, it would call them, and the
+ * gateway could not tell the two apart, since both act as the runner.
+ */
+export const RUNNERS_OWN = new Set(["run.usage"]);
+
 const text = (t: string): McpResult["content"] => [{ type: "text", text: t }];
 
 /** The gateway's own tool content, where it is text; anything else is said as JSON. */
@@ -65,11 +72,13 @@ export function bridge(caller: Caller, options: BridgeOptions): McpServer {
       const every = (options.listEverySecs ?? 5) * 1000;
       for (;;) {
         try {
-          return (await caller.listTools()).map((t) => ({
-            name: t.name,
-            description: t.description ?? "",
-            inputSchema: t.inputSchema ?? { type: "object" },
-          }));
+          return (await caller.listTools())
+            .filter((t) => !RUNNERS_OWN.has(t.name))
+            .map((t) => ({
+              name: t.name,
+              description: t.description ?? "",
+              inputSchema: t.inputSchema ?? { type: "object" },
+            }));
         } catch (why) {
           if (Date.now() + every > until) throw why;
           log(`listing the tools failed (${(why as Error).message}); trying again`);

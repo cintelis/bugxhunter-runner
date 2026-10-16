@@ -516,6 +516,7 @@ export function toUiMessages(raw: any[]): StoredMessage[] {
       tokens: info.tokens,
       cost: info.cost,
       model: info.modelID ? `${info.providerID}/${info.modelID}` : undefined,
+      time: info.time ? { created: info.time.created, completed: info.time.completed } : undefined,
       error: info.error ? errorText(info.error) : undefined,
     };
   });

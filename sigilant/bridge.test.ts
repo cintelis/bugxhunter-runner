@@ -10,7 +10,7 @@ function caller(answers: Record<string, ToolOutcome | Error>): Caller & { calls:
   const calls: { name: string; args: Record<string, unknown> }[] = [];
   return {
     calls,
-    listTools: async () => [{ name: "repo.read", description: "reads", inputSchema: { type: "object" } }, { name: "finding.record" }],
+    listTools: async () => [{ name: "repo.read", description: "reads", inputSchema: { type: "object" } }, { name: "finding.record" }, { name: "run.usage" }],
     callUntilDecided: async (name, args) => {
       calls.push({ name, args });
       const a = answers[name];

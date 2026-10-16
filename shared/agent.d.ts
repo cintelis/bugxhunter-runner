@@ -106,6 +106,8 @@ export interface StoredMessage {
   tokens?: Tokens;
   cost?: number;
   model?: string;
+  /** When OpenCode began and finished the message, Unix ms; `completed` is unset while it is still going. */
+  time?: { created?: number; completed?: number };
   error?: string;
   /** Set when a subagent (task tool) produced it: that session's title. */
   subagent?: string;

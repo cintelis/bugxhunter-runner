@@ -14,6 +14,7 @@
 // | `repo.scan` | what a repository holds that looks like an agent, an MCP configuration or a model key: candidates, by path |
 // | `net.discover` | whether a target serves MCP, and what it says of itself |
 // | `discovery.report` | a discovery, as the gateway records it: the record is the evidence; this only acknowledges |
+// | `run.usage` | one step of a run: its tokens, cost and time, as the runner's own process reports it; this only acknowledges |
 //
 // GitHub is reached with a token of the engagement's (a fine-grained token
 // with Contents: read and Pull requests: write on the repositories in scope),
@@ -104,6 +105,29 @@ export const TOOLS: McpTool[] = [
         evidence: string("one line of what was seen; never a secret"),
       },
       required: ["kind", "where", "name"],
+    },
+  },
+  {
+    name: "run.usage",
+    description:
+      "One step of a run — a turn of the model — with what it cost in tokens and money and when it ran. Reported by the runner's own process after each step; the gateway's record of this call is the usage.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        run: string("the session"),
+        step: string("the message"),
+        model: string("provider/model"),
+        input: { type: "integer" },
+        output: { type: "integer" },
+        reasoning: { type: "integer" },
+        cache_read: { type: "integer" },
+        cache_write: { type: "integer" },
+        cost_micros: { type: "integer", description: "millionths of a dollar" },
+        started_ms: { type: "integer" },
+        completed_ms: { type: "integer" },
+        tool_calls: { type: "integer" },
+      },
+      required: ["run", "step", "input", "output", "reasoning", "cache_read", "cache_write", "cost_micros", "started_ms", "completed_ms", "tool_calls"],
     },
   },
 ];
@@ -379,6 +403,13 @@ export function bxhTools(options: ToolsOptions): { tools: McpTool[]; call(name: 
         if (!kind || !where || !what) return refuse("kind, where and name are required");
         // Nothing to do: the gateway's record of this call is the discovery, and the sync service folds it from the chain.
         return asResult({ reported: true, kind, where, name: what });
+      }
+      case "run.usage": {
+        const run = typeof args.run === "string" ? args.run.trim() : "";
+        const step = typeof args.step === "string" ? args.step.trim() : "";
+        if (!run || !step) return refuse("run and step are required");
+        // Nothing to do: the gateway's record of this call is the usage, and the sync service folds the steps into runs.
+        return asResult({ recorded: true, run, step });
       }
       case "finding.record": {
         const severity = typeof args.severity === "string" && SEVERITIES.has(args.severity) ? args.severity : undefined;

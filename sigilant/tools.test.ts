@@ -33,7 +33,7 @@ const tools = (gh: ReturnType<typeof github>, target?: typeof fetch) =>
   });
 
 test("the tools are what the registry and the policy name", () => {
-  assert.deepEqual(TOOLS.map((t) => t.name), ["repo.read", "repo.comment", "repo.block", "target.request", "finding.record", "repo.scan", "net.discover", "discovery.report"]);
+  assert.deepEqual(TOOLS.map((t) => t.name), ["repo.read", "repo.comment", "repo.block", "target.request", "finding.record", "repo.scan", "net.discover", "discovery.report", "run.usage"]);
 });
 
 test("a file is read at the pull request's head, decoded, and cut to size", async () => {
@@ -184,6 +184,12 @@ test("a report of a discovery is acknowledged, and nothing else: the gateway's r
   const r = await tools(github({})).call("discovery.report", { kind: "mcp_server", where: "erp:9443", name: "/mcp", evidence: "demo-erp" });
   assert.deepEqual(r.structuredContent, { reported: true, kind: "mcp_server", where: "erp:9443", name: "/mcp" });
   assert.equal((await tools(github({})).call("discovery.report", { kind: "thing", where: "x", name: "y" })).isError, true);
+});
+
+test("a report of a step's usage is acknowledged, and nothing else: the gateway's record is the usage", async () => {
+  const r = await tools(github({})).call("run.usage", { run: "ses_1", step: "msg_1", input: 10, output: 2, reasoning: 0, cache_read: 0, cache_write: 0, cost_micros: 5, started_ms: 1, completed_ms: 2, tool_calls: 0 });
+  assert.deepEqual(r.structuredContent, { recorded: true, run: "ses_1", step: "msg_1" });
+  assert.equal((await tools(github({})).call("run.usage", { run: "ses_1" })).isError, true);
 });
 
 test("a finding is recorded at a known severity, and named", async () => {
