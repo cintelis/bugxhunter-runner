@@ -13,6 +13,6 @@ FROM node:24-trixie-slim
 WORKDIR /app
 COPY --from=sdk /app/node_modules/@sigilant/sdk ./node_modules/@sigilant/sdk
 RUN mkdir -p /findings && chown node:node /findings
-COPY sigilant/package.json sigilant/mcp.ts sigilant/tools.ts sigilant/bridge.ts sigilant/serve-tools.ts sigilant/serve-bridge.ts ./sigilant/
+COPY sigilant/package.json sigilant/mcp.ts sigilant/tools.ts sigilant/bridge.ts sigilant/serve-tools.ts sigilant/serve-bridge.ts sigilant/run.ts ./sigilant/
 USER node
 CMD ["node", "sigilant/serve-bridge.ts"]
