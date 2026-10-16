@@ -31,8 +31,18 @@ export interface BridgeOptions {
   waitSecs: number;
   /** How often a held call is retried, which is also how the console gets its card back. */
   everySecs?: number;
+  /**
+   * How long listing the tools is retried for before giving up: the agent
+   * lists them once, at start, which may fall in the minutes after a restart
+   * while the issuer's keys reach the gateways. 120 unless set.
+   */
+  listForSecs?: number;
+  /** How often the listing is retried: 5 unless set. */
+  listEverySecs?: number;
   log?: (line: string) => void;
 }
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const text = (t: string): McpResult["content"] => [{ type: "text", text: t }];
 
@@ -51,11 +61,21 @@ export function bridge(caller: Caller, options: BridgeOptions): McpServer {
     name: "sigilant-bridge",
     version: "0.1.0",
     async tools(): Promise<McpTool[]> {
-      return (await caller.listTools()).map((t) => ({
-        name: t.name,
-        description: t.description ?? "",
-        inputSchema: t.inputSchema ?? { type: "object" },
-      }));
+      const until = Date.now() + (options.listForSecs ?? 120) * 1000;
+      const every = (options.listEverySecs ?? 5) * 1000;
+      for (;;) {
+        try {
+          return (await caller.listTools()).map((t) => ({
+            name: t.name,
+            description: t.description ?? "",
+            inputSchema: t.inputSchema ?? { type: "object" },
+          }));
+        } catch (why) {
+          if (Date.now() + every > until) throw why;
+          log(`listing the tools failed (${(why as Error).message}); trying again`);
+          await sleep(every);
+        }
+      }
     },
     async call(name, args): Promise<McpResult> {
       let outcome: ToolOutcome;

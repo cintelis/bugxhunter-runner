@@ -11,6 +11,8 @@
 // | `BXH_DIRECTORY` | the engagement's folder in the workspace: `/workspace/engagement` unless set |
 // | `BXH_MODEL` | the model, as OpenCode names it; the runner's default unless set |
 
+import { mkdir } from "node:fs/promises";
+
 export interface Run {
   directory: string;
   text: string;
@@ -71,6 +73,8 @@ if (import.meta.main) {
   const text = parsed ? reviewPrompt(parsed.repo, parsed.pr) : prompt!;
   const runner = process.env.BXH_RUNNER?.trim() || "http://bxh-runner:8790";
   const directory = process.env.BXH_DIRECTORY?.trim() || "/workspace/engagement";
+  // The engagement's folder in the shared workspace, which the runner expects to find.
+  await mkdir(directory, { recursive: true });
   const id = await startRun(runner, { directory, text, model: process.env.BXH_MODEL?.trim() || undefined });
   console.log(`started session ${id} in ${directory} on ${runner}`);
 }

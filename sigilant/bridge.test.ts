@@ -32,6 +32,25 @@ test("the tools are the gateway's, with a schema where it gave none", async () =
   ]);
 });
 
+test("listing the tools is tried again while the gateway is not ready, and given up on in the end", async () => {
+  let asked = 0;
+  const flaky: Caller = {
+    listTools: async () => {
+      asked++;
+      if (asked < 3) throw new GatewayRefused(503, "not signing yet");
+      return [{ name: "repo.read" }];
+    },
+    callUntilDecided: async () => {
+      throw new Error("not called");
+    },
+  };
+  const tools = await bridge(flaky, { waitSecs: 1, listForSecs: 1, listEverySecs: 0.01, log: (l) => lines.push(l) }).tools();
+  assert.deepEqual(tools.map((t) => t.name), ["repo.read"]);
+  assert.equal(asked, 3);
+  const never: Caller = { ...flaky, listTools: async () => { throw new GatewayRefused(503, "still not"); } };
+  await assert.rejects(bridge(never, { waitSecs: 1, listForSecs: 0.05, listEverySecs: 0.01 }).tools(), /still not/);
+});
+
 test("an allowed call is the tool's answer, error or not", async () => {
   const done: ToolOutcome = { status: "done", isError: false, content: [{ type: "text", text: "{\"ok\":1}" }], structuredContent: { ok: 1 }, text: "{\"ok\":1}" };
   const r = await server({ "repo.read": done }).call("repo.read", { repo: "a/b", path: "x" });

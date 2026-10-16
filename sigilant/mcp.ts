@@ -84,7 +84,12 @@ export function mcpHandler(
       case "ping":
         return reply({});
       case "tools/list":
-        return reply({ tools: await server.tools() });
+        try {
+          return reply({ tools: await server.tools() });
+        } catch (why) {
+          log(`tools/list failed: ${(why as Error).message}`);
+          return json(200, { jsonrpc: "2.0", id: message.id ?? null, error: { code: -32000, message: `the tools could not be listed: ${(why as Error).message}` } });
+        }
       case "tools/call": {
         const name = String(message.params?.name ?? "");
         const args = message.params?.arguments ?? {};
