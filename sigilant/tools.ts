@@ -11,6 +11,9 @@
 // | `repo.block` | a review requesting changes, which blocks the merge |
 // | `target.request` | one HTTP request to a target, by method and path |
 // | `finding.record` | a finding, at a severity, into the findings file |
+// | `repo.scan` | what a repository holds that looks like an agent, an MCP configuration or a model key: candidates, by path |
+// | `net.discover` | whether a target serves MCP, and what it says of itself |
+// | `discovery.report` | a discovery, as the gateway records it: the record is the evidence; this only acknowledges |
 //
 // GitHub is reached with a token of the engagement's (a fine-grained token
 // with Contents: read and Pull requests: write on the repositories in scope),
@@ -73,7 +76,75 @@ export const TOOLS: McpTool[] = [
       required: ["severity", "title"],
     },
   },
+  {
+    name: "repo.scan",
+    description:
+      "Look through a repository in the engagement's scope for what looks like an agent, an MCP server configuration or a model API key: candidates by path, with what matched. Keys are never shown, only where one seems to be.",
+    inputSchema: {
+      type: "object",
+      properties: { repo: string("owner/name"), pr: { type: "integer", description: "a pull request, to look at its head" } },
+      required: ["repo"],
+    },
+  },
+  {
+    name: "net.discover",
+    description: "Ask a target in the engagement's scope whether it serves MCP, and what it says of itself: its MCP endpoint, its OAuth protected-resource and OpenID metadata.",
+    inputSchema: { type: "object", properties: { target: string("host, or host:port, as the scope names it") }, required: ["target"] },
+  },
+  {
+    name: "discovery.report",
+    description:
+      "Report one thing found: what kind (mcp_server, agent, model_key, tool), where (the repository or the target, exactly as the scope names it), what it is called there (a path, an endpoint), and brief evidence. The gateway's record of this call is the discovery.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["mcp_server", "agent", "model_key", "tool"] },
+        where: string("the repository (owner/name) or the target (host:port), as the scope names it"),
+        name: string("a path in the repository, or an endpoint at the target"),
+        evidence: string("one line of what was seen; never a secret"),
+      },
+      required: ["kind", "where", "name"],
+    },
+  },
 ];
+
+/** Paths that are MCP or agent configuration, by name. */
+const CONFIG_FILES = [
+  /(^|\/)\.?mcp\.json$/,
+  /(^|\/)claude_desktop_config\.json$/,
+  /(^|\/)\.cursor\/mcp\.json$/,
+  /(^|\/)\.vscode\/mcp\.json$/,
+  /(^|\/)opencode\.json$/,
+  /(^|\/)\.opencode\/.*\.json$/,
+  /(^|\/)\.env(\..*)?$/,
+];
+/** Manifests that name an agent framework when they depend on one. */
+const MANIFESTS = [/(^|\/)package\.json$/, /(^|\/)requirements\.txt$/, /(^|\/)pyproject\.toml$/];
+const FRAMEWORKS = [
+  "@modelcontextprotocol/sdk",
+  "@anthropic-ai/sdk",
+  "@langchain/",
+  "langchain",
+  "langgraph",
+  "crewai",
+  "autogen",
+  "openai",
+  "anthropic",
+  "@sigilant/sdk",
+  "opencode-ai",
+  '"mcp"',
+  "mcp[",
+  "fastmcp",
+];
+/** What a model provider's key looks like; the match is never handed back, only its shape. */
+const KEY_SHAPES: [string, RegExp][] = [
+  ["anthropic", /sk-ant-[A-Za-z0-9_-]{20,}/],
+  ["openai", /sk-(proj-)?(?!ant-)[A-Za-z0-9_-]{20,}/],
+  ["google", /AIza[0-9A-Za-z_-]{35}/],
+  ["huggingface", /hf_[A-Za-z0-9]{20,}/],
+];
+/** How many files a scan reads in full. */
+export const SCAN_LIMIT = 40;
 
 export interface Finding {
   at: string;
@@ -231,6 +302,83 @@ export function bxhTools(options: ToolsOptions): { tools: McpTool[]; call(name: 
         } catch (why) {
           return refuse(`${method} ${url}: ${(why as Error).message}`);
         }
+      }
+      case "repo.scan": {
+        const repo = repoOf(args.repo);
+        if (!repo) return refuse("repo must be owner/name");
+        const pr = prOf(args.pr);
+        let ref: string;
+        if (pr) ref = ((await (await github(`/repos/${repo}/pulls/${pr}`)).json()) as { head: { sha: string } }).head.sha;
+        else ref = ((await (await github(`/repos/${repo}`)).json()) as { default_branch: string }).default_branch;
+        const tree = (await (await github(`/repos/${repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`)).json()) as {
+          tree: { path: string; type: string; size?: number }[];
+          truncated?: boolean;
+        };
+        const files = tree.tree.filter((e) => e.type === "blob");
+        const candidates: { kind: string; path: string; matched: string[] }[] = [];
+        // Configuration by name; every .env file committed is a candidate as it stands.
+        for (const f of files) {
+          if (CONFIG_FILES.some((re) => re.test(f.path))) {
+            candidates.push({ kind: /\.env/.test(f.path) ? "model_key" : "mcp_server", path: f.path, matched: ["by name"] });
+          }
+        }
+        // Manifests and configuration, read, for frameworks and for keys.
+        const toRead = files
+          .filter((f) => (MANIFESTS.some((re) => re.test(f.path)) || CONFIG_FILES.some((re) => re.test(f.path))) && (f.size ?? 0) <= LIMITS.file)
+          .slice(0, SCAN_LIMIT);
+        let read = 0;
+        for (const f of toRead) {
+          const file = (await (await github(`/repos/${repo}/contents/${f.path}?ref=${encodeURIComponent(ref)}`)).json()) as { content?: string; encoding?: string };
+          const content = Buffer.from(file.content ?? "", (file.encoding ?? "base64") as BufferEncoding).toString("utf8");
+          read++;
+          const frameworks = FRAMEWORKS.filter((name) => content.includes(name));
+          if (frameworks.length && MANIFESTS.some((re) => re.test(f.path))) candidates.push({ kind: "agent", path: f.path, matched: frameworks });
+          const keys = KEY_SHAPES.filter(([, re]) => re.test(content)).map(([who]) => `a key shaped like ${who}'s`);
+          if (keys.length) candidates.push({ kind: "model_key", path: f.path, matched: keys });
+        }
+        return asResult({ repo, ref, files: files.length, read, truncated: tree.truncated === true, candidates });
+      }
+      case "net.discover": {
+        const target = typeof args.target === "string" && TARGET.test(args.target) ? args.target : undefined;
+        if (!target) return refuse("target (host or host:port) is required");
+        const base = `${options.target.scheme ?? "https"}://${target}`;
+        const ask = async (path: string, init: RequestInit = {}) => {
+          try {
+            const r = await tFetch(`${base}${path}`, { ...init, redirect: "manual", signal: AbortSignal.timeout(options.target.timeoutMs ?? 10_000) });
+            const text = (await r.text()).slice(0, LIMITS.body);
+            let body: unknown = text;
+            try {
+              body = JSON.parse(text);
+            } catch {
+              // Not JSON: kept as text.
+            }
+            return { status: r.status, contentType: r.headers.get("content-type") ?? undefined, body };
+          } catch (why) {
+            return { error: (why as Error).message };
+          }
+        };
+        const initialize = {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "bugxhunter-discovery", version: "0.1.0" } },
+        };
+        const mcp = await ask("/mcp", { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify(initialize) });
+        const server = (mcp as { body?: { result?: { serverInfo?: unknown; protocolVersion?: unknown } } }).body?.result;
+        return asResult({
+          target,
+          mcp: { ...mcp, body: undefined, answered: server?.serverInfo !== undefined, serverInfo: server?.serverInfo, protocolVersion: server?.protocolVersion },
+          oauthProtectedResource: await ask("/.well-known/oauth-protected-resource"),
+          openid: await ask("/.well-known/openid-configuration"),
+        });
+      }
+      case "discovery.report": {
+        const kind = typeof args.kind === "string" && ["mcp_server", "agent", "model_key", "tool"].includes(args.kind) ? args.kind : undefined;
+        const where = typeof args.where === "string" ? args.where.trim() : "";
+        const what = typeof args.name === "string" ? args.name.trim() : "";
+        if (!kind || !where || !what) return refuse("kind, where and name are required");
+        // Nothing to do: the gateway's record of this call is the discovery, and the sync service folds it from the chain.
+        return asResult({ reported: true, kind, where, name: what });
       }
       case "finding.record": {
         const severity = typeof args.severity === "string" && SEVERITIES.has(args.severity) ? args.severity : undefined;

@@ -32,8 +32,8 @@ const tools = (gh: ReturnType<typeof github>, target?: typeof fetch) =>
     },
   });
 
-test("the five tools are what the registry and the policy name", () => {
-  assert.deepEqual(TOOLS.map((t) => t.name), ["repo.read", "repo.comment", "repo.block", "target.request", "finding.record"]);
+test("the tools are what the registry and the policy name", () => {
+  assert.deepEqual(TOOLS.map((t) => t.name), ["repo.read", "repo.comment", "repo.block", "target.request", "finding.record", "repo.scan", "net.discover", "discovery.report"]);
 });
 
 test("a file is read at the pull request's head, decoded, and cut to size", async () => {
@@ -116,6 +116,74 @@ test("a request to a target: the status, a few headers and the body, bounded", a
   const failed = await tools(github({}), down).call("target.request", { target: "erp", method: "GET", path: "/" });
   assert.equal(failed.isError, true);
   assert.match((failed.structuredContent as { error: string }).error, /ECONNREFUSED/);
+});
+
+test("a scan names what looks like an agent, an MCP configuration or a key, and never the key", async () => {
+  const b64 = (s: string) => ({ content: Buffer.from(s).toString("base64"), encoding: "base64" });
+  const gh = github({
+    "GET /repos/cintelis/sigilant": () => ({ default_branch: "main" }),
+    "GET /repos/cintelis/sigilant/git/trees/main": () => ({
+      tree: [
+        { path: "package.json", type: "blob", size: 100 },
+        { path: "apps/x/.mcp.json", type: "blob", size: 50 },
+        { path: ".env.example", type: "blob", size: 80 },
+        { path: "src/index.ts", type: "blob", size: 9000 },
+        { path: "docs", type: "tree" },
+      ],
+    }),
+    "GET /repos/cintelis/sigilant/contents/package.json": () => b64('{"dependencies":{"@modelcontextprotocol/sdk":"1.0.0","express":"5"}}'),
+    "GET /repos/cintelis/sigilant/contents/apps/x/.mcp.json": () => b64('{"mcpServers":{}}'),
+    "GET /repos/cintelis/sigilant/contents/.env.example": () => b64("ANTHROPIC_API_KEY=sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789\n"),
+  });
+  const r = (await tools(gh).call("repo.scan", { repo: "cintelis/sigilant" })).structuredContent as {
+    ref: string;
+    files: number;
+    read: number;
+    candidates: { kind: string; path: string; matched: string[] }[];
+  };
+  assert.equal(r.ref, "main");
+  assert.equal(r.files, 4);
+  assert.equal(r.read, 3);
+  assert.deepEqual(r.candidates, [
+    { kind: "mcp_server", path: "apps/x/.mcp.json", matched: ["by name"] },
+    { kind: "model_key", path: ".env.example", matched: ["by name"] },
+    { kind: "agent", path: "package.json", matched: ["@modelcontextprotocol/sdk"] },
+    { kind: "model_key", path: ".env.example", matched: ["a key shaped like anthropic's"] },
+  ]);
+  assert.doesNotMatch(JSON.stringify(r), /sk-ant-api03/, "the key itself is never handed back");
+});
+
+test("a target is asked whether it serves MCP, and what it says of itself", async () => {
+  const seen: string[] = [];
+  const target: typeof fetch = async (input, init) => {
+    const url = String(input);
+    seen.push(`${init?.method ?? "GET"} ${url}`);
+    if (url.endsWith("/mcp")) {
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-06-18", serverInfo: { name: "demo-erp", version: "1.0.0" } } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/oauth-protected-resource")) return new Response(JSON.stringify({ resource: "https://erp:9443", authorization_servers: ["https://idp"] }), { status: 200 });
+    return new Response("not here", { status: 404 });
+  };
+  const r = (await tools(github({}), target).call("net.discover", { target: "erp:9443" })).structuredContent as {
+    mcp: { answered: boolean; serverInfo: { name: string } };
+    oauthProtectedResource: { body: { authorization_servers: string[] } };
+    openid: { status: number };
+  };
+  assert.deepEqual(seen, ["POST https://erp:9443/mcp", "GET https://erp:9443/.well-known/oauth-protected-resource", "GET https://erp:9443/.well-known/openid-configuration"]);
+  assert.equal(r.mcp.answered, true);
+  assert.equal(r.mcp.serverInfo.name, "demo-erp");
+  assert.deepEqual(r.oauthProtectedResource.body.authorization_servers, ["https://idp"]);
+  assert.equal(r.openid.status, 404);
+  assert.equal((await tools(github({}), target).call("net.discover", { target: "erp:9443/x" })).isError, true);
+});
+
+test("a report of a discovery is acknowledged, and nothing else: the gateway's record is the discovery", async () => {
+  const r = await tools(github({})).call("discovery.report", { kind: "mcp_server", where: "erp:9443", name: "/mcp", evidence: "demo-erp" });
+  assert.deepEqual(r.structuredContent, { reported: true, kind: "mcp_server", where: "erp:9443", name: "/mcp" });
+  assert.equal((await tools(github({})).call("discovery.report", { kind: "thing", where: "x", name: "y" })).isError, true);
 });
 
 test("a finding is recorded at a known severity, and named", async () => {

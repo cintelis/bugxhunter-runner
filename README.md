@@ -244,7 +244,7 @@ wait for a person, and each is written to a signed audit chain. Two processes, o
 
 | | |
 |---|---|
-| `serve-tools.ts` | the tools a gateway forwards to: `repo.read`, `repo.comment`, `repo.block`, `target.request`, `finding.record`; GitHub with the engagement's token (`GITHUB_TOKEN_FILE`) |
+| `serve-tools.ts` | the tools a gateway forwards to: `repo.read`, `repo.comment`, `repo.block`, `target.request`, `finding.record`, and for discovery `repo.scan`, `net.discover`, `discovery.report`; GitHub with the engagement's token (`GITHUB_TOKEN_FILE`) |
 | `serve-bridge.ts` | an MCP server the agent is pointed at (`mcp.sigilant` in OpenCode's config), which holds the runner's identity and puts every call through the gateway |
 | `opencode.json`, `AGENTS.md` | the agent's configuration for a governed run, merged over the image's (`OPENCODE_CONFIG`): the bridge as its one MCP server, the sandbox's own tools off, and what a denial or a held call means |
 | `run.ts` | starts a run on the runner's API with nobody at the keyboard: `--pr owner/name#N` reviews a pull request |

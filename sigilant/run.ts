@@ -4,12 +4,14 @@
 //
 //   node sigilant/run.ts --pr cintelis/sigilant#42
 //   node sigilant/run.ts --prompt "Test what the last deploy changed on erp:9443."
+//   node sigilant/run.ts --discover                    # the scope in BXH_SCOPE_REPOS and BXH_SCOPE_TARGETS
 //
 // | Variable | |
 // |---|---|
 // | `BXH_RUNNER` | the runner's API: `http://bxh-runner:8790` unless set |
 // | `BXH_DIRECTORY` | the engagement's folder in the workspace: `/workspace/engagement` unless set |
 // | `BXH_MODEL` | the model, as OpenCode names it; the runner's default unless set |
+// | `BXH_SCOPE_REPOS`, `BXH_SCOPE_TARGETS` | what a discovery run looks through, comma-separated: the scope, as the policy's entities have it |
 
 import { mkdir } from "node:fs/promises";
 
@@ -28,6 +30,17 @@ export function reviewPrompt(repo: string, pr: number): string {
     "Record each finding with finding.record at a severity, then comment on the pull request with repo.comment: one summary, findings first, each with the file and what to change.",
     "If a finding is critical, block the merge with repo.block and say that a tester confirms it.",
     "Do nothing outside this pull request.",
+  ].join(" ");
+}
+
+/** The prompt a discovery run starts with: the scope, as the engagement has it. */
+export function discoverPrompt(repos: string[], targets: string[]): string {
+  return [
+    "Run a discovery of agents and MCP servers inside the engagement's scope, as a governed run.",
+    repos.length ? `Repositories to scan with repo.scan: ${repos.join(", ")}.` : "There are no repositories in scope.",
+    targets.length ? `Targets to ask with net.discover: ${targets.join(", ")}.` : "There are no targets in scope.",
+    "Report each thing found with discovery.report, naming where exactly as given here, and nothing outside the scope.",
+    "End with a short summary of what was found and reported.",
   ].join(" ");
 }
 
@@ -65,12 +78,14 @@ if (import.meta.main) {
   };
   const pr = at("--pr");
   const prompt = at("--prompt");
+  const discover = args.includes("--discover");
   const parsed = pr ? parsePr(pr) : undefined;
-  if ((pr && !parsed) || (!parsed && !prompt)) {
-    console.error("usage: node sigilant/run.ts --pr owner/name#number | --prompt <text>");
+  if ((pr && !parsed) || (!parsed && !prompt && !discover)) {
+    console.error("usage: node sigilant/run.ts --pr owner/name#number | --prompt <text> | --discover");
     process.exit(2);
   }
-  const text = parsed ? reviewPrompt(parsed.repo, parsed.pr) : prompt!;
+  const list = (name: string) => (process.env[name] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const text = parsed ? reviewPrompt(parsed.repo, parsed.pr) : discover ? discoverPrompt(list("BXH_SCOPE_REPOS"), list("BXH_SCOPE_TARGETS")) : prompt!;
   const runner = process.env.BXH_RUNNER?.trim() || "http://bxh-runner:8790";
   const directory = process.env.BXH_DIRECTORY?.trim() || "/workspace/engagement";
   // The engagement's folder in the shared workspace, which the runner expects to find.

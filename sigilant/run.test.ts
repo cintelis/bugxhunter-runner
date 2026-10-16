@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { parsePr, reviewPrompt, startRun } from "./run.ts";
+import { discoverPrompt, parsePr, reviewPrompt, startRun } from "./run.ts";
 
 test("a run is a session in the folder, then the prompt to it", async () => {
   const posted: { path: string; body: Record<string, unknown> }[] = [];
@@ -21,6 +21,14 @@ test("a run is a session in the folder, then the prompt to it", async () => {
 test("a runner that refuses is reported with what it said", async () => {
   const fetchImpl: typeof fetch = async () => new Response(JSON.stringify({ error: { message: "Host is not allowed" } }), { status: 403 });
   await assert.rejects(startRun("http://x", { directory: "/w", text: "t" }, fetchImpl), /\/api\/agent\/session: HTTP 403: .*Host is not allowed/);
+});
+
+test("a discovery run is told the scope as given, and that nothing outside it counts", () => {
+  const prompt = discoverPrompt(["cintelis/sigilant"], ["erp:9443", "fleet-tools:9443"]);
+  assert.match(prompt, /repo\.scan: cintelis\/sigilant\./);
+  assert.match(prompt, /net\.discover: erp:9443, fleet-tools:9443\./);
+  assert.match(prompt, /nothing outside the scope/);
+  assert.match(discoverPrompt([], ["erp:9443"]), /no repositories in scope/);
 });
 
 test("a pull request is named owner/name#number, and the prompt names it back", () => {

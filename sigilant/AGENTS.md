@@ -34,6 +34,21 @@ You are running an engagement under Sigilant. Read this before doing anything.
    and what to change. Where a critical finding is confirmed, `repo.block` requests changes, which
    blocks the merge; that too waits for a tester.
 
+## How to discover agents and MCP servers
+
+A discovery run looks for what Sigilant does not yet know, inside the scope only.
+
+1. For each repository the run names, `repo.scan` gives candidates by path: MCP configuration, a
+   manifest that depends on an agent framework, a file that looks to hold a model key.
+2. For each target the run names, `net.discover` says whether it serves MCP, and what it says of
+   itself.
+3. Report each thing found with `discovery.report`: its kind, **where** exactly as the scope names
+   it (the repository as `owner/name`, the target as `host:port`), its name there (the path, or
+   the endpoint), and one line of evidence. Never a secret. Each report is a signed record;
+   a person claims or dismisses it in the Sigilant console.
+4. Report nothing you did not see, and nothing outside the scope: it would be refused.
+5. End with a short summary: what was found, where, and what you reported.
+
 ## How to test a target
 
 `target.request` makes one request to a host the scope names, by method and path. Reads go through;
