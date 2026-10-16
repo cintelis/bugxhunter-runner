@@ -82,6 +82,16 @@ test("without a token the repository tools say so", async () => {
   assert.match((r.structuredContent as { error: string }).error, /no GitHub credential/);
 });
 
+test("a credential got fresh each time is presented as the token", async () => {
+  const gh = github({ "GET /repos/cintelis/sigilant/contents/README.md": () => ({ type: "file", size: 1, content: Buffer.from("x").toString("base64") }) });
+  let asked = 0;
+  const t = bxhTools({ github: { fetch: gh.fetch, token: async () => `ghs_${++asked}` }, target: {}, findings: { record: async () => "f" } });
+  await t.call("repo.read", { repo: "cintelis/sigilant", path: "README.md" });
+  await t.call("repo.read", { repo: "cintelis/sigilant", path: "README.md" });
+  assert.equal(asked, 2);
+  assert.match(String((gh.asked[1] as unknown as { url: string }).url), /README/);
+});
+
 test("a comment is posted, and a block is a review requesting changes", async () => {
   const gh = github({
     "POST /repos/cintelis/sigilant/issues/42/comments": () => ({ html_url: "https://github.com/c/s/pull/42#issuecomment-1" }),

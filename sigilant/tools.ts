@@ -178,8 +178,12 @@ export interface Finding {
 
 export interface ToolsOptions {
   github: {
-    /** The engagement's token; without one the repository tools refuse. */
-    token?: string;
+    /**
+     * The engagement's credential: a token, or a way to get one fresh — a
+     * GitHub App's installation token (github-app.ts). Without either, the
+     * repository tools refuse.
+     */
+    token?: string | (() => Promise<string>);
     apiBase?: string;
     fetch?: typeof fetch;
   };
@@ -219,11 +223,12 @@ export function bxhTools(options: ToolsOptions): { tools: McpTool[]; call(name: 
   const prOf = (v: unknown) => (Number.isInteger(v) && (v as number) > 0 ? (v as number) : undefined);
 
   const github = async (route: string, init: RequestInit & { accept?: string } = {}) => {
-    if (!options.github.token) throw new Error("no GitHub credential: the engagement's token is not configured (GITHUB_TOKEN_FILE)");
+    if (!options.github.token) throw new Error("no GitHub credential: neither the GitHub App (GITHUB_APP_ID) nor a token (GITHUB_TOKEN_FILE) is configured");
+    const token = typeof options.github.token === "function" ? await options.github.token() : options.github.token;
     const response = await ghFetch(`${api}${route}`, {
       ...init,
       headers: {
-        authorization: `Bearer ${options.github.token}`,
+        authorization: `Bearer ${token}`,
         accept: init.accept ?? "application/vnd.github+json",
         "x-github-api-version": "2022-11-28",
         "user-agent": "bugxhunter-sigilant",

@@ -245,6 +245,7 @@ wait for a person, and each is written to a signed audit chain. Two processes, o
 | | |
 |---|---|
 | `serve-tools.ts` | the tools a gateway forwards to: `repo.read`, `repo.comment`, `repo.block`, `target.request`, `finding.record`, and for discovery `repo.scan`, `net.discover`, `discovery.report`; `run.usage`, which the runner's own process reports each step's usage with; GitHub with the engagement's token (`GITHUB_TOKEN_FILE`) |
+| `github-app.ts` | the runner on GitHub as a GitHub App: a JWT signed with the app's key, exchanged for an installation token and renewed before it runs out, so that comments and reviews carry the app's name and logo (GitHub requires RS256 for the JWT; that RSA is GitHub's, confined to this file) |
 | `usage.ts` | follows a run on the runner and reports each step — tokens, cost, time, tool calls — through the gateway as it completes; `run.ts` and the webhook do this for every run they start |
 | `serve-bridge.ts` | an MCP server the agent is pointed at (`mcp.sigilant` in OpenCode's config), which holds the runner's identity and puts every call through the gateway |
 | `opencode.json`, `AGENTS.md` | the agent's configuration for a governed run, merged over the image's (`OPENCODE_CONFIG`): the bridge as its one MCP server, the sandbox's own tools off, and what a denial or a held call means |
