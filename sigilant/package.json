@@ -1,0 +1,20 @@
+{
+  "name": "bugxhunter-sigilant",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "BugXHunter through Sigilant: the runner's tools behind a gateway, and the bridge that puts the agent's calls through it",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"*.test.ts\"",
+    "tools": "node serve-tools.ts",
+    "bridge": "node serve-bridge.ts"
+  },
+  "dependencies": {
+    "@sigilant/sdk": "file:../../sigilant/sdks/typescript"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^6.0.3"
+  }
+}

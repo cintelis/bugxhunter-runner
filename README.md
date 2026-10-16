@@ -236,6 +236,20 @@ before scanning and to scan only hosts you name.
 To fence the agent to a specific lab/target range, add firewall rules on the Docker host or the VM
 you run this in — Docker's bridge NAT doesn't restrict outbound on its own.
 
+## Through Sigilant (governed runs)
+
+`sigilant/` is the runner's side of running under [Sigilant](https://github.com/cintelis/sigilant): the runner is a
+registered agent there, every call it makes is decided by a gateway against the scope the customer signed, risky ones
+wait for a person, and each is written to a signed audit chain. Two processes, one image (`sigilant/Dockerfile`):
+
+| | |
+|---|---|
+| `serve-tools.ts` | the tools a gateway forwards to: `repo.read`, `repo.comment`, `repo.block`, `target.request`, `finding.record`; GitHub with the engagement's token (`GITHUB_TOKEN_FILE`) |
+| `serve-bridge.ts` | an MCP server the agent is pointed at (`mcp.sigilant` in OpenCode's config), which holds the runner's identity and puts every call through the gateway |
+
+The package stands on its own (`cd sigilant && npm install && npm run typecheck && npm test`), with `@sigilant/sdk`
+from a Sigilant checkout beside this one. Sigilant's `deploy/compose/bugxhunter.yaml` runs both beside its stack.
+
 ## Configuration (environment variables)
 
 | Variable | Default | Purpose |
