@@ -75,7 +75,7 @@ export const TOOLS: McpTool[] = [
       type: "object",
       properties: {
         severity: { type: "string", enum: ["low", "medium", "high", "critical"] },
-        title: string("one line"),
+        title: { type: "string", description: "one line, at most 200 characters: what is wrong, not why", maxLength: 200 },
         where: string("the repository (owner/name) or the target (host:port) it was found in, as the scope names it"),
         detail: string("what was seen: the request and what it answered, or the file and the line; never a secret"),
       },
