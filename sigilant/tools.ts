@@ -11,6 +11,7 @@
 // | `repo.block` | a review requesting changes, which blocks the merge |
 // | `target.request` | one HTTP request to a target, by method and path |
 // | `finding.record` | a finding, at a severity, into the findings file |
+// | `repo.alerts` | the open security alerts GitHub itself holds for a repository — Dependabot, code scanning, secret scanning — each kind where the repository has it on and the app may read it |
 // | `repo.scan` | what a repository holds that looks like an agent, an MCP configuration or a model key: candidates, by path |
 // | `net.discover` | whether a target serves MCP, and what it says of itself |
 // | `discovery.report` | a discovery, as the gateway records it: the record is the evidence; this only acknowledges |
@@ -81,6 +82,12 @@ export const TOOLS: McpTool[] = [
       },
       required: ["severity", "title", "where"],
     },
+  },
+  {
+    name: "repo.alerts",
+    description:
+      "The open security alerts GitHub holds for a repository in the engagement's scope: Dependabot (vulnerable dependencies, with the fixed version), code scanning (CodeQL and the like, by rule and location) and secret scanning (what kind of secret, never the secret). A kind the repository has not got on, or the app may not read, is said so.",
+    inputSchema: { type: "object", properties: { repo: string("owner/name") }, required: ["repo"] },
   },
   {
     name: "repo.scan",
@@ -174,6 +181,15 @@ const KEY_SHAPES: [string, RegExp][] = [
 ];
 /** How many files a scan reads in full. */
 export const SCAN_LIMIT = 40;
+/** Most alerts of one kind returned. */
+export const ALERTS_LIMIT = 100;
+/** Worst first. */
+const SEVERITY_ORDER = ["critical", "high", "error", "medium", "warning", "moderate", "low", "note", "unknown"];
+const rank = (s: string) => {
+  const at = SEVERITY_ORDER.indexOf(s);
+  return at < 0 ? SEVERITY_ORDER.length : at;
+};
+const str = (v: unknown) => (typeof v === "string" ? v : undefined);
 
 export interface Finding {
   at: string;
@@ -340,6 +356,69 @@ export function bxhTools(options: ToolsOptions): { tools: McpTool[]; call(name: 
         } catch (why) {
           return refuse(`${method} ${url}: ${(why as Error).message}`);
         }
+      }
+      case "repo.alerts": {
+        const repo = repoOf(args.repo);
+        if (!repo) return refuse("repo must be owner/name");
+        /** One kind of alert, read where it can be; said why not where it cannot. */
+        const read = async <T>(kind: string, route: string, map: (raw: Record<string, unknown>) => T): Promise<{ kind: string; available: boolean; why?: string; count: number; alerts: T[] }> => {
+          try {
+            const raw = (await (await github(`/repos/${repo}/${route}?state=open&per_page=${ALERTS_LIMIT}`)).json()) as Record<string, unknown>[];
+            return { kind, available: true, count: raw.length, alerts: raw.map(map) };
+          } catch (why) {
+            const message = (why as Error).message;
+            const said = /HTTP 403/.test(message)
+              ? "not permitted: the app lacks the permission, or the repository has not got this on"
+              : /HTTP 404/.test(message)
+                ? "not available: the repository has not got this on, or the app may not see it"
+                : message;
+            return { kind, available: false, why: said, count: 0, alerts: [] };
+          }
+        };
+        const dependabot = await read("dependabot", "dependabot/alerts", (a) => {
+          const advisory = (a.security_advisory ?? {}) as Record<string, unknown>;
+          const vulnerability = (a.security_vulnerability ?? {}) as Record<string, unknown>;
+          const dependency = (a.dependency ?? {}) as Record<string, unknown>;
+          const pkg = (dependency.package ?? {}) as Record<string, unknown>;
+          return {
+            number: a.number,
+            severity: str(advisory.severity) ?? "unknown",
+            package: [str(pkg.ecosystem), str(pkg.name)].filter(Boolean).join(":"),
+            manifest: str(dependency.manifest_path),
+            vulnerable: str(vulnerability.vulnerable_version_range),
+            fixed_in: str((vulnerability.first_patched_version as Record<string, unknown> | undefined)?.identifier),
+            summary: str(advisory.summary),
+            advisory: str(advisory.ghsa_id),
+            cve: str(advisory.cve_id),
+            url: str(a.html_url),
+          };
+        });
+        const code = await read("code_scanning", "code-scanning/alerts", (a) => {
+          const rule = (a.rule ?? {}) as Record<string, unknown>;
+          const instance = (a.most_recent_instance ?? {}) as Record<string, unknown>;
+          const location = (instance.location ?? {}) as Record<string, unknown>;
+          return {
+            number: a.number,
+            severity: str(rule.security_severity_level) ?? str(rule.severity) ?? "unknown",
+            rule: str(rule.id),
+            description: str(rule.description),
+            tool: str((a.tool as Record<string, unknown> | undefined)?.name),
+            path: str(location.path),
+            line: location.start_line,
+            url: str(a.html_url),
+          };
+        });
+        // What kind of secret, where it was seen: never the secret, which GitHub sends and is dropped here.
+        const secrets = await read("secret_scanning", "secret-scanning/alerts", (a) => ({
+          number: a.number,
+          severity: "critical",
+          type: str(a.secret_type_display_name) ?? str(a.secret_type),
+          validity: str(a.validity),
+          publicly_leaked: a.publicly_leaked === true,
+          url: str(a.html_url),
+        }));
+        for (const kind of [dependabot, code, secrets]) kind.alerts.sort((a, b) => rank(String(a.severity)) - rank(String(b.severity)));
+        return asResult({ repo, kinds: [dependabot, code, secrets], open: dependabot.count + code.count + secrets.count });
       }
       case "repo.scan": {
         const repo = repoOf(args.repo);

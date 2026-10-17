@@ -35,7 +35,7 @@ export interface Run {
 export function reviewPrompt(repo: string, pr: number): string {
   return [
     `Review pull request #${pr} of ${repo} for security issues, as a governed run.`,
-    `Read its diff with repo.read (repo "${repo}", pr ${pr}), and the files it touches where you need the context.`,
+    `Read its diff with repo.read (repo "${repo}", pr ${pr}), and the files it touches where you need the context; read what GitHub's own scanners hold open with repo.alerts (repo "${repo}"), and use it rather than rediscover it.`,
     `Record each finding with finding.record at a severity, with where "${repo}" and, as detail, the file and the line; then comment on the pull request with repo.comment: one summary, findings first, each with the file and what to change.`,
     "If a finding is critical, block the merge with repo.block and say that a tester confirms it.",
     "Do nothing outside this pull request.",

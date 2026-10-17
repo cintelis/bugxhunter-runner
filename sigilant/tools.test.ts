@@ -33,7 +33,7 @@ const tools = (gh: ReturnType<typeof github>, target?: typeof fetch) =>
   });
 
 test("the tools are what the registry and the policy name", () => {
-  assert.deepEqual(TOOLS.map((t) => t.name), ["repo.read", "repo.comment", "repo.block", "target.request", "finding.record", "repo.scan", "net.discover", "discovery.report", "run.usage"]);
+  assert.deepEqual(TOOLS.map((t) => t.name), ["repo.read", "repo.comment", "repo.block", "target.request", "finding.record", "repo.alerts", "repo.scan", "net.discover", "discovery.report", "run.usage"]);
 });
 
 test("a file is read at the pull request's head, decoded, and cut to size", async () => {
@@ -126,6 +126,47 @@ test("a request to a target: the status, a few headers and the body, bounded", a
   const failed = await tools(github({}), down).call("target.request", { target: "erp", method: "GET", path: "/" });
   assert.equal(failed.isError, true);
   assert.match((failed.structuredContent as { error: string }).error, /ECONNREFUSED/);
+});
+
+test("GitHub's own alerts are read where they can be, worst first, said why not where they cannot, and never the secret", async () => {
+  const gh = github({
+    "GET /repos/cintelis/sigilant/dependabot/alerts": () => [
+      {
+        number: 7, html_url: "https://github.com/cintelis/sigilant/security/dependabot/7",
+        dependency: { package: { ecosystem: "npm", name: "lodash" }, manifest_path: "apps/console/package.json" },
+        security_advisory: { ghsa_id: "GHSA-xxxx", cve_id: "CVE-2024-0001", severity: "medium", summary: "Prototype pollution" },
+        security_vulnerability: { vulnerable_version_range: "< 4.17.21", first_patched_version: { identifier: "4.17.21" } },
+      },
+      {
+        number: 9, html_url: "https://github.com/cintelis/sigilant/security/dependabot/9",
+        dependency: { package: { ecosystem: "cargo", name: "openssl" }, manifest_path: "Cargo.lock" },
+        security_advisory: { ghsa_id: "GHSA-yyyy", cve_id: null, severity: "critical", summary: "Memory corruption" },
+        security_vulnerability: { vulnerable_version_range: "< 0.10.60", first_patched_version: null },
+      },
+    ],
+    "GET /repos/cintelis/sigilant/secret-scanning/alerts": () => [
+      { number: 2, secret_type: "anthropic_api_key", secret_type_display_name: "Anthropic API Key", secret: "sk-ant-THE-SECRET", validity: "active", publicly_leaked: false, html_url: "https://github.com/cintelis/sigilant/security/secret-scanning/2" },
+    ],
+  });
+  const r = (await tools(gh).call("repo.alerts", { repo: "cintelis/sigilant" })).structuredContent as {
+    repo: string;
+    open: number;
+    kinds: { kind: string; available: boolean; why?: string; count: number; alerts: Record<string, unknown>[] }[];
+  };
+  assert.equal(r.open, 3);
+  const [dependabot, code, secrets] = r.kinds;
+  assert.equal(dependabot!.available, true);
+  assert.deepEqual(dependabot!.alerts.map((a) => [a.number, a.severity, a.package, a.fixed_in]), [[9, "critical", "cargo:openssl", undefined], [7, "medium", "npm:lodash", "4.17.21"]], "worst first");
+  assert.equal(dependabot!.alerts[1]!.cve, "CVE-2024-0001");
+  assert.equal(code!.available, false, "code scanning: GitHub answered 404");
+  assert.match(code!.why!, /not available/);
+  assert.equal(secrets!.available, true);
+  assert.deepEqual(secrets!.alerts[0], { number: 2, severity: "critical", type: "Anthropic API Key", validity: "active", publicly_leaked: false, url: "https://github.com/cintelis/sigilant/security/secret-scanning/2" });
+  assert.doesNotMatch(JSON.stringify(r), /THE-SECRET/, "the secret GitHub sends is dropped");
+  assert.ok(gh.asked.every((a) => /state=open&per_page=100/.test(a.url)));
+  const forbidden = { asked: [], fetch: (async () => new Response("forbidden", { status: 403 })) as typeof fetch };
+  const f = (await tools(forbidden).call("repo.alerts", { repo: "cintelis/sigilant" })).structuredContent as { kinds: { why?: string }[] };
+  assert.match(f.kinds[0]!.why!, /not permitted/);
 });
 
 test("a scan names what looks like an agent, an MCP configuration or a key, and never the key", async () => {
