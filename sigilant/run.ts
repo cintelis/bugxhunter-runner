@@ -36,7 +36,7 @@ export function reviewPrompt(repo: string, pr: number): string {
   return [
     `Review pull request #${pr} of ${repo} for security issues, as a governed run.`,
     `Read its diff with repo.read (repo "${repo}", pr ${pr}), and the files it touches where you need the context.`,
-    "Record each finding with finding.record at a severity, then comment on the pull request with repo.comment: one summary, findings first, each with the file and what to change.",
+    `Record each finding with finding.record at a severity, with where "${repo}" and, as detail, the file and the line; then comment on the pull request with repo.comment: one summary, findings first, each with the file and what to change.`,
     "If a finding is critical, block the merge with repo.block and say that a tester confirms it.",
     "Do nothing outside this pull request.",
   ].join(" ");
@@ -63,7 +63,7 @@ export function deployPrompt(deploy: Deploy): string {
     changed,
     `Use target.request (target "${deploy.target}"): GET each path and check that it still answers as it should, that it still requires authentication where it did, and that nothing is disclosed that was not before.`,
     "A request that could change state needs a person's approval; make one only where the test needs it, and carry on with the rest while it waits.",
-    "Record each finding with finding.record at a severity.",
+    `Record each finding with finding.record at a severity, with where "${deploy.target}" and, as detail, the request and what it answered.`,
     deploy.note ? `The deploy's note: ${deploy.note}` : "",
     "End with a short summary: what was retested, what changed in its behaviour since before the deploy as far as you can tell, and what was recorded.",
   ]

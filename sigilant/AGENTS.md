@@ -28,8 +28,11 @@ You are running an engagement under Sigilant. Read this before doing anything.
 2. Look for what a change introduces: authorisation that can be skipped, input reaching a query,
    a shell or a file path, secrets in code, unsafe deserialisation, missing checks on who may do
    what, sessions or tokens that outlive what they should.
-3. Record each finding with `finding.record` at a severity: `low`, `medium`, `high` or `critical`.
-   A critical finding waits for a certified tester to confirm it; say so and move on.
+3. Record each finding with `finding.record` at a severity: `low`, `medium`, `high` or `critical`,
+   naming **where** it was found (the repository as `owner/name`, or the target as `host:port`,
+   exactly as the run names it) and, as `detail`, what was seen: the file and the line, or the
+   request and what it answered. Never a secret. A critical finding waits for a certified tester
+   to confirm it; say so and move on.
 4. Comment on the pull request with `repo.comment`: one summary, findings first, each with the file
    and what to change. Where a critical finding is confirmed, `repo.block` requests changes, which
    blocks the merge; that too waits for a tester.

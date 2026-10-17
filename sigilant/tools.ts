@@ -73,8 +73,13 @@ export const TOOLS: McpTool[] = [
     description: "Record a finding. A critical one is confirmed by a certified tester before it stands.",
     inputSchema: {
       type: "object",
-      properties: { severity: { type: "string", enum: ["low", "medium", "high", "critical"] }, title: string("one line") },
-      required: ["severity", "title"],
+      properties: {
+        severity: { type: "string", enum: ["low", "medium", "high", "critical"] },
+        title: string("one line"),
+        where: string("the repository (owner/name) or the target (host:port) it was found in, as the scope names it"),
+        detail: string("what was seen: the request and what it answered, or the file and the line; never a secret"),
+      },
+      required: ["severity", "title", "where"],
     },
   },
   {
@@ -174,6 +179,10 @@ export interface Finding {
   at: string;
   severity: string;
   title: string;
+  /** The repository (`owner/name`) or target (`host:port`) it was found in, if said. */
+  where?: string;
+  /** What was seen: the request and the answer, the file and the line. */
+  detail?: string;
 }
 
 export interface ToolsOptions {
@@ -420,7 +429,9 @@ export function bxhTools(options: ToolsOptions): { tools: McpTool[]; call(name: 
         const severity = typeof args.severity === "string" && SEVERITIES.has(args.severity) ? args.severity : undefined;
         const title = typeof args.title === "string" ? args.title.trim().slice(0, 200) : "";
         if (!severity || !title) return refuse("severity (low, medium, high or critical) and a title are required");
-        const finding = { at: new Date().toISOString(), severity, title };
+        const where = typeof args.where === "string" && (REPO.test(args.where.trim()) || TARGET.test(args.where.trim())) ? args.where.trim() : undefined;
+        const detail = typeof args.detail === "string" && args.detail.trim() ? args.detail.trim().slice(0, 2000) : undefined;
+        const finding: Finding = { at: new Date().toISOString(), severity, title, ...(where ? { where } : {}), ...(detail ? { detail } : {}) };
         const id = await options.findings.record(finding);
         return asResult({ recorded: true, id, ...finding });
       }
