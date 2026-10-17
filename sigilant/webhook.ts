@@ -45,7 +45,7 @@ export function plan(event: string, payload: unknown, repos: ReadonlySet<string>
   const number = pr!.number as number;
   const [owner, name] = repo.split("/");
   return {
-    run: { directory: `${root}/${owner}/${name}/pr-${number}`, text: reviewPrompt(repo, number) },
+    run: { directory: `${root}/${owner}/${name}/pr-${number}`, text: reviewPrompt(repo, number), title: `Review of ${repo}#${number}` },
     why: `${repo}#${number} ${action}`,
   };
 }
@@ -74,7 +74,11 @@ export function planDeploy(payload: unknown, targets: ReadonlySet<string>, root:
   const note = typeof p.note === "string" && p.note.trim() ? p.note.trim().slice(0, MAX_NOTE_CHARS) : undefined;
   const at = new Date(now()).toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
   return {
-    run: { directory: `${root}/targets/${slug(target)}/deploy-${version ? slug(version) : at}`, text: deployPrompt({ target, version, changed, note }) },
+    run: {
+      directory: `${root}/targets/${slug(target)}/deploy-${version ? slug(version) : at}`,
+      text: deployPrompt({ target, version, changed, note }),
+      title: `Retest after a deploy of ${target}${version ? ` at ${version}` : ""}`,
+    },
     why: `deploy of ${target}${version ? ` at ${version}` : ""}${changed.length ? ` (${changed.length} path${changed.length === 1 ? "" : "s"} changed)` : ""}`,
   };
 }

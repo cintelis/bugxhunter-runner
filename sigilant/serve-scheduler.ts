@@ -34,15 +34,16 @@ const repos = split(process.env.BXH_SCOPE_REPOS);
 const retestEvery = parseEvery(process.env.SCHEDULE_RETEST_EVERY ?? "24h");
 const discoverEvery = parseEvery(process.env.SCHEDULE_DISCOVER_EVERY ?? "7d");
 
-const report = identityConfigured() ? usageReporter(await sigilantClient({ name: "bugxhunter-scheduler", version: "0.1.0" }), log) : undefined;
-if (!report) log("no Sigilant identity is configured (SIGILANT_ISSUER, SIGILANT_GATEWAY): runs are followed, their usage unreported");
+const client = identityConfigured() ? await sigilantClient({ name: "bugxhunter-scheduler", version: "0.1.0" }) : undefined;
+if (!client) log("no Sigilant identity is configured (SIGILANT_ISSUER, SIGILANT_GATEWAY): runs are followed, their usage unreported");
 
 /** Starts a run and follows it until the runner is idle, so that the next waits its turn. */
 async function run(what: Run, why: string): Promise<void> {
   await mkdir(what.directory, { recursive: true });
   const id = await startRun(runner, { ...what, model });
   log(`${why}: started ${id} in ${what.directory}`);
-  const steps = await followRun(runner, id, what.directory, report ?? (async () => {}), { log });
+  const report = client ? usageReporter(client, log, what.title) : async () => {};
+  const steps = await followRun(runner, id, what.directory, report, { log });
   log(`${why}: ${id} is idle, ${steps.length} step${steps.length === 1 ? "" : "s"}`);
 }
 

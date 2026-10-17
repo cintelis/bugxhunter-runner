@@ -129,6 +129,7 @@ export const TOOLS: McpTool[] = [
         run: string("the session"),
         step: string("the message"),
         model: string("provider/model"),
+        title: { type: "string", maxLength: 120, description: "what the run is, in a line: its title wherever people see it" },
         input: { type: "integer" },
         output: { type: "integer" },
         reasoning: { type: "integer" },

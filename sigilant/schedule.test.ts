@@ -55,6 +55,12 @@ test("the timetable's jobs are a retest of each target and a discovery of the sc
       "/w/targets/fleet-tools-9443/retest-20261018T090000Z",
     ],
   );
+  assert.deepEqual(
+    retests.map((r) => r.title),
+    ["Scheduled retest of erp:9443", "Scheduled retest of fleet-tools:9443"],
+    "each run named for what it is",
+  );
+  assert.equal(jobs[1]!.runs(at, undefined)[0]!.title, "Scheduled discovery of the scope");
   assert.match(
     retests[0]!.text,
     /A scheduled retest of erp:9443, 1 d after the last, at 2026-10-17T09:00:00.000Z/,

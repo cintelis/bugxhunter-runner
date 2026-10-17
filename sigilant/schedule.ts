@@ -86,12 +86,13 @@ export function jobsOf(options: { root: string; targets: string[]; repos: string
         targets.map((target) => ({
           directory: `${root}/targets/${slug(target)}/retest-${stamp(now)}`,
           text: retestPrompt(target, options.retestEvery, lastAt),
+          title: `Scheduled retest of ${target}`,
         })),
     },
     {
       name: "discover",
       every: targets.length + repos.length ? options.discoverEvery : 0,
-      runs: (now) => [{ directory: `${root}/discovery/${stamp(now)}`, text: discoverPrompt(repos, targets) }],
+      runs: (now) => [{ directory: `${root}/discovery/${stamp(now)}`, text: discoverPrompt(repos, targets), title: "Scheduled discovery of the scope" }],
     },
   ];
 }
@@ -173,5 +174,5 @@ export function schedule(options: SchedulerOptions): { stop(): void; tick(): Pro
 
 /** For the command line: the retest of one target, as the timetable would start it. */
 export function oneRetest(root: string, target: string, every: number, now = Date.now()): Run {
-  return { directory: `${root}/targets/${slug(target)}/retest-${stamp(now)}`, text: retestPrompt(target, every, undefined) };
+  return { directory: `${root}/targets/${slug(target)}/retest-${stamp(now)}`, text: retestPrompt(target, every, undefined), title: `Retest of ${target}` };
 }

@@ -31,6 +31,7 @@ test("a pull request opened, updated, reopened or made ready starts a review; th
     assert.ok("run" in p, action);
     assert.equal(p.run.directory, "/workspace/engagement/cintelis/sigilant/pr-42");
     assert.match(p.run.text, /pull request #42 of cintelis\/sigilant/);
+    assert.equal(p.run.title, "Review of cintelis/sigilant#42");
     assert.equal(p.why, `cintelis/sigilant#42 ${action}`);
   }
   const skipped = (event: string, payload: unknown) => {
@@ -103,6 +104,7 @@ test("a deploy of a target the receiver serves starts a retest of what it change
   assert.equal(planned.run.directory, "/w/targets/erp-9443/deploy-1.4.2");
   assert.equal(planned.why, "deploy of erp:9443 at 1.4.2 (2 paths changed)");
   assert.match(planned.run.text, /It changed: \/api\/orders, \/api\/invoices\./);
+  assert.equal(planned.run.title, "Retest after a deploy of erp:9443 at 1.4.2");
   const bare = planDeploy({ target: "fleet-tools:9443" }, TARGETS, "/w", now);
   assert.ok("run" in bare);
   assert.equal(bare.run.directory, "/w/targets/fleet-tools-9443/deploy-20261017T093000Z");

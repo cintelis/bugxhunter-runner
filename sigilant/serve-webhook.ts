@@ -28,8 +28,8 @@ const runner = env("BXH_RUNNER", "http://bxh-runner:8790");
 const root = env("BXH_DIRECTORY", "/workspace/engagement");
 const model = process.env.BXH_MODEL?.trim() || undefined;
 // Each run started is followed, and each step's usage reported under the runner's identity.
-const report = identityConfigured() ? usageReporter(await sigilantClient({ name: "bugxhunter-webhook", version: "0.1.0" }), log) : undefined;
-if (!report) log("no Sigilant identity is configured (SIGILANT_ISSUER, SIGILANT_GATEWAY): runs are started and left, their usage unreported");
+const client = identityConfigured() ? await sigilantClient({ name: "bugxhunter-webhook", version: "0.1.0" }) : undefined;
+if (!client) log("no Sigilant identity is configured (SIGILANT_ISSUER, SIGILANT_GATEWAY): runs are started and left, their usage unreported");
 
 const handle = webhookHandler({
   secret,
@@ -40,8 +40,8 @@ const handle = webhookHandler({
   async start(run) {
     await mkdir(run.directory, { recursive: true });
     const id = await startRun(runner, { ...run, model });
-    if (report) {
-      void followRun(runner, id, run.directory, report, { log })
+    if (client) {
+      void followRun(runner, id, run.directory, usageReporter(client, log, run.title), { log })
         .then((steps) => log(`${id} is idle: ${steps.length} step${steps.length === 1 ? "" : "s"} reported`))
         .catch((why: Error) => log(`following ${id} failed: ${why.message}`));
     }

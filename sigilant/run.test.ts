@@ -12,7 +12,7 @@ test("a run is a session in the folder, then the prompt to it", async () => {
     posted.push({ path, body: JSON.parse(String(init?.body)) as Record<string, unknown> });
     return new Response(JSON.stringify(path.endsWith("/session") ? { id: "ses_1", directory: "/workspace/engagement" } : { ok: true }), { status: 200 });
   };
-  const id = await startRun("http://bxh-runner:8790", { directory: "/workspace/engagement", text: "Review it.", model: "scx/GLM-5.3" }, fetchImpl);
+  const id = await startRun("http://bxh-runner:8790", { directory: "/workspace/engagement", text: "Review it.", title: "Review", model: "scx/GLM-5.3" }, fetchImpl);
   assert.equal(id, "ses_1");
   assert.deepEqual(posted, [
     { path: "/api/agent/session", body: { directory: "/workspace/engagement" } },
@@ -22,7 +22,7 @@ test("a run is a session in the folder, then the prompt to it", async () => {
 
 test("a runner that refuses is reported with what it said", async () => {
   const fetchImpl: typeof fetch = async () => new Response(JSON.stringify({ error: { message: "Host is not allowed" } }), { status: 403 });
-  await assert.rejects(startRun("http://x", { directory: "/w", text: "t" }, fetchImpl), /\/api\/agent\/session: HTTP 403: .*Host is not allowed/);
+  await assert.rejects(startRun("http://x", { directory: "/w", text: "t", title: "t" }, fetchImpl), /\/api\/agent\/session: HTTP 403: .*Host is not allowed/);
 });
 
 test("a step's usage is reported as run.usage, and a gateway that will not take it is said, not thrown", async () => {
@@ -38,12 +38,12 @@ test("a step's usage is reported as run.usage, and a gateway that will not take 
     },
   };
   const lines: string[] = [];
-  const report = usageReporter(client, (l) => lines.push(l));
+  const report = usageReporter(client, (l) => lines.push(l), "Review of cintelis/sigilant#42");
   const step = { run: "ses_1", step: "m1", model: "scx/x", input: 1, output: 2, reasoning: 0, cache_read: 0, cache_write: 0, cost_micros: 3, started_ms: 1, completed_ms: 2, tool_calls: 0 };
   await report(step);
   await report({ ...step, step: "m2" });
   assert.deepEqual(calls.map((c) => c.name), ["run.usage", "run.usage"]);
-  assert.deepEqual(calls[0]!.args, step);
+  assert.deepEqual(calls[0]!.args, { ...step, title: "Review of cintelis/sigilant#42" }, "the run's title goes with each step");
   assert.match(lines[0]!, /^reported m1: scx\/x, 1 in, 2 out/);
   assert.match(lines[1]!, /did not take m2's usage: denied \(policy\)/);
 });

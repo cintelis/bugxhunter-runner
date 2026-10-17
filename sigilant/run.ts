@@ -27,6 +27,8 @@ import { type StepUsage, describeStep, followRun } from "./usage.ts";
 export interface Run {
   directory: string;
   text: string;
+  /** What the run is, in a line: its title wherever people see it. */
+  title: string;
   agent?: string;
   model?: string;
 }
@@ -102,16 +104,25 @@ export async function startRun(runner: string, run: Run, fetchImpl: typeof fetch
   return sessionID;
 }
 
+/** Longest title reported, in characters. */
+export const MAX_TITLE_CHARS = 120;
+
 /**
  * Reports one step's usage through the gateway as `run.usage`, under the
  * runner's identity: allowed, it is a signed record of the chain. A gateway
  * that will not take it is said, and the run goes on: usage is the runner's
- * word on itself, and nothing waits on it.
+ * word on itself, and nothing waits on it. The run's `title` goes with each
+ * step, so that the run is named wherever its usage is shown.
  */
-export function usageReporter(client: Pick<SigilantClient, "callUntilDecided">, log: (line: string) => void): (step: StepUsage) => Promise<void> {
+export function usageReporter(
+  client: Pick<SigilantClient, "callUntilDecided">,
+  log: (line: string) => void,
+  title?: string,
+): (step: StepUsage) => Promise<void> {
+  const named = title?.trim().slice(0, MAX_TITLE_CHARS);
   return async (step) => {
     try {
-      const outcome = await client.callUntilDecided("run.usage", { ...step }, { everySecs: 15, signal: AbortSignal.timeout(60_000) });
+      const outcome = await client.callUntilDecided("run.usage", { ...step, ...(named ? { title: named } : {}) }, { everySecs: 15, signal: AbortSignal.timeout(60_000) });
       if (outcome.status === "done" && !outcome.isError) log(`reported ${describeStep(step)}`);
       else log(`the gateway did not take ${step.step}'s usage: ${outcome.status}${"reason" in outcome ? ` (${outcome.reason})` : ""}`);
     } catch (why) {
@@ -150,11 +161,18 @@ if (import.meta.main) {
       : deploy
         ? deployPrompt({ target: deploy, version: at("--version"), changed: split(at("--changed")), note: at("--note") })
         : prompt!;
+  const title = parsed
+    ? `Review of ${parsed.repo}#${parsed.pr}`
+    : discover
+      ? "Discovery of the scope"
+      : deploy
+        ? `Retest after a deploy of ${deploy}${at("--version") ? ` at ${at("--version")}` : ""}`
+        : prompt!.trim().slice(0, MAX_TITLE_CHARS);
   const runner = process.env.BXH_RUNNER?.trim() || "http://bxh-runner:8790";
   const directory = process.env.BXH_DIRECTORY?.trim() || "/workspace/engagement";
   // The engagement's folder in the shared workspace, which the runner expects to find.
   await mkdir(directory, { recursive: true });
-  const id = await startRun(runner, { directory, text, model: process.env.BXH_MODEL?.trim() || undefined });
+  const id = await startRun(runner, { directory, text, title, model: process.env.BXH_MODEL?.trim() || undefined });
   console.log(`started session ${id} in ${directory} on ${runner}`);
   if (args.includes("--no-follow")) process.exit(0);
   const log = (line: string) => console.log(`${new Date().toISOString()} [run] ${line}`);
@@ -163,7 +181,7 @@ if (import.meta.main) {
     process.exit(0);
   }
   const client = await sigilantClient({ name: "bugxhunter-run", version: "0.1.0" });
-  const steps = await followRun(runner, id, directory, usageReporter(client, log), { log });
+  const steps = await followRun(runner, id, directory, usageReporter(client, log, title), { log });
   const cost = steps.reduce((sum, s) => sum + s.cost_micros, 0) / 1_000_000;
   log(`${id} is idle: ${steps.length} step${steps.length === 1 ? "" : "s"} reported, $${cost.toFixed(4)} in all`);
 }
