@@ -33,7 +33,7 @@ const tools = (gh: ReturnType<typeof github>, target?: typeof fetch) =>
   });
 
 test("the tools are what the registry and the policy name", () => {
-  assert.deepEqual(TOOLS.map((t) => t.name), ["repo.read", "repo.comment", "repo.block", "target.request", "finding.record", "repo.alerts", "repo.scan", "net.discover", "discovery.report", "run.usage"]);
+  assert.deepEqual(TOOLS.map((t) => t.name), ["repo.read", "repo.comment", "repo.block", "target.request", "finding.record", "repo.alerts", "repo.scan", "net.discover", "discovery.report", "retest.summary", "run.usage"]);
 });
 
 test("a file is read at the pull request's head, decoded, and cut to size", async () => {
@@ -235,6 +235,14 @@ test("a report of a discovery is acknowledged, and nothing else: the gateway's r
   const r = await tools(github({})).call("discovery.report", { kind: "mcp_server", where: "erp:9443", name: "/mcp", evidence: "demo-erp" });
   assert.deepEqual(r.structuredContent, { reported: true, kind: "mcp_server", where: "erp:9443", name: "/mcp" });
   assert.equal((await tools(github({})).call("discovery.report", { kind: "thing", where: "x", name: "y" })).isError, true);
+});
+
+test("what a retest came to is acknowledged, and nothing else: the gateway's record is the word", async () => {
+  const r = await tools(github({})).call("retest.summary", { target: "erp:9443", outcome: "unchanged", summary: "Still as it was." });
+  assert.equal(r.isError, false);
+  assert.deepEqual(r.structuredContent, { said: true, target: "erp:9443", outcome: "unchanged", summary: "Still as it was." });
+  assert.equal((await tools(github({})).call("retest.summary", { target: "erp:9443", outcome: "fine", summary: "x" })).isError, true, "an outcome off the list");
+  assert.equal((await tools(github({})).call("retest.summary", { target: "not a host!", outcome: "changed", summary: "x" })).isError, true, "a target that is not one");
 });
 
 test("a report of a step's usage is acknowledged, and nothing else: the gateway's record is the usage", async () => {

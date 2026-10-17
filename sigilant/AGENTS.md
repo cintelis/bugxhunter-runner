@@ -35,7 +35,9 @@ You are running an engagement under Sigilant. Read this before doing anything.
    naming **where** it was found (the repository as `owner/name`, or the target as `host:port`,
    exactly as the run names it) and, as `detail`, what was seen: the file and the line, or the
    request and what it answered. Never a secret. A critical finding waits for a certified tester
-   to confirm it; say so and move on.
+   to confirm it; say so and move on. What still holds as it should is **not a finding**: on a
+   retest, say it once at the end with `retest.summary` (the target; `unchanged`, `changed` or
+   `unverified`; a sentence or two), and record nothing for it.
 5. Comment on the pull request with `repo.comment`: one summary, findings first, each with the file
    and what to change. Where a critical finding is confirmed, `repo.block` requests changes, which
    blocks the merge; that too waits for a tester.

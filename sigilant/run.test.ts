@@ -53,8 +53,10 @@ test("a deploy run is told what changed, or to retest the whole target, and to a
   assert.match(named, /A deploy of erp:9443 at version 1\.4\.2 has just happened/);
   assert.match(named, /It changed: \/api\/orders, \/api\/invoices\. Retest those paths first/);
   assert.match(named, /target\.request \(target "erp:9443"\)/);
-  assert.match(named, /needs a person's approval/);
+  assert.match(named, /waits for a person who may not be there/);
   assert.match(named, /The deploy's note: orders rewritten/);
+  assert.match(named, /say it once, at the end, with retest\.summary \(target "erp:9443"/, "what still holds is said with retest.summary");
+  assert.match(named, /use net\.discover, which does it read-only; do not POST to \/mcp/, "the handshake is net.discover's, not a write");
   const whole = deployPrompt({ target: "erp:9443" });
   assert.match(whole, /A deploy of erp:9443 has just happened/);
   assert.match(whole, /did not say what changed: retest the target as a whole, starting from \/, \/health and \/mcp/);

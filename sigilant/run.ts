@@ -63,9 +63,9 @@ export function deployPrompt(deploy: Deploy): string {
   return [
     `A deploy of ${where} has just happened; retest it, as a governed run.`,
     changed,
-    `Use target.request (target "${deploy.target}"): GET each path and check that it still answers as it should, that it still requires authentication where it did, and that nothing is disclosed that was not before.`,
-    "A request that could change state needs a person's approval; make one only where the test needs it, and carry on with the rest while it waits.",
-    `Record with finding.record only what is wrong — something disclosed, a check that can be skipped, an answer that should not be — at a severity, with where "${deploy.target}" and, as detail, the request and what it answered. What still holds as it should is not a finding: it goes in the summary.`,
+    `Use target.request (target "${deploy.target}"): GET each path and check that it still answers as it should, that it still requires authentication where it did, and that nothing is disclosed that was not before. To check that /mcp still answers the MCP handshake, use net.discover, which does it read-only; do not POST to /mcp.`,
+    "A request that could change state waits for a person who may not be there; make one only where the test needs it, and carry on with the rest while it waits.",
+    `Record with finding.record only what is wrong — something disclosed, a check that can be skipped, an answer that should not be — at a severity, with where "${deploy.target}" and, as detail, the request and what it answered. What still holds as it should is not a finding and is never recorded as one: say it once, at the end, with retest.summary (target "${deploy.target}"; outcome unchanged, changed or unverified; a sentence or two).`,
     deploy.note ? `The deploy's note: ${deploy.note}` : "",
     "End with a short summary: what was retested, what changed in its behaviour since before the deploy as far as you can tell, and what was recorded.",
   ]

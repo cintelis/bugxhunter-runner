@@ -58,7 +58,7 @@ export const TOOLS: McpTool[] = [
   {
     name: "target.request",
     description:
-      "One HTTP request to a target in the engagement's scope. Reads (GET, HEAD, OPTIONS) go through; anything that could change the target waits for the engagement's principal.",
+      "One HTTP request to a target in the engagement's scope, with no body. Reads (GET, HEAD, OPTIONS) go through; anything else waits for the engagement's principal, who may not be there. To check that an MCP endpoint still answers the handshake, use net.discover, which does it read-only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -117,6 +117,20 @@ export const TOOLS: McpTool[] = [
         evidence: string("one line of what was seen; never a secret"),
       },
       required: ["kind", "where", "name"],
+    },
+  },
+  {
+    name: "retest.summary",
+    description:
+      "What a retest of a target came to, said once at its end: unchanged (everything still answers as it should), changed (say what), or unverified (say what could not be checked, and why). What still holds goes here, never in finding.record.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        target: string("host, or host:port, as the scope names it"),
+        outcome: { type: "string", enum: ["unchanged", "changed", "unverified"] },
+        summary: { type: "string", maxLength: 1000, description: "what was retested and what came of it, in a sentence or two" },
+      },
+      required: ["target", "outcome", "summary"],
     },
   },
   {
@@ -228,6 +242,7 @@ export interface ToolsOptions {
 const REPO = /^([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)\/([A-Za-z0-9_.-]{1,100})$/;
 const TARGET = /^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,252}[A-Za-z0-9])?(?::\d{1,5})?$/;
 const METHODS = new Set(["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"]);
+const OUTCOMES = new Set(["unchanged", "changed", "unverified"]);
 const SEVERITIES = new Set(["low", "medium", "high", "critical"]);
 
 /** How much of a file, a diff or a response is handed back. */
@@ -497,6 +512,14 @@ export function bxhTools(options: ToolsOptions): { tools: McpTool[]; call(name: 
         if (!kind || !where || !what) return refuse("kind, where and name are required");
         // Nothing to do: the gateway's record of this call is the discovery, and the sync service folds it from the chain.
         return asResult({ reported: true, kind, where, name: what });
+      }
+      case "retest.summary": {
+        const target = typeof args.target === "string" && TARGET.test(args.target.trim()) ? args.target.trim() : undefined;
+        const outcome = typeof args.outcome === "string" && OUTCOMES.has(args.outcome) ? args.outcome : undefined;
+        const summary = typeof args.summary === "string" ? args.summary.trim().slice(0, 1000) : "";
+        if (!target || !outcome || !summary) return refuse("target (host or host:port), an outcome (unchanged, changed or unverified) and a summary are required");
+        // Nothing to do: the gateway's record of this call is what the retest came to, and the sync service folds it from the chain.
+        return asResult({ said: true, target, outcome, summary });
       }
       case "run.usage": {
         const run = typeof args.run === "string" ? args.run.trim() : "";

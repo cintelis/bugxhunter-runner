@@ -64,9 +64,9 @@ export function retestPrompt(target: string, every: number, lastAt: number | und
   const since = lastAt ? `${sayEvery(every)} after the last, at ${new Date(lastAt).toISOString()}` : "the first of its kind";
   return [
     `A scheduled retest of ${target}, ${since}: nothing is known to have changed, and the question is whether it is still as it was.`,
-    "Retest the target as a whole with target.request: GET /, /health and /mcp and what they lead to, and check that each still answers as it should, still requires authentication where it did, and discloses nothing new.",
-    "A request that could change state needs a person's approval; make one only where the test needs it, and carry on with the rest while it waits.",
-    `Record with finding.record only what is wrong — something disclosed, a check that can be skipped, an answer that should not be — at a severity, with where "${target}" and, as detail, the request and what it answered. What still holds as it should is not a finding: it goes in the summary.`,
+    "Retest the target as a whole with target.request: GET /, /health and /mcp and what they lead to, and check that each still answers as it should, still requires authentication where it did, and discloses nothing new. To check that /mcp still answers the MCP handshake, use net.discover, which does it read-only; do not POST to /mcp.",
+    "A request that could change state waits for a person who may not be there at this hour; make one only where the test needs it, and carry on with the rest while it waits.",
+    `Record with finding.record only what is wrong — something disclosed, a check that can be skipped, an answer that should not be — at a severity, with where "${target}" and, as detail, the request and what it answered. What still holds as it should is not a finding and is never recorded as one: say it once, at the end, with retest.summary (target "${target}"; outcome unchanged, changed or unverified; a sentence or two).`,
     "End with a short summary: what was retested, what has changed since the last retest as far as you can tell, and what was recorded.",
   ].join(" ");
 }
