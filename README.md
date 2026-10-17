@@ -251,6 +251,7 @@ wait for a person, and each is written to a signed audit chain. Two processes, o
 | `opencode.json`, `AGENTS.md` | the agent's configuration for a governed run, merged over the image's (`OPENCODE_CONFIG`): the bridge as its one MCP server, the sandbox's own tools off, and what a denial or a held call means |
 | `run.ts` | starts a run on the runner's API with nobody at the keyboard: `--pr owner/name#N` reviews a pull request |
 | `serve-webhook.ts` | the webhooks: GitHub's (`/hooks/github`), where a pull request opened or updated on a repository it serves starts that review, and a deploy's (`/hooks/deploy`), where a deploy of a target it serves starts a retest of what changed; signatures checked, deliveries seen before ignored |
+| `serve-scheduler.ts` | the timetable: a retest of each target every so often (`SCHEDULE_RETEST_EVERY`, 24h) and a discovery of the scope less often (`SCHEDULE_DISCOVER_EVERY`, 7d), each run followed and its usage reported; remembers when each last ran in the workspace, so a restart neither forgets nor starts everything again; `--now retest` or `--now discover` for one by hand |
 | `deploy.ts` | tells the webhook a deploy has happened — the target, its version, the paths it changed — signed and named, so that CI or the host starts the retest with one command |
 
 The package stands on its own (`cd sigilant && npm install && npm run typecheck && npm test`), with `@sigilant/sdk`
