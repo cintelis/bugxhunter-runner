@@ -776,6 +776,7 @@ const server = app.listen(PORT, process.env.HOST ?? "127.0.0.1", () => {
     const src = keySource(p.id);
     const where = {
       vault: "vault",
+      file: "a key file (not in the clear in the environment)",
       env: ".env — consider moving it into the vault",
       "opencode-auth": "OpenCode's auth.json — consider moving it into the vault",
       none: p.id === "scx" ? "none yet — set up the vault in the sidebar" : "not configured (optional)",

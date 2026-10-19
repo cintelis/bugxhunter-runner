@@ -117,7 +117,7 @@ export interface VaultStatus {
   /** Names of the sealed items (never values). */
   items: string[];
   /** Where the model key comes from right now. */
-  keySource: "vault" | "env" | "opencode-auth" | "none";
+  keySource: "vault" | "file" | "env" | "opencode-auth" | "none";
   /** Auto-lock after this long idle; 0 = never. */
   idleMinutes: number;
   /** When the auto-lock fires (ms since epoch), while unsealed. */

@@ -3,9 +3,13 @@
  * its catalogue (https://openrouter.ai/models). Both speak the OpenAI API, so
  * one client class and one key-injecting proxy serve both.
  *
- * Keys: the vault item (SCX_API, OPENROUTER_API_KEY) first, then .env, then
- * OpenCode's own auth store. They are read once here and scrubbed from the
- * environment: the OpenCode server is spawned with a copy of our environment,
+ * Keys: the vault item (SCX_API, OPENROUTER_API_KEY) first, then a key file
+ * (SCX_API_FILE, OPENROUTER_API_KEY_FILE), then .env, then OpenCode's own auth
+ * store. A key file is for a runner nobody is at the keyboard of, where the
+ * vault cannot be unlocked: a mounted secret, re-read on every call so that
+ * replacing the file rotates the key without a restart. Keys in the
+ * environment are read once here and scrubbed from it, and so are the key
+ * files' paths: the OpenCode server is spawned with a copy of our environment,
  * and the agent's shell inherits that.
  *
  * In the Playground, OpenRouter models are addressed as `openrouter/<id>`.
@@ -23,7 +27,7 @@ import { httpError } from "./errors.js";
 import * as vault from "./vault.js";
 
 export type ProviderId = "scx" | "openrouter";
-export type KeySource = "vault" | "env" | "opencode-auth" | "none";
+export type KeySource = "vault" | "file" | "env" | "opencode-auth" | "none";
 
 export interface ProviderDef {
   id: ProviderId;
@@ -33,6 +37,8 @@ export interface ProviderDef {
   vaultItem: string;
   /** Environment variables that may hold it (first wins). */
   envVars: string[];
+  /** Environment variable naming a file that holds it. */
+  fileVar: string;
   /** Provider id in OpenCode's ~/.local/share/opencode/auth.json. */
   authId: string;
   headers?: Record<string, string>;
@@ -41,11 +47,11 @@ export interface ProviderDef {
 export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   scx: {
     id: "scx", name: "SCX.ai", baseUrl: process.env.SCX_BASE_URL ?? "https://api.scx.ai/v1",
-    vaultItem: "SCX_API", envVars: ["SCX_API", "SCX_API_KEY"], authId: "scx",
+    vaultItem: "SCX_API", envVars: ["SCX_API", "SCX_API_KEY"], fileVar: "SCX_API_FILE", authId: "scx",
   },
   openrouter: {
     id: "openrouter", name: "OpenRouter", baseUrl: process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1",
-    vaultItem: "OPENROUTER_API_KEY", envVars: ["OPENROUTER_API_KEY"], authId: "openrouter",
+    vaultItem: "OPENROUTER_API_KEY", envVars: ["OPENROUTER_API_KEY"], fileVar: "OPENROUTER_API_KEY_FILE", authId: "openrouter",
     // Attribution headers OpenRouter asks apps to send.
     headers: { "HTTP-Referer": "https://bugxhunter.com", "X-Title": "BugXHunter" },
   },
@@ -73,10 +79,24 @@ function readAuthStore(): Record<string, string> {
 }
 
 const envKeys: Partial<Record<ProviderId, string>> = {};
+const keyFiles: Partial<Record<ProviderId, string>> = {};
 const authKeys = readAuthStore();
 for (const p of Object.values(PROVIDERS)) {
   for (const v of p.envVars) if (process.env[v]) { envKeys[p.id] = process.env[v]!; break; }
   for (const v of p.envVars) delete process.env[v];
+  if (process.env[p.fileVar]?.trim()) keyFiles[p.id] = process.env[p.fileVar]!.trim();
+  delete process.env[p.fileVar];
+}
+
+/** The key in a provider's key file, read now; undefined if it has none, or it is empty. */
+function fileKey(id: ProviderId): string | undefined {
+  const file = keyFiles[id];
+  if (!file) return undefined;
+  try {
+    return fs.readFileSync(file, "utf8").trim() || undefined;
+  } catch {
+    return undefined;
+  }
 }
 for (const k of ["SCX_PROXY_TOKEN", "OPEN_RUNNER_SECRET"]) delete process.env[k];
 
@@ -84,6 +104,7 @@ for (const k of ["SCX_PROXY_TOKEN", "OPEN_RUNNER_SECRET"]) delete process.env[k]
 export function keySource(id: ProviderId): KeySource {
   const p = PROVIDERS[id];
   if (vault.isInitialised() && vault.status("none").items.includes(p.vaultItem)) return "vault";
+  if (keyFiles[id]) return "file";
   if (envKeys[id]) return "env";
   if (authKeys[p.authId]) return "opencode-auth";
   return "none";
@@ -96,6 +117,12 @@ export function apiKey(id: ProviderId): string {
   const p = PROVIDERS[id];
   switch (keySource(id)) {
     case "vault": return vault.getItem(p.vaultItem)!; // throws 503 while sealed
+    case "file": {
+      const key = fileKey(id);
+      // A key file named and then not readable is a fault, never a reason to fall back to a key in the clear.
+      if (!key) throw httpError(503, `The ${p.name} key file ${p.fileVar} names cannot be read, or is empty.`);
+      return key;
+    }
     case "env": return envKeys[id]!;
     case "opencode-auth": return authKeys[p.authId];
     default:

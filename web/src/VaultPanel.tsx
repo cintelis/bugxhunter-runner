@@ -53,7 +53,7 @@ export function VaultPanel() {
 
   const row = !status.initialised ? (
     <>
-      <span className="vault-state none" title={status.keySource === "none" ? "No model key yet" : `Model key comes from ${status.keySource === "env" ? ".env" : "OpenCode's auth.json"}, in the clear`}>
+      <span className="vault-state none" title={status.keySource === "none" ? "No model key yet" : status.keySource === "file" ? "Model key comes from a key file" : `Model key comes from ${status.keySource === "env" ? ".env" : "OpenCode's auth.json"}, in the clear`}>
         {status.keySource === "none" ? "no vault, no model key" : "vault not set up"}
       </span>
       <button className="btn primary sm" onClick={() => setDialog("setup")}>set_up</button>

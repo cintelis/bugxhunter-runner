@@ -39,6 +39,6 @@ describe("providers", () => {
   it("scrubs keys from the environment and reports where they come from", () => {
     expect(process.env.SCX_API).toBeUndefined();
     expect(process.env.OPENROUTER_API_KEY).toBeUndefined();
-    expect(["vault", "env", "opencode-auth", "none"]).toContain(providers.keySource("openrouter"));
+    expect(["vault", "file", "env", "opencode-auth", "none"]).toContain(providers.keySource("openrouter"));
   });
 });

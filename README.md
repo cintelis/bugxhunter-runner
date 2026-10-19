@@ -151,7 +151,10 @@ agent can call a model. **Ctrl+Shift+L** locks it at once. The crypto is symmetr
 see [SECURITY.md](SECURITY.md#the-key-vault).
 
 While the vault is locked, model calls fail with a clear "vault is sealed" message. Without a vault
-the app falls back to `SCX_API` in `.env` or OpenCode's `auth.json`, in the clear.
+the app takes the key from a key file (`SCX_API_FILE`), else falls back to `SCX_API` in `.env` or
+OpenCode's `auth.json`, in the clear. A key file is for a runner nobody unlocks, such as one behind
+Sigilant: mount it as a secret; it is re-read on every call, so replacing it rotates the key, and if
+it cannot be read the call fails rather than falling back to a key in the clear.
 
 **Sign-in is the same passkey.** Once a vault exists the API needs a session, and the ways in are
 a WebAuthn assertion with one of the vault's passkeys (verified server-side), the backup
@@ -266,7 +269,9 @@ from a Sigilant checkout beside this one; the image takes the SDK built from an 
 | `OPEN_RUNNER_DIR` | this folder | Default project folder |
 | `OPEN_RUNNER_AGENT_PORT` | `8791` | Port for the OpenCode server |
 | `PORT` | `8790` | Backend port |
-| `SCX_API` | the vault, else `opencode auth login` | SCX key in the clear; ignored once a vault exists (preferred) |
+| `SCX_API_FILE` | unset | A file holding the SCX key, re-read on every call; for a runner with no one to unlock the vault. Ignored once a vault exists |
+| `SCX_API` | the vault, else `opencode auth login` | SCX key in the clear; ignored once a vault or key file exists (prefer either) |
+| `OPENROUTER_API_KEY_FILE` | unset | A file holding the OpenRouter key, as `SCX_API_FILE` |
 | `OPENROUTER_API_KEY` | the vault, else unset | OpenRouter key in the clear; prefer the vault item of the same name |
 | `OPENROUTER_MODELS` | unset | Comma list of OpenRouter model ids the agent may use; becomes an OpenCode provider through the proxy |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter endpoint |
