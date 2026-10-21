@@ -66,6 +66,18 @@ export async function createWorkspace(name: unknown): Promise<Workspace> {
   return { name: n, directory: dir, git: isGit(dir), modified: modified(dir) };
 }
 
+/**
+ * A permission error, explained. The usual cause is a folder copied in with
+ * plain `docker cp`, which leaves it owned by root while the runner and agent
+ * run as node.
+ */
+function notWritable(e: unknown, dir: string): unknown {
+  const code = (e as NodeJS.ErrnoException).code;
+  if (code !== "EACCES" && code !== "EPERM") return e;
+  return httpError(403, `No permission to write in ${dir}. It is probably owned by root because it was copied in with docker cp. ` +
+    `Give it back to BugXHunter with: docker run --rm -u root -v bugxhunter_workspace:/workspace --entrypoint chown ghcr.io/cintelis/bugxhunter-agent -R node:node ${dir}`);
+}
+
 /** Delete a workspace and everything in it. Only a listed workspace qualifies. */
 export function deleteWorkspace(directory: unknown): Workspace {
   const want = typeof directory === "string" ? P.resolve(directory.trim()) : "";
@@ -74,7 +86,7 @@ export function deleteWorkspace(directory: unknown): Workspace {
   if (ws.directory === WORKSPACES_ROOT || !isInside(ws.directory, WORKSPACES_ROOT)) throw httpError(400, "Not a workspace.");
   const real = fs.realpathSync(ws.directory);
   if (!isInside(real, fs.realpathSync(WORKSPACES_ROOT)) || real === fs.realpathSync(WORKSPACES_ROOT)) throw httpError(400, "Not a workspace.");
-  fs.rmSync(real, { recursive: true, force: true, maxRetries: 3 });
+  try { fs.rmSync(real, { recursive: true, force: true, maxRetries: 3 }); } catch (e) { throw notWritable(e, ws.directory); }
   return ws;
 }
 
@@ -113,7 +125,7 @@ export function saveUpload(directory: string, sub: unknown, name: unknown, bytes
       const saved = P.basename(candidate);
       return { path: rel ? `${rel}/${saved}` : saved, name: saved, bytes: bytes.length };
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw notWritable(e, dir);
     }
   }
   throw httpError(409, `Too many files called ${base}.`);

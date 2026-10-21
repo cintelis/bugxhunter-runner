@@ -118,7 +118,9 @@ Two containers:
   powershell -File docker/copy-out.ps1 my-repo C:\temp\my-repo-out
   ```
 
-  (Plain `docker compose cp` also copies in, but leaves files owned by root, so the agent can't edit them.)
+  (Plain `docker compose cp` also copies in, but leaves files owned by root, so neither the agent nor uploads can
+  write there. To fix a folder copied that way: `docker run --rm -u root -v bugxhunter_workspace:/workspace
+  --entrypoint chown ghcr.io/cintelis/bugxhunter-agent -R node:node /workspace/<folder>`.)
 - **Getting files out**: `/workspace` is a Docker volume, so there is no host folder to open. Any
   file path the agent prints under the project (for example "Saved as
   `/workspace/acme/app/analysis.md`") is a download link in the UI, served only for files inside
