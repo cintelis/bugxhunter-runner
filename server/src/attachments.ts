@@ -55,7 +55,7 @@ export interface SavedAttachments {
 }
 
 export function saveAttachments(directory: string, files: Attachment[], inlineImages = true): SavedAttachments {
-  const dir = path.join(directory, "attachments");
+  const dir = path.resolve(directory, "attachments");
   fs.mkdirSync(dir, { recursive: true });
   const parts: Record<string, unknown>[] = [];
   const saved: SavedAttachments["saved"] = [];
@@ -67,8 +67,10 @@ export function saveAttachments(directory: string, files: Attachment[], inlineIm
     }
     const name = safeName(f.name);
     const mime = f.mime || "application/octet-stream";
-    const abs = uniquePath(dir, name);
-    fs.writeFileSync(abs, bytes);
+    const abs = path.resolve(uniquePath(dir, name));
+    // safeName already keeps it to a bare file name; this makes the rule explicit.
+    if (!abs.startsWith(dir + path.sep)) throw Object.assign(new Error(`Refusing to save ${f.name} outside attachments/`), { status: 400 });
+    fs.writeFileSync(abs, bytes, { flag: "wx" });
     const rel = path.relative(directory, abs).split(path.sep).join("/");
     saved.push({ name: path.basename(abs), path: rel, bytes: bytes.length, mime });
 

@@ -130,11 +130,11 @@ async function dockerMode(rest) {
   fs.copyFileSync(path.join(ROOT, "docker-compose.yml"), path.join(dir, "docker-compose.yml"));
   const envFile = path.join(dir, ".env");
   const vals = new Map();
-  if (fs.existsSync(envFile)) {
-    for (const line of fs.readFileSync(envFile, "utf8").split(/\r?\n/)) {
-      const m = /^\s*([A-Z0-9_]+)=(.*)$/.exec(line);
-      if (m) vals.set(m[1], m[2]);
-    }
+  let envText = "";
+  try { envText = fs.readFileSync(envFile, "utf8"); } catch (e) { if (e.code !== "ENOENT") throw e; }
+  for (const line of envText.split(/\r?\n/)) {
+    const m = /^\s*([A-Z0-9_]+)=(.*)$/.exec(line);
+    if (m) vals.set(m[1], m[2]);
   }
   const fresh = !vals.size;
   if (!vals.get("OPEN_RUNNER_SECRET")) vals.set("OPEN_RUNNER_SECRET", crypto.randomBytes(32).toString("base64url"));

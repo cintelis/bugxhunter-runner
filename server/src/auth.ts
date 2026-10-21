@@ -22,6 +22,7 @@ import type express from "express";
 import type { AuthChallenge, AuthMe, PasskeyAssertion } from "../../shared/vault.js";
 import * as vault from "./vault.js";
 import { audit } from "./audit.js";
+import { authLimiter } from "./ratelimit.js";
 
 const SECRET = process.env.OPEN_RUNNER_SECRET || crypto.randomBytes(32).toString("hex");
 const COOKIE = "or_session";
@@ -162,6 +163,8 @@ export function verifyAssertion(a: PasskeyAssertion, allowedHosts: Set<string>):
 // --- routes ------------------------------------------------------------------------
 
 export function mountAuth(app: express.Express, allowedHosts: Set<string>) {
+  // Sign-in is the one place worth guessing at; the recovery code is 128 bits, but no reason to allow a stream.
+  app.use("/api/auth", authLimiter);
   app.get("/api/auth/me", (req, res) => {
     const me: AuthMe = { required: authRequired(), authenticated: isAuthenticated(req) };
     res.json(me);

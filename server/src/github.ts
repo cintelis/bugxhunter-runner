@@ -328,14 +328,16 @@ async function api<T>(tok: string, route: string): Promise<T> {
   throw httpError(r.status === 404 || r.status === 403 ? r.status : 502, `GitHub: ${message}`);
 }
 
-/** The token's account, remembered per token so the status call stays cheap. */
-const logins = new Map<string, { login: string; at: number }>();
+/**
+ * The token's account, remembered so the status call stays cheap. One entry:
+ * there is one connection at a time, and a new token (refresh, reconnect)
+ * simply replaces it.
+ */
+let lastLogin: { tok: string; login: string; at: number } | null = null;
 async function whoami(tok: string): Promise<string> {
-  const key = crypto.createHash("sha256").update(tok).digest("hex");
-  const hit = logins.get(key);
-  if (hit && Date.now() - hit.at < 10 * 60_000) return hit.login;
+  if (lastLogin && lastLogin.tok === tok && Date.now() - lastLogin.at < 10 * 60_000) return lastLogin.login;
   const me = await api<{ login: string }>(tok, "/user");
-  logins.set(key, { login: me.login, at: Date.now() });
+  lastLogin = { tok, login: me.login, at: Date.now() };
   return me.login;
 }
 

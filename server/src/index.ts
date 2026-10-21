@@ -23,6 +23,7 @@ import { mountAuth, authRequired, issueSession } from "./auth.js";
 import { audit, followOpencode, LOG_DIR } from "./audit.js";
 import { saveAttachments, type Attachment } from "./attachments.js";
 import * as vault from "./vault.js";
+import { apiLimiter, fileLimiter, staticLimiter } from "./ratelimit.js";
 import * as github from "./github.js";
 
 // Keys, the proxy token and the provider clients live in providers.ts, which
@@ -104,6 +105,8 @@ app.use("/api", (req, res, next) => {
 // Prompts can carry attachments (base64), so allow larger bodies there.
 app.use("/api/agent/prompt", express.json({ limit: "40mb" }));
 app.use(express.json({ limit: "4mb" }));
+// Rate limits before anything else under /api, sign-in included (see ratelimit.ts).
+app.use("/api", apiLimiter);
 mountAuth(app, ALLOWED_HOSTS);
 // Any authenticated write counts as activity for the vault's auto-lock (reads
 // don't, so the sidebar's status polling can't keep it open).
@@ -111,6 +114,9 @@ app.use("/api", (req, _res, next) => {
   if (req.method !== "GET") vault.touch();
   next();
 });
+
+/** An error (or anything) as a single log line, newlines escaped. */
+const oneLine = (e: unknown) => String(e instanceof Error ? e.stack ?? e.message : e).replace(/\r?\n/g, "\\n");
 
 const sendError = (res: express.Response, e: unknown) => {
   if (e instanceof SCXError) {
@@ -123,7 +129,8 @@ const sendError = (res: express.Response, e: unknown) => {
   }
   const status = (e as { status?: number })?.status;
   if (status) return res.status(status).json({ error: { message: (e as Error).message } });
-  console.error("[server error]", e);
+  // One line: an error message can carry request input, and a newline in it would forge log lines.
+  console.error("[server error]", oneLine(e));
   return res.status(500).json({ error: { message: String((e as Error)?.message ?? e) } });
 };
 
@@ -400,7 +407,7 @@ app.get("/api/agent/directory", async (req, res) => {
  * Download a file the agent wrote (the UI links paths it prints). The file
  * must be inside the project folder; see projectFile.
  */
-app.get("/api/agent/file", async (req, res) => {
+app.get("/api/agent/file", fileLimiter, async (req, res) => {
   try {
     const directory = await resolveDirectory(req.query.directory);
     const file = projectFile(directory, req.query.path);
@@ -754,8 +761,9 @@ app.get("/api/agent/events", async (req, res) => {
 // Production (Docker): serve the built web app from the same origin.
 const WEB_DIST = path.join(REPO_ROOT, "web", "dist");
 if (process.env.NODE_ENV === "production" && fs.existsSync(WEB_DIST)) {
+  app.use(staticLimiter);
   app.use(express.static(WEB_DIST, { index: false }));
-  app.get(/^(?!\/api\/|\/scx\/).*/, (_req, res) => res.sendFile(path.join(WEB_DIST, "index.html")));
+  app.get(/^(?!\/api\/|\/scx\/).*/, staticLimiter, (_req, res) => res.sendFile(path.join(WEB_DIST, "index.html")));
 }
 
 // Body-parser failures (oversized attachment payloads, malformed JSON) and

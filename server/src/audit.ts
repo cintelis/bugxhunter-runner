@@ -23,7 +23,7 @@ function ensureDir() {
     fs.mkdirSync(LOG_DIR, { recursive: true });
     // Keep logs out of git status / the Changes view.
     const ignore = path.join(LOG_DIR, ".gitignore");
-    if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, "*\n");
+    try { fs.writeFileSync(ignore, "*\n", { flag: "wx" }); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e; }
     ready = true;
   } catch (e) {
     console.error("[audit] cannot create log folder:", (e as Error).message);
