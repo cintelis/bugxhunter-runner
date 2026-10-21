@@ -36,6 +36,21 @@ Wordlists: `/opt/wordlists` (common.txt, common-api-endpoints-mazen160.txt,
 raft-medium-directories.txt, subdomains-top1million-5000.txt, LFI-Jhaddix.txt, Generic-SQLi.txt,
 XSS-Jhaddix.txt). Save findings under the project folder.
 
+## Rust and Go
+
+The full image (not `-slim`; check with `command -v cargo go`) has both toolchains, so a Rust or
+Go repository can be built, tested and audited in place:
+- **Rust** (stable, via rustup): `cargo build`, `cargo test`, `cargo clippy`, `cargo fmt`, and
+  `cargo audit`, which checks `Cargo.lock` against the RustSec advisory database (it downloads
+  the database on first run). `rustup target add` and `cargo install` work as the node user.
+- **Go**: `go build`, `go test`, `go vet`, and `govulncheck ./...`, Go's vulnerability scanner,
+  which reports only the vulnerabilities the code actually reaches. A `go.mod` that asks for a
+  newer Go downloads that toolchain automatically.
+
+For a dependency review of a Rust or Go repo, run `cargo audit` or `govulncheck` alongside
+gitleaks and save the reports under the project folder. Downloaded crates and modules are not
+kept across container restarts; the project folder is.
+
 ## Screenshots and other images
 
 Not every model can view images (GLM-5.3 cannot; it receives the bytes as text). If a `read` of an

@@ -86,7 +86,7 @@ docker compose up -d --build          # build locally, or `docker compose pull &
 The images are multi-arch (linux/amd64 and linux/arm64, so Apple Silicon and Graviton run them
 natively) with zstd-compressed layers (Docker 23+). The agent image comes in two flavours: the
 default carries the scan toolchain (nuclei, nmap, httpx, katana, ffuf, gitleaks, testssl and
-wordlists, about 400 MB to download); **`-slim`** leaves it out for code review only, about half
+wordlists) plus the Rust and Go toolchains, about 750 MB to download; **`-slim`** leaves all of that out for code review only, about a third of
 the size (`npx bugxhunter docker --slim`, or `BXH_AGENT_FLAVOR=-slim` in `.env`). Open
 **http://localhost:8790** and set up the [vault](#key-vault) in the sidebar: it seals your SCX
 key and turns on passkey sign-in. (`setup.ps1 -CopyScxKey` copies
@@ -225,6 +225,9 @@ labs, CTFs). Build with `--build-arg SECTOOLS=0` to leave them out.
   `ffuf` (+ SecLists wordlists in `/opt/wordlists`), `testssl`, `curl`, `openssl`, `subfinder`
   (passive).
 - **Secrets (local, no network):** `gitleaks` — scan copied-in repos and JS bundles for leaked keys.
+- **Rust and Go:** `cargo` (with `clippy`, `rustfmt` and `cargo audit` for RustSec advisories) and
+  `go` (with `govulncheck`), to build, test and audit Rust and Go repositories. `--build-arg RUST=0`
+  or `GO=0` leaves one out; `RUST=1` / `GO=1` adds it to a slim build.
 - **Raw-socket:** `nmap`, `ping`, `traceroute`, `dig`/`host` (incl. zone transfer).
 - **Not included — LLM red-teaming:** `promptfoo` (~1.4 GB installed) and `garak` (~2 GB with
   CPU-only PyTorch, 5 GB+ if pip is left to pull the CUDA build) would more than double the image,
