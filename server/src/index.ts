@@ -116,7 +116,7 @@ app.use("/api", (req, _res, next) => {
 });
 
 /** An error (or anything) as a single log line, newlines escaped. */
-const oneLine = (e: unknown) => String(e instanceof Error ? e.stack ?? e.message : e).replace(/\r?\n/g, "\\n");
+const oneLine = (e: unknown) => String(e instanceof Error ? e.stack ?? e.message : e).replace(/[\r\n]+/g, " | ");
 
 const sendError = (res: express.Response, e: unknown) => {
   if (e instanceof SCXError) {
