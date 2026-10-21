@@ -172,3 +172,42 @@ export interface AgentStatus {
   defaultModel: string;
   models: AgentModel[];
 }
+
+/** A folder under the workspace root (shared/agent.d.ts; server/src/workspaces.ts). */
+export interface Workspace {
+  /** Its path under the root: `demo`, or `owner/repo` for a GitHub clone. */
+  name: string;
+  directory: string;
+  /** A git repository (the Changes view needs one). */
+  git: boolean;
+  modified: string | null;
+}
+
+export interface WorkspaceList {
+  root: string;
+  workspaces: Workspace[];
+}
+
+/** One entry of a project folder listing. */
+export interface ProjectEntry {
+  name: string;
+  type: "file" | "dir";
+  size: number;
+  modified: string | null;
+}
+
+export interface ProjectListing {
+  /** The listed folder, relative to the project ("" is the project itself). */
+  path: string;
+  entries: ProjectEntry[];
+  /** More entries than are returned. */
+  truncated: boolean;
+}
+
+export interface UploadResult {
+  /** Where it was saved, relative to the project. */
+  path: string;
+  /** The name it was saved under (a clash gets -1, -2, …). */
+  name: string;
+  bytes: number;
+}

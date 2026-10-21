@@ -183,7 +183,7 @@ const notFound = (dir: string) => httpError(400, `Folder not found: ${dir}`);
 export const ALLOWED_ROOTS = (process.env.OPEN_RUNNER_ALLOWED_ROOTS ?? "")
   .split(path.delimiter).map((s) => s.trim()).filter(Boolean).map((r) => path.resolve(r));
 
-const isInside = (abs: string, root: string) => {
+export const isInside = (abs: string, root: string) => {
   const [a, r] = process.platform === "win32" ? [abs.toLowerCase(), root.toLowerCase()] : [abs, root];
   return a === r || a.startsWith(r.endsWith(path.sep) ? r : r + path.sep);
 };
@@ -231,13 +231,24 @@ export async function resolveDirectory(dir?: unknown): Promise<string> {
 export function projectFile(directory: string, file: unknown): string {
   const raw = typeof file === "string" ? file.trim() : "";
   if (!raw) throw httpError(400, "path required");
+  return projectPath(directory, raw, "file");
+}
+
+/**
+ * A file or folder inside a (validated) project folder: absolute or relative
+ * to the project ("" is the project itself), symlinks resolved, still inside,
+ * and of the expected kind.
+ */
+export function projectPath(directory: string, rel: string, kind: "file" | "dir"): string {
   const P = REMOTE_URL ? path.posix : path;
-  const abs = P.isAbsolute(raw) ? P.normalize(raw) : P.resolve(directory, raw);
-  if (!isInside(abs, directory)) throw httpError(400, `Not inside the project: ${raw}`);
+  const abs = P.isAbsolute(rel) ? P.normalize(rel) : P.resolve(directory, rel || ".");
+  if (!isInside(abs, directory)) throw httpError(400, `Not inside the project: ${rel}`);
   let real: string;
-  try { real = fs.realpathSync(abs); } catch { throw httpError(404, `No such file: ${raw}`); }
-  if (!isInside(real, fs.realpathSync(directory))) throw httpError(400, `Not inside the project: ${raw}`);
-  if (!fs.statSync(real).isFile()) throw httpError(400, `Not a file: ${raw}`);
+  try { real = fs.realpathSync(abs); } catch { throw httpError(404, `No such ${kind === "file" ? "file" : "folder"}: ${rel}`); }
+  if (!isInside(real, fs.realpathSync(directory))) throw httpError(400, `Not inside the project: ${rel}`);
+  const st = fs.statSync(real);
+  if (kind === "file" && !st.isFile()) throw httpError(400, `Not a file: ${rel}`);
+  if (kind === "dir" && !st.isDirectory()) throw httpError(400, `Not a folder: ${rel}`);
   return real;
 }
 

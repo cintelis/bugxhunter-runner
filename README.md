@@ -103,7 +103,15 @@ Two containers:
   key and only allows `/chat/completions` and `/models`. **The SCX key never enters the agent
   container** — this holds even though the agent has direct internet.
 - Projects live in the `workspace` Docker volume (`/workspace`, a git repo so Changes work). No
-  host folders are mounted. Copy a repo in as a snapshot, and results back out:
+  host folders are mounted.
+- **Workspaces and files in the UI**: the sidebar's **workspaces** button lists the folders under
+  `/workspace` (locally `~/bugxhunter/repos`, or `OPEN_RUNNER_WORKSPACE`), including GitHub
+  clones, and creates a new one (an empty git repository) or deletes one. A delete asks for the
+  name typed back, the open project can't be deleted, and only a listed workspace can be. The
+  **files** button browses the open project: click a file to download it, and upload with the
+  button or by dropping files on the list (up to 200 MB each). An upload never replaces a file;
+  a clash is saved as `name-1.ext`.
+- From the command line, copy a repo in as a snapshot, and results back out:
 
   ```powershell
   powershell -File docker/copy-in.ps1 C:\code\my-repo          # -> /workspace/my-repo (skips node_modules, .env, …)

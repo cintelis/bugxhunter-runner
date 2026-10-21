@@ -136,6 +136,10 @@ export default function App() {
     setResume(null);
     setRunner((r) => ({ ...r, directory, recent: [directory, ...r.recent.filter((d) => d !== directory)].slice(0, 8) }));
   }
+  /** A folder that no longer exists (a deleted workspace) drops out of Recent. */
+  function forgetDirectory(directory: string) {
+    setRunner((r) => ({ ...r, recent: r.recent.filter((d) => d !== directory) }));
+  }
 
   // --- Playground (direct SCX chat) ---
   const [config, setConfig] = useState<BotConfig>(() => {
@@ -291,6 +295,7 @@ export default function App() {
         status={status}
         statusError={statusError}
         onOpenDirectory={openDirectory}
+        onForgetDirectory={forgetDirectory}
         config={config}
         setConfig={setConfig}
         models={models}

@@ -7,9 +7,9 @@
 
 import type {
   AgentEvent, AgentModel, AgentQuestion, AgentStatus, FileDiff, PendingRequests, SessionSummary, SlashCommand,
-  StoredMessage, Todo, Tokens,
+  StoredMessage, Todo, Tokens, ProjectEntry, ProjectListing, UploadResult, Workspace, WorkspaceList,
 } from "../../shared/agent";
-export type { AgentEvent, AgentModel, AgentQuestion, AgentStatus, FileDiff, PendingRequests, SessionSummary, SlashCommand, StoredMessage, Todo, Tokens };
+export type { AgentEvent, AgentModel, AgentQuestion, AgentStatus, FileDiff, PendingRequests, SessionSummary, SlashCommand, StoredMessage, Todo, Tokens, ProjectEntry, ProjectListing, UploadResult, Workspace, WorkspaceList };
 
 export interface FileUpload {
   name: string;
@@ -209,3 +209,28 @@ async function errMsg(r: Response): Promise<string> {
     return "";
   }
 }
+
+// --- workspaces and project files ---------------------------------------------------
+
+
+async function ok<T>(r: Response, what: string): Promise<T> {
+  if (!r.ok) throw new Error((await errMsg(r)) || `${what} failed (${r.status})`);
+  return r.json();
+}
+
+export const listWorkspaces = () => fetch("/api/workspaces").then((r) => ok<WorkspaceList>(r, "Listing workspaces"));
+export const createWorkspace = (name: string) =>
+  fetch("/api/workspaces", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }).then((r) => ok<Workspace>(r, "Creating the workspace"));
+export const deleteWorkspace = (directory: string) =>
+  fetch(`/api/workspaces?directory=${encodeURIComponent(directory)}`, { method: "DELETE" }).then((r) => ok<{ ok: true }>(r, "Deleting the workspace"));
+
+export const listProjectFiles = (directory: string, path: string) =>
+  fetch(`/api/agent/files?directory=${encodeURIComponent(directory)}&path=${encodeURIComponent(path)}`).then((r) => ok<ProjectListing>(r, "Listing files"));
+/** Upload one file into a folder of the project; the raw bytes are the body. */
+export const uploadProjectFile = (directory: string, path: string, file: File) =>
+  fetch(`/api/agent/upload?directory=${encodeURIComponent(directory)}&path=${encodeURIComponent(path)}&name=${encodeURIComponent(file.name)}`, {
+    method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file,
+  }).then((r) => ok<UploadResult>(r, `Uploading ${file.name}`));
+/** A download link for a file of the project (relative path). */
+export const projectFileUrl = (directory: string, path: string) =>
+  `/api/agent/file?directory=${encodeURIComponent(directory)}&path=${encodeURIComponent(path)}`;

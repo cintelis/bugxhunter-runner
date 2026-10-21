@@ -24,6 +24,7 @@ import { audit, followOpencode, LOG_DIR } from "./audit.js";
 import { saveAttachments, type Attachment } from "./attachments.js";
 import * as vault from "./vault.js";
 import { apiLimiter, fileLimiter, staticLimiter } from "./ratelimit.js";
+import { createWorkspace, deleteWorkspace, listFiles, listWorkspaces, saveUpload, WORKSPACES_ROOT } from "./workspaces.js";
 import * as github from "./github.js";
 
 // Keys, the proxy token and the provider clients live in providers.ts, which
@@ -407,6 +408,47 @@ app.get("/api/agent/directory", async (req, res) => {
  * Download a file the agent wrote (the UI links paths it prints). The file
  * must be inside the project folder; see projectFile.
  */
+// --- workspaces (server/src/workspaces.ts) ------------------------------------
+app.get("/api/workspaces", (_req, res) => {
+  try { res.json({ root: WORKSPACES_ROOT, workspaces: listWorkspaces() }); } catch (e) { sendError(res, e); }
+});
+app.post("/api/workspaces", async (req, res) => {
+  try {
+    const ws = await createWorkspace(req.body?.name);
+    audit("workspace.created", { directory: ws.directory });
+    res.json(ws);
+  } catch (e) { sendError(res, e); }
+});
+app.delete("/api/workspaces", (req, res) => {
+  try {
+    const ws = deleteWorkspace(req.query.directory);
+    audit("workspace.deleted", { directory: ws.directory });
+    res.json({ ok: true, deleted: ws });
+  } catch (e) { sendError(res, e); }
+});
+
+/** One folder of the project, for the files dialog. */
+app.get("/api/agent/files", async (req, res) => {
+  try {
+    const directory = await resolveDirectory(req.query.directory);
+    res.json(listFiles(directory, req.query.path));
+  } catch (e) { sendError(res, e); }
+});
+
+/**
+ * Upload one file into a folder of the project: the raw bytes as the body,
+ * name and folder in the query. Never replaces an existing file.
+ */
+app.post("/api/agent/upload", fileLimiter, express.raw({ type: () => true, limit: "200mb" }), async (req, res) => {
+  try {
+    const directory = await resolveDirectory(req.query.directory);
+    const bytes = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    const saved = saveUpload(directory, req.query.path, req.query.name, bytes);
+    audit("file.uploaded", { directory, file: saved.path, bytes: saved.bytes });
+    res.json(saved);
+  } catch (e) { sendError(res, e); }
+});
+
 app.get("/api/agent/file", fileLimiter, async (req, res) => {
   try {
     const directory = await resolveDirectory(req.query.directory);

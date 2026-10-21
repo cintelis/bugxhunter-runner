@@ -9,7 +9,9 @@ import { logout } from "./Login";
 import { newToolId } from "./tools";
 import { VaultPanel } from "./VaultPanel";
 import { GitHubDialog } from "./GitHubDialog";
-import { GitHubIcon } from "./icons";
+import { WorkspacesDialog } from "./WorkspacesDialog";
+import { FilesDialog } from "./FilesDialog";
+import { FoldersIcon, FolderIcon, GitHubIcon } from "./icons";
 
 export type Mode = "runner" | "playground";
 
@@ -29,6 +31,7 @@ interface Props {
   status: AgentStatus | null;
   statusError: string | null;
   onOpenDirectory: (dir: string) => void;
+  onForgetDirectory: (dir: string) => void;
   config: BotConfig;
   setConfig: (updater: (c: BotConfig) => BotConfig) => void;
   models: SCXModel[];
@@ -51,7 +54,7 @@ const EXAMPLE_TOOL: ToolDef = {
 };
 
 export function Sidebar({
-  onCollapse, sessions, mode, setMode, runner, status, statusError, onOpenDirectory,
+  onCollapse, sessions, mode, setMode, runner, status, statusError, onOpenDirectory, onForgetDirectory,
   config, setConfig, models, modelError, activeModel, onReset,
 }: Props) {
   const set = <K extends keyof BotConfig>(k: K, v: BotConfig[K]) => setConfig((c) => ({ ...c, [k]: v }));
@@ -180,7 +183,7 @@ export function Sidebar({
         </div>
       </div>
       {mode === "runner" ? (
-        <RunnerSidebar runner={runner} status={status} statusError={statusError} onOpen={onOpenDirectory} sessions={sessions} />
+        <RunnerSidebar runner={runner} status={status} statusError={statusError} onOpen={onOpenDirectory} onForget={onForgetDirectory} sessions={sessions} />
       ) : (
       <div className="sidebar-body">
         <p className="hint" style={{ marginTop: 0 }}>
@@ -371,14 +374,16 @@ export function Sidebar({
 }
 
 /** Left rail for Runner mode: project folder + what the agents can do. */
-function RunnerSidebar({ runner, status, statusError, onOpen, sessions }: {
-  runner: RunnerSettings; status: AgentStatus | null; statusError: string | null; onOpen: (dir: string) => void;
+function RunnerSidebar({ runner, status, statusError, onOpen, onForget, sessions }: {
+  runner: RunnerSettings; status: AgentStatus | null; statusError: string | null; onOpen: (dir: string) => void; onForget: (dir: string) => void;
   sessions: SessionNav;
 }) {
   const [draft, setDraft] = useState(runner.directory);
   const [err, setErr] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [github, setGithub] = useState(false);
+  const [workspaces, setWorkspaces] = useState(false);
+  const [files, setFiles] = useState(false);
 
   useEffect(() => setDraft(runner.directory), [runner.directory]);
 
@@ -409,8 +414,14 @@ function RunnerSidebar({ runner, status, statusError, onOpen, sessions }: {
         </form>
         {err && <div className="hint danger">{err}</div>}
         <div className="hint">The agent reads, edits and runs commands in this folder. Switching folders starts a new session.</div>
-        <button className="btn sm gh-open" onClick={() => setGithub(true)} title="Clone a repository into the workspace (read-only)"><GitHubIcon size={13} /> clone from GitHub</button>
+        <div className="project-actions">
+          <button className="btn sm gh-open" onClick={() => setWorkspaces(true)} title="Create, open or delete workspaces"><FoldersIcon size={13} /> workspaces</button>
+          <button className="btn sm gh-open" onClick={() => setFiles(true)} disabled={!runner.directory} title="Browse, upload and download this project's files"><FolderIcon size={13} /> files</button>
+          <button className="btn sm gh-open" onClick={() => setGithub(true)} title="Clone a repository into the workspace (read-only)"><GitHubIcon size={13} /> clone from GitHub</button>
+        </div>
         {github && <GitHubDialog onOpen={(dir) => open(dir)} onClose={() => setGithub(false)} />}
+        {workspaces && <WorkspacesDialog current={runner.directory} onOpen={(dir) => open(dir)} onDeleted={onForget} onClose={() => setWorkspaces(false)} />}
+        {files && runner.directory && <FilesDialog directory={runner.directory} onClose={() => setFiles(false)} />}
       </div>
 
       {recent.length > 0 && (
