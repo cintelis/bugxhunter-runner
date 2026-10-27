@@ -21,9 +21,10 @@ const vaultLabel = () => `BugXHunter vault (${location.hostname})`;
 const CUSTOM = "__custom__";
 const KNOWN_ITEMS = [
   { name: "SCX_API", short: "SCX.ai — the default provider", label: "SCX.ai model key — the default provider" },
+  { name: "NVIDIA_API_KEY", short: "NVIDIA NIM — build.nvidia.com models", label: "NVIDIA NIM key — build.nvidia.com models incl. Nemotron, DeepSeek, GLM-5.3 (optional)" },
   { name: "OPENROUTER_API_KEY", short: "OpenRouter — one key, its whole catalogue", label: "OpenRouter key — unlocks its model catalogue (optional)" },
 ];
-const KEY_PLACEHOLDER: Record<string, string> = { SCX_API: "sk-scx-…", OPENROUTER_API_KEY: "sk-or-…" };
+const KEY_PLACEHOLDER: Record<string, string> = { SCX_API: "sk-scx-…", NVIDIA_API_KEY: "nvapi-…", OPENROUTER_API_KEY: "sk-or-…" };
 
 export function VaultPanel() {
   const [status, setStatus] = useState<VaultStatus | null>(null);

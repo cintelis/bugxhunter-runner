@@ -41,6 +41,6 @@ export interface SCXModel {
   supported_features: string[]; // e.g. "tools", "reasoning", "json_mode"
   description?: string;
   datacenters?: { country_code: string }[];
-  /** Which provider serves it; OpenRouter ids are prefixed `openrouter/`. */
-  provider?: "scx" | "openrouter";
+  /** Which provider serves it; OpenRouter ids are prefixed `openrouter/`, NVIDIA NIM ids `nim/`. */
+  provider?: "scx" | "openrouter" | "nvidia";
 }

@@ -105,9 +105,9 @@ export function Sidebar({
   const supportsJson = features.includes("json_mode");
   const supportsReasoning = features.includes("reasoning");
 
-  // Text models, grouped by provider (SCX first, then OpenRouter when configured).
+  // Text models, grouped by provider (SCX first, then NVIDIA and OpenRouter when configured).
   const textModels = models.filter((m) => m.output_modalities.includes("text"));
-  const modelGroups = (["scx", "openrouter"] as const)
+  const modelGroups = (["scx", "nvidia", "openrouter"] as const)
     .map((p) => [p, textModels.filter((m) => (m.provider ?? "scx") === p)] as const)
     .filter(([, list]) => list.length > 0);
 
@@ -200,7 +200,7 @@ export function Sidebar({
           <label>Model</label>
           <select value={config.model} onChange={(e) => set("model", e.target.value)}>
             {modelGroups.map(([provider, list]) => (
-              <optgroup key={provider} label={provider === "openrouter" ? "OpenRouter" : "SCX.ai"}>
+              <optgroup key={provider} label={provider === "openrouter" ? "OpenRouter" : provider === "nvidia" ? "NVIDIA NIM" : "SCX.ai"}>
                 {list.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name}

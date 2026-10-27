@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 import { createOpencodeServer, createOpencodeClient } from "@opencode-ai/sdk";
 import type { AgentEvent, AgentModel, MessagePart, StoredMessage } from "../../shared/agent.js";
 import { httpError } from "./errors.js";
-import { openrouterOpencodeProvider, OPENROUTER_MODELS, PORT } from "./providers.js";
+import { openrouterOpencodeProvider, nvidiaOpencodeProvider, OPENROUTER_MODELS, PORT } from "./providers.js";
 
 export type { AgentEvent, AgentModel, StoredMessage };
 
@@ -60,6 +60,8 @@ export const VISION_AGENT = {
  */
 async function inlineConfig() {
   const openrouter = await openrouterOpencodeProvider(`http://127.0.0.1:${PORT}/openrouter/v1`);
+  const nvidia = await nvidiaOpencodeProvider(`http://127.0.0.1:${PORT}/nvidia/v1`);
+  const provider = { ...(openrouter ? { openrouter } : {}), ...(nvidia ? { nvidia } : {}) };
   return {
     model: DEFAULT_MODEL,
     agent: {
@@ -68,7 +70,7 @@ async function inlineConfig() {
       vision: VISION_AGENT,
     },
     permission: { edit: "ask", bash: "ask" },
-    ...(openrouter ? { provider: { openrouter } } : {}),
+    ...(Object.keys(provider).length ? { provider } : {}),
   };
 }
 
