@@ -1,12 +1,16 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 const API_TARGET = process.env.OPEN_RUNNER_API ?? "http://127.0.0.1:8790";
+// The release, from the root package.json, shown beside the logo.
+const VERSION: string = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
 // Dev server proxies /api to the Express backend so the SCX key stays server-side.
 // Ports 5190/8790 avoid clashing with common local apps (5173/8787).
 export default defineConfig({
   plugins: [react()],
+  define: { __APP_VERSION__: JSON.stringify(VERSION) },
   server: {
     port: 5190,
     strictPort: true,

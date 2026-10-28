@@ -26,6 +26,7 @@ import * as vault from "./vault.js";
 import * as playground from "./playground-store.js";
 import * as nvidiaHealth from "./nvidia-health.js";
 import * as render from "./render.js";
+import { VERSION } from "./version.js";
 import { apiLimiter, fileLimiter, staticLimiter } from "./ratelimit.js";
 import { createWorkspace, deleteWorkspace, listFiles, listWorkspaces, saveUpload, WORKSPACES_ROOT } from "./workspaces.js";
 import * as github from "./github.js";
@@ -143,7 +144,7 @@ const sendError = (res: express.Response, e: unknown) => {
   return res.status(500).json({ error: { message: String((e as Error)?.message ?? e) } });
 };
 
-app.get("/api/health", (_req, res) => res.json({ ok: true, baseUrl: PROVIDERS.scx.baseUrl }));
+app.get("/api/health", (_req, res) => res.json({ ok: true, version: VERSION, baseUrl: PROVIDERS.scx.baseUrl }));
 
 // --- Saved Playground sessions (see playground-store.ts) ---------------------
 // Chats and canvases, sealed with the vault key into the runner-only data volume.

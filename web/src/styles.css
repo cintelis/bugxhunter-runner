@@ -197,6 +197,7 @@ body.resizing iframe { pointer-events: none; }
 .logo .prompt { color: var(--green); }
 .logo .x { color: var(--red); }
 .brand-sub { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 4px; letter-spacing: 0.3px; }
+.brand-ver { color: var(--green); opacity: 0.8; margin-left: 4px; }
 
 /* ---------- Sidebar form ---------- */
 .field { margin-bottom: 16px; }

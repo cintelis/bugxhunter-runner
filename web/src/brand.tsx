@@ -15,7 +15,11 @@ export function Logo({ size = 20, tagline = true }: { size?: number; tagline?: b
   return (
     <div className="brand" aria-label="BugXHunter">
       <span className="logo" style={{ fontSize: size }}><Wordmark /></span>
-      {tagline && <span className="brand-sub">Open-source AI security testing</span>}
+      {tagline && (
+        <span className="brand-sub">
+          Open-source AI security testing <span className="brand-ver" title={`BugXHunter release v${__APP_VERSION__}`}>v{__APP_VERSION__}</span>
+        </span>
+      )}
     </div>
   );
 }
