@@ -211,7 +211,9 @@ export function Canvas({ config, models, onExit }: Props) {
         temperature: 0.2,
         // A diagram file makes for a big model; reasoning models also think before the JSON.
         max_tokens: Math.max(config.maxTokens, att.docs.length ? 16384 : 8192),
-        stream: false,
+        // Streamed so a long think doesn't hit the runner's "started answering" limit; only the
+        // answer text (not reasoning) reaches onDelta, so `text` is just the JSON.
+        stream: true,
       },
       {
         signal: ctrl.signal,

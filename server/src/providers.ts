@@ -297,7 +297,7 @@ const probeClient = new SCXClient({ apiKey: () => apiKey("nvidia"), baseUrl: PRO
 
 export async function probeNvidia(id: string): Promise<nvidiaHealth.ProbeResult> {
   try {
-    await probeClient.chat({ model: id, messages: [{ role: "user", content: "hi" }], max_tokens: 1, stream: false });
+    await probeClient.chat({ model: id, messages: [{ role: "user", content: "hi" }], max_tokens: 1, stream: false }, { timeoutMs: 15_000 });
     return "ok";
   } catch (e) {
     return e instanceof SCXError && e.status === 404 ? "missing" : "unknown";

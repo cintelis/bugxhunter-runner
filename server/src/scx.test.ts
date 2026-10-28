@@ -42,10 +42,16 @@ describe("SCXClient timeouts", () => {
     })) as typeof fetch;
     try {
       const c = new SCXClient({ apiKey: () => "k", baseUrl: "https://integrate.api.nvidia.com/v1", timeoutMs: 20 });
-      const err = await c.chat({ model: "m", messages: [] }).catch((e) => e);
+      const err = await c.chat({ model: "m", messages: [] }, { timeoutMs: 20 }).catch((e) => e);
       expect(err).toBeInstanceOf(SCXError);
       expect(err.status).toBe(504);
       expect(err.message).toContain("integrate.api.nvidia.com did not start answering within 0s");
+
+      // a whole non-streamed answer gets the long limit unless the caller sets one
+      const { NON_STREAM_TIMEOUT_MS } = await import("./scx.js");
+      expect(NON_STREAM_TIMEOUT_MS).toBeGreaterThanOrEqual(300_000);
+      const quick = await c.chat({ model: "m", messages: [] }, { timeoutMs: 15 }).catch((e) => e);
+      expect(quick.status).toBe(504);
     } finally {
       globalThis.fetch = realFetch;
     }

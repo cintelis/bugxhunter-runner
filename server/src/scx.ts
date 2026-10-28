@@ -12,6 +12,9 @@
 
 export const SCX_DEFAULT_BASE_URL = "https://api.scx.ai/v1";
 
+/** Limit for a whole non-streamed completion (see chat()). */
+export const NON_STREAM_TIMEOUT_MS = Number(process.env.OPEN_RUNNER_NON_STREAM_TIMEOUT_MS ?? 600_000);
+
 export class SCXError extends Error {
   constructor(
     public status: number,
@@ -96,12 +99,12 @@ export class SCXClient {
   /** Low-level fetch that injects auth, JSON headers, and a timeout. */
   private async request(
     path: string,
-    init: RequestInit & { json?: unknown } = {},
+    init: RequestInit & { json?: unknown; timeoutMs?: number } = {},
   ): Promise<Response> {
-    const { json, headers, ...rest } = init;
+    const { json, headers, timeoutMs = this.timeoutMs, ...rest } = init;
     const apiKey = this.key(); // may throw (vault sealed): before any network call
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), this.timeoutMs);
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
       return await fetch(`${this.baseUrl}${path}`, {
         ...rest,
@@ -117,7 +120,7 @@ export class SCXClient {
     } catch (e) {
       if (ctrl.signal.aborted) {
         const host = new URL(this.baseUrl).host;
-        throw new SCXError(504, `${host} did not start answering within ${Math.round(this.timeoutMs / 1000)}s. The model may be busy or queued; try again or pick another model.`, "timeout");
+        throw new SCXError(504, `${host} did not start answering within ${Math.round(timeoutMs / 1000)}s. The model may be busy or queued; try again or pick another model.`, "timeout");
       }
       throw e;
     } finally {
@@ -160,10 +163,13 @@ export class SCXClient {
 
   // --- Chat Completions -----------------------------------------------------
 
-  async chat(params: ChatParams): Promise<ChatCompletion> {
+  async chat(params: ChatParams, opts: { timeoutMs?: number } = {}): Promise<ChatCompletion> {
+    // Non-streamed: nothing arrives until the whole answer is written, which a reasoning model
+    // can take minutes over, so allow longer than the "started answering" limit for streams.
     const res = await this.request("/chat/completions", {
       method: "POST",
       json: { ...params, stream: false },
+      timeoutMs: opts.timeoutMs ?? Math.max(this.timeoutMs, NON_STREAM_TIMEOUT_MS),
     });
     return this.json<ChatCompletion>(res);
   }
