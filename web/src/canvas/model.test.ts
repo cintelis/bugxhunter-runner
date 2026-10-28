@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildBudget, extractJson, findingsMarkdown, layout, normalize, stats, toDrawioSpec, worstOpen } from "./model";
+import { NODE_H, buildBudget, extractJson, findingsMarkdown, layout, normalize, stats, tidy, toDrawioSpec, worstOpen } from "./model";
 
 describe("extractJson", () => {
   it("reads a fenced block or a bare object surrounded by prose", () => {
@@ -58,9 +58,10 @@ describe("layout, worstOpen, stats, findingsMarkdown", () => {
     edges: [{ from: "u", to: "s", encrypted: false }],
   }));
 
-  it("places each kind in its own column", () => {
-    const xs = m.nodes.map((n) => n.x);
-    expect(new Set(xs).size).toBe(3);
+  it("lays flows out left to right and puts cards without flows underneath", () => {
+    const [u, s, d] = m.nodes;
+    expect(u.x!).toBeLessThan(s.x!);
+    expect(d.y!).toBeGreaterThan(Math.max(u.y!, s.y!));
     expect(m.nodes.every((n) => n.y !== undefined)).toBe(true);
   });
 
@@ -154,5 +155,51 @@ describe("flows", () => {
     expect(spec.edges[0].label).toBe("attestation: SPDM evidence");
     expect(spec.edges[2].label).toBe("control: verdict (implied)");
     expect(spec.legend).toEqual({ edges: [] });
+  });
+});
+
+describe("left-to-right layout", () => {
+  const chain = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `n${i}`, label: `N${i}`, kind: "service" }));
+
+  it("puts each card right of what flows into it, even with a loop", () => {
+    const m = layout(normalize({
+      title: "Loop",
+      nodes: chain(4),
+      edges: [{ from: "n0", to: "n1" }, { from: "n1", to: "n2" }, { from: "n2", to: "n3" }, { from: "n3", to: "n1" }],
+    }));
+    const xs = m.nodes.map((n) => n.x!);
+    expect(xs[0]).toBeLessThan(xs[1]);
+    expect(xs[1]).toBeLessThan(xs[2]);
+    expect(xs[2]).toBeLessThan(xs[3]);
+  });
+
+  it("wraps a wide fan-out into extra columns instead of one tall one", () => {
+    const m = layout(normalize({
+      title: "Fan",
+      nodes: [{ id: "hub", label: "Hub", kind: "service" }, ...chain(14)],
+      edges: chain(14).map((n) => ({ from: "hub", to: n.id })),
+    }));
+    const ys = m.nodes.map((n) => n.y!);
+    expect((Math.max(...ys) - Math.min(...ys)) / (NODE_H + 40)).toBeLessThan(6);
+    expect(new Set(m.nodes.map((n) => `${n.x},${n.y}`)).size).toBe(15);
+  });
+
+  it("pulls a scheduler next to the job it starts", () => {
+    const m = layout(normalize({
+      title: "Jobs",
+      nodes: [...chain(4), { id: "cron", label: "Scheduler", kind: "service" }],
+      edges: [{ from: "n0", to: "n1" }, { from: "n1", to: "n2" }, { from: "n2", to: "n3" }, { from: "cron", to: "n3" }],
+    }));
+    const at = (id: string) => m.nodes.find((n) => n.id === id)!.x!;
+    expect(at("n3") - at("cron")).toBe(at("n3") - at("n2"));
+  });
+
+  it("tidy re-lays an arranged canvas, layout keeps it and adds new cards below", () => {
+    const m = layout(normalize({ title: "T", nodes: chain(2), edges: [{ from: "n0", to: "n1" }] }));
+    const moved = { ...m, nodes: m.nodes.map((n) => ({ ...n, x: 999, y: 5 })) };
+    expect(layout(moved).nodes[0].x).toBe(999);
+    expect(tidy(moved).nodes[0].x).toBe(40);
+    const added = layout({ ...m, nodes: [...m.nodes, { id: "z", label: "Z", kind: "service", details: [], inScope: true, tested: false, findings: [] }] });
+    expect(added.nodes[2].y!).toBeGreaterThan(Math.max(...m.nodes.map((n) => n.y!)));
   });
 });

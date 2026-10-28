@@ -206,21 +206,139 @@ export function normalize(raw: unknown): ThreatModel {
 
 export const NODE_W = 200;
 export const NODE_H = 86;
-const COL_GAP = 110;
-const ROW_GAP = 46;
-const COLUMN: Record<NodeKind, number> = { actor: 0, service: 1, datastore: 2, external: 3 };
+const COL_GAP = 120;
+const ROW_GAP = 40;
+const PITCH_X = NODE_W + COL_GAP;
+const PITCH_Y = NODE_H + ROW_GAP;
+/** A column taller than this wraps into the next one, so big systems spread sideways. */
+const MAX_ROWS = 6;
+const KIND_ORDER: Record<NodeKind, number> = { actor: 0, external: 1, service: 2, datastore: 3 };
+const placed = (n: TMNode) => n.x !== undefined && n.y !== undefined;
 
-/** Give unplaced nodes a position: one column per kind, left to right in the order data flows. */
+/**
+ * Give unplaced nodes a position. A fresh model is laid out left to right along its flows;
+ * cards added to a canvas that is already arranged go in a row under it.
+ */
 export function layout(model: ThreatModel): ThreatModel {
-  const rows = [0, 0, 0, 0];
-  for (const n of model.nodes) if (n.x !== undefined && n.y !== undefined) rows[COLUMN[n.kind]]++;
+  const todo = model.nodes.filter((n) => !placed(n));
+  if (!todo.length) return model;
+  if (todo.length === model.nodes.length) return { ...model, nodes: arrange(model.nodes, model.edges) };
+  const done = model.nodes.filter(placed);
+  const left = Math.min(...done.map((n) => n.x!));
+  const below = Math.max(...done.map((n) => n.y!)) + PITCH_Y;
+  let i = 0;
   const nodes = model.nodes.map((n) => {
-    if (n.x !== undefined && n.y !== undefined) return n;
-    const col = COLUMN[n.kind];
-    const row = rows[col]++;
-    return { ...n, x: 40 + col * (NODE_W + COL_GAP), y: 40 + row * (NODE_H + ROW_GAP) };
+    if (placed(n)) return n;
+    const at = i++;
+    return { ...n, x: left + (at % 4) * PITCH_X, y: below + Math.floor(at / 4) * PITCH_Y };
   });
   return { ...model, nodes };
+}
+
+/** Throw away every position and lay the whole canvas out again. */
+export function tidy(model: ThreatModel): ThreatModel {
+  return layout({ ...model, nodes: model.nodes.map(({ x: _x, y: _y, ...n }) => n) });
+}
+
+/**
+ * Layered left-to-right layout: each card sits one column right of whatever flows into it,
+ * cards in a column are ordered to cut crossings, and cards with no flows go in a grid below.
+ */
+function arrange(nodes: TMNode[], edges: TMEdge[]): TMNode[] {
+  const index = new Map(nodes.map((n, i) => [n.id, i]));
+  const out = new Map<string, Set<string>>(nodes.map((n) => [n.id, new Set()]));
+  const inc = new Map<string, Set<string>>(nodes.map((n) => [n.id, new Set()]));
+  for (const e of edges) {
+    if (e.from === e.to || !out.has(e.from) || !out.has(e.to)) continue;
+    out.get(e.from)!.add(e.to);
+    inc.get(e.to)!.add(e.from);
+  }
+  const linked = nodes.filter((n) => out.get(n.id)!.size || inc.get(n.id)!.size);
+  const lone = nodes.filter((n) => !out.get(n.id)!.size && !inc.get(n.id)!.size);
+
+  // 1. Drop the flows that close a loop, starting from cards nothing flows into.
+  const starts = [...linked].sort((a, b) =>
+    (inc.get(a.id)!.size ? 1 : 0) - (inc.get(b.id)!.size ? 1 : 0) ||
+    KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || index.get(a.id)! - index.get(b.id)!);
+  const fwd = new Map<string, string[]>(linked.map((n) => [n.id, []]));
+  const back = new Map<string, string[]>(linked.map((n) => [n.id, []]));
+  const state = new Map<string, 1 | 2>();
+  const visit = (id: string) => {
+    state.set(id, 1);
+    for (const t of out.get(id)!) {
+      if (state.get(t) === 1) continue;
+      fwd.get(id)!.push(t);
+      back.get(t)!.push(id);
+      if (!state.has(t)) visit(t);
+    }
+    state.set(id, 2);
+  };
+  for (const n of starts) if (!state.has(n.id)) visit(n.id);
+
+  // 2. Columns: the longest chain of flows into each card.
+  const order: string[] = [];
+  const waiting = new Map(linked.map((n) => [n.id, back.get(n.id)!.length]));
+  const queue = linked.filter((n) => !waiting.get(n.id)).map((n) => n.id);
+  while (queue.length) {
+    const id = queue.shift()!;
+    order.push(id);
+    for (const t of fwd.get(id)!) {
+      waiting.set(t, waiting.get(t)! - 1);
+      if (!waiting.get(t)) queue.push(t);
+    }
+  }
+  const rank = new Map<string, number>();
+  for (const id of order) rank.set(id, Math.max(0, ...back.get(id)!.map((p) => rank.get(p)! + 1)));
+  // A starting card (a scheduler, an identity provider) sits just left of what it feeds,
+  // not out in column 0; people stay on the far left.
+  for (const id of [...order].reverse()) {
+    const n = nodes[index.get(id)!];
+    if (back.get(id)!.length || !fwd.get(id)!.length || n.kind === "actor") continue;
+    rank.set(id, Math.max(0, Math.min(...fwd.get(id)!.map((t) => rank.get(t)!)) - 1));
+  }
+
+  // 3. Order each column by where its neighbours sit, sweeping right then left a few times.
+  const columns: string[][] = [];
+  for (const id of order) (columns[rank.get(id)!] ??= []).push(id);
+  const layers = columns.filter(Boolean);
+  const centre = new Map<string, number>();
+  const measure = () => layers.forEach((l) => l.forEach((id, i) => centre.set(id, i - (l.length - 1) / 2)));
+  measure();
+  for (let sweep = 0; sweep < 8; sweep++) {
+    const rightward = sweep % 2 === 0;
+    for (const layer of rightward ? layers : [...layers].reverse()) {
+      const r = rank.get(layer[0])!;
+      const score = new Map(layer.map((id) => {
+        const near = [...inc.get(id)!, ...out.get(id)!].filter((t) => rank.has(t) && (rightward ? rank.get(t)! < r : rank.get(t)! > r));
+        return [id, near.length ? near.reduce((s, t) => s + centre.get(t)!, 0) / near.length : centre.get(id)!];
+      }));
+      layer.sort((a, b) => score.get(a)! - score.get(b)!);
+      layer.forEach((id, i) => centre.set(id, i - (layer.length - 1) / 2));
+    }
+  }
+
+  // 4. Positions, each column centred on the tallest; tall columns wrap into extra columns.
+  const tallest = Math.min(MAX_ROWS, Math.max(0, ...layers.map((l) => l.length)));
+  const pos = new Map<string, { x: number; y: number }>();
+  let col = 0;
+  for (const layer of layers) {
+    const wraps = Math.ceil(layer.length / MAX_ROWS);
+    const per = Math.ceil(layer.length / wraps);
+    layer.forEach((id, i) => {
+      const c = Math.floor(i / per);
+      const count = Math.min(per, layer.length - c * per);
+      pos.set(id, { x: 40 + (col + c) * PITCH_X, y: 40 + ((tallest - count) / 2 + (i % per)) * PITCH_Y });
+    });
+    col += wraps;
+  }
+
+  // 5. Cards without flows: a grid under the graph, grouped by kind.
+  const top = layers.length ? 40 + (tallest + 0.5) * PITCH_Y : 40;
+  const across = Math.max(4, col);
+  [...lone].sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || index.get(a.id)! - index.get(b.id)!)
+    .forEach((n, i) => pos.set(n.id, { x: 40 + (i % across) * PITCH_X, y: top + Math.floor(i / across) * PITCH_Y }));
+
+  return nodes.map((n) => ({ ...n, ...pos.get(n.id)! }));
 }
 
 /** The worst open finding on a node, which decides its colour. */

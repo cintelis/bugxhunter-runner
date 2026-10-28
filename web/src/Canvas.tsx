@@ -8,7 +8,7 @@ import { userContent } from "./wire";
 import { ATTACH_ACCEPT, AttachChips, useImageAttach } from "./imageAttach";
 import { renderAvailable, renderDrawio } from "./DrawioBlock";
 import {
-  FLOW_KINDS, FLOW_LABEL, NODE_H, NODE_W, buildBudget, empty, extractJson, findingsMarkdown, layout, normalize, stats, toDrawioSpec, worstOpen,
+  FLOW_KINDS, FLOW_LABEL, NODE_H, NODE_W, buildBudget, empty, extractJson, findingsMarkdown, layout, normalize, stats, tidy, toDrawioSpec, worstOpen,
   type Finding, type FindingStatus, type FlowKind, type NodeKind, type Severity, type TMEdge, type TMNode, type ThreatModel,
 } from "./canvas/model";
 import { FONT_DETAIL, FONT_FLOW, FONT_KIND, FONT_TITLE, fitText, textWidth } from "./canvas/textfit";
@@ -57,6 +57,26 @@ const FLOW_COLOR: Record<FlowKind, string> = {
   blocked: "#5c6370",
 };
 const PLAINTEXT = "#ff3c3c";
+/**
+ * The line for a flow. Between columns it is a curve from the side of one card to the side of
+ * the other (left-to-right reading); within a column it is straight, stopping at the border.
+ */
+function flowPath(a: TMNode, b: TMNode): { d: string; ax: number; ay: number; ex: number; ey: number } {
+  const acx = (a.x ?? 0) + NODE_W / 2, acy = (a.y ?? 0) + NODE_H / 2;
+  const bcx = (b.x ?? 0) + NODE_W / 2, bcy = (b.y ?? 0) + NODE_H / 2;
+  if (Math.abs(bcx - acx) > NODE_W) {
+    const dir = bcx > acx ? 1 : -1;
+    const ax = acx + dir * NODE_W / 2, ex = bcx - dir * (NODE_W / 2 + 2);
+    const bend = Math.max(40, Math.abs(ex - ax) / 2) * dir;
+    return { d: `M${ax},${acy} C${ax + bend},${acy} ${ex - bend},${bcy} ${ex},${bcy}`, ax, ay: acy, ex, ey: bcy };
+  }
+  // Stop the line at the target's border so the arrowhead shows.
+  const dx = bcx - acx, dy = bcy - acy;
+  const t = Math.min(Math.abs((NODE_W / 2) / (dx || 1e-6)), Math.abs((NODE_H / 2) / (dy || 1e-6)), 1);
+  const ex = bcx - dx * t, ey = bcy - dy * t;
+  return { d: `M${acx},${acy} L${ex},${ey}`, ax: acx, ay: acy, ex, ey };
+}
+
 /** The stroke colour and dash of a flow: plaintext red, blocked dotted, implied short dashes. */
 function flowLook(e: TMEdge) {
   const plain = e.encrypted === false;
@@ -458,6 +478,8 @@ export function Canvas({ config, models, onExit }: Props) {
           {s.components} components · {s.tested}/{s.inScope} tested · {s.open.critical + s.open.high} crit/high open
         </span>
         <button className="btn ghost sm" onClick={addNode}>+ component</button>
+        <button className="btn ghost sm" disabled={!model.nodes.length} title="Lay the canvas out again, left to right along its flows (undo puts it back)"
+          onClick={() => { setUndo({ model, id: canvasId }); setModel(tidy(model)); setView(null); }}>tidy</button>
         <button className="btn ghost sm" onClick={() => importRef.current?.click()}>import</button>
         <button className="btn ghost sm" disabled={!model.nodes.length} onClick={() => download(`${baseName}.json`, JSON.stringify(model, null, 2), "application/json")}>json</button>
         <button className="btn ghost sm" disabled={!model.nodes.length} onClick={() => download(`${baseName}-findings.md`, findingsMarkdown(model), "text/markdown")}>findings.md</button>
@@ -512,12 +534,7 @@ export function Canvas({ config, models, onExit }: Props) {
               {model.edges.map((e) => {
                 const a = byId.get(e.from), b = byId.get(e.to);
                 if (!a || !b) return null;
-                const ax = (a.x ?? 0) + NODE_W / 2, ay = (a.y ?? 0) + NODE_H / 2;
-                const bx = (b.x ?? 0) + NODE_W / 2, by = (b.y ?? 0) + NODE_H / 2;
-                // Stop the line at the target's border so the arrowhead shows.
-                const dx = bx - ax, dy = by - ay;
-                const t = Math.min(Math.abs((NODE_W / 2) / (dx || 1e-6)), Math.abs((NODE_H / 2) / (dy || 1e-6)), 1);
-                const ex = bx - dx * t, ey = by - dy * t;
+                const { d, ax, ay, ex, ey } = flowPath(a, b);
                 const look = flowLook(e);
                 const sel = selectedEdge === e.id;
                 const mx = (ax + ex) / 2, my = (ay + ey) / 2;
@@ -532,8 +549,8 @@ export function Canvas({ config, models, onExit }: Props) {
                   <g key={e.id} opacity={look.opacity} style={{ cursor: "pointer" }} onPointerDown={(ev) => selectEdge(ev, e.id)}>
                     <title>{`${FLOW_LABEL[e.kind ?? "data"]} flow${e.implied ? " (implied)" : ""}${full ? `: ${full}` : ""}`}</title>
                     {/* A wide invisible line makes the flow easy to click. */}
-                    <line x1={ax} y1={ay} x2={ex} y2={ey} stroke="transparent" strokeWidth={14} />
-                    <line x1={ax} y1={ay} x2={ex} y2={ey} stroke={sel ? "#ffffff" : look.color} strokeWidth={sel ? 3 : 2}
+                    <path d={d} fill="none" stroke="transparent" strokeWidth={14} />
+                    <path d={d} fill="none" stroke={sel ? "#ffffff" : look.color} strokeWidth={sel ? 3 : 2}
                       strokeDasharray={look.dash} markerEnd={`url(#${sel ? "tm-arrow-sel" : look.marker})`} />
                     {e.kind === "blocked" && (
                       <g transform={`translate(${mx},${my})`}>
