@@ -68,5 +68,20 @@ class Outline(unittest.TestCase):
             outline("<html/>")
 
 
+
+class DuplicateNames(unittest.TestCase):
+    def test_arrows_name_boxes_with_shared_first_lines_unambiguously(self):
+        m = """<mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>
+<mxCell id="a" value="Scheduler&lt;br&gt;every 15 min" style="rounded=1;" vertex="1" parent="1"><mxGeometry x="0" y="100" width="100" height="40" as="geometry"/></mxCell>
+<mxCell id="b" value="Scheduler&lt;br&gt;nightly" style="rounded=1;" vertex="1" parent="1"><mxGeometry x="0" y="200" width="100" height="40" as="geometry"/></mxCell>
+<mxCell id="c" value="Workflow" style="rounded=1;" vertex="1" parent="1"><mxGeometry x="300" y="150" width="100" height="40" as="geometry"/></mxCell>
+<mxCell id="e1" style="" edge="1" parent="1" source="a" target="c"><mxGeometry relative="1" as="geometry"/></mxCell>
+<mxCell id="e2" style="" edge="1" parent="1" source="b" target="c"><mxGeometry relative="1" as="geometry"/></mxCell>
+</root></mxGraphModel>"""
+        o = outline(m)["outline"]
+        self.assertIn("- Scheduler (every 15 min) -> Workflow", o)
+        self.assertIn("- Scheduler (nightly) -> Workflow", o)
+
+
 if __name__ == "__main__":
     unittest.main()

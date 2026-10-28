@@ -205,9 +205,22 @@ def _page(page_name: str, model: ET.Element) -> list[str]:
                 e["label"] = v["t"]
                 used.add(v["id"])
 
+    # Arrows name their ends by a box's first line; when several boxes share it ("EventBridge
+    # Scheduler", "Diff"), add lines until the name is unique, so every arrow is unambiguous.
+    first_counts: dict[str, int] = {}
+    for v in V.values():
+        if v["t"]:
+            k = v["t"].split(" / ")[0]
+            first_counts[k] = first_counts.get(k, 0) + 1
+
     def name(vid):
         v = V.get(vid)
-        return v["t"].split(" / ")[0] if v and v["t"] else "(unlabelled shape)"
+        if not v or not v["t"]:
+            return "(unlabelled shape)"
+        parts = v["t"].split(" / ")
+        if first_counts.get(parts[0], 0) < 2 or len(parts) == 1:
+            return parts[0]
+        return f"{parts[0]} ({parts[1]})"
 
     def line(m) -> str:
         tags = []
