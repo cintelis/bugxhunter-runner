@@ -24,6 +24,16 @@ import { deleteSession, listSessions, loadSession, newSessionId, saveSession, ty
 /** Where the first prototype kept the canvas in plain browser storage; migrated once, then removed. */
 const LEGACY_KEY = "or_threat_model";
 const SAVE_DELAY = 1200;
+/** The right-hand panel's width and hidden state, remembered per browser (a convenience only). */
+const PANEL_KEY = "or_canvas_panel";
+const PANEL_DEFAULT = 340, PANEL_MIN = 260, PANEL_MAX = 640;
+function loadPanel(): { width: number; collapsed: boolean } {
+  try {
+    const p = JSON.parse(localStorage.getItem(PANEL_KEY) ?? "null");
+    if (p && typeof p.width === "number") return { width: Math.min(PANEL_MAX, Math.max(PANEL_MIN, p.width)), collapsed: p.collapsed === true };
+  } catch { /* storage blocked or unreadable */ }
+  return { width: PANEL_DEFAULT, collapsed: false };
+}
 
 /** The visible window onto the canvas, in SVG units. */
 interface View {
@@ -82,6 +92,28 @@ export function Canvas({ config, models, onExit }: Props) {
   const lastSavedJson = useRef("");
   const [selected, setSelected] = useState<string | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
+  const [panel, setPanel] = useState(loadPanel);
+  useEffect(() => {
+    try { localStorage.setItem(PANEL_KEY, JSON.stringify(panel)); } catch { /* not essential */ }
+  }, [panel]);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  /** Drag the splitter: the panel is as wide as the distance from the pointer to the right edge. */
+  function startPanelResize(e: React.PointerEvent<HTMLDivElement>) {
+    e.preventDefault();
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    document.body.classList.add("resizing");
+    const right = wrapRef.current?.getBoundingClientRect().right ?? window.innerWidth;
+    const move = (ev: PointerEvent) =>
+      setPanel((p) => ({ ...p, width: Math.round(Math.min(PANEL_MAX, Math.max(PANEL_MIN, right - ev.clientX))) }));
+    const up = () => {
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      document.body.classList.remove("resizing");
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+  }
   const [description, setDescription] = useState("");
   const [building, setBuilding] = useState(false);
   const [buildError, setBuildError] = useState<string | null>(null);
@@ -437,7 +469,7 @@ export function Canvas({ config, models, onExit }: Props) {
         <input ref={importRef} type="file" accept="application/json,.json" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void importFile(f); e.target.value = ""; }} />
       </TerminalBar>
 
-      <div className="canvas-wrap">
+      <div className="canvas-wrap" ref={wrapRef}>
         <div className="canvas-stage grid-bg" onPointerDown={() => { setSelected(null); setSelectedEdge(null); }}>
           {hasNodes && (
             <div className="canvas-zoom" onPointerDown={(e) => e.stopPropagation()}>
@@ -566,9 +598,22 @@ export function Canvas({ config, models, onExit }: Props) {
               })}
             </svg>
           )}
+          {panel.collapsed && (
+            <button className="sidebar-toggle floating canvas-panel-show" onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => setPanel((p) => ({ ...p, collapsed: false }))} title="Show panel" aria-label="Show panel">«</button>
+          )}
         </div>
 
-        <aside className="canvas-panel">
+        {!panel.collapsed && (
+          <div className="splitter canvas-splitter" role="separator" aria-orientation="vertical" aria-label="Resize panel"
+            title="Drag to resize · double-click to reset" onPointerDown={startPanelResize}
+            onDoubleClick={() => setPanel((p) => ({ ...p, width: PANEL_DEFAULT }))} />
+        )}
+        <aside className="canvas-panel" hidden={panel.collapsed} style={{ width: panel.width }}>
+          <div className="canvas-panel-head">
+            <span className="section-title">{node ? "Component" : edge ? "Flow" : "Canvas"}</span>
+            <button className="sidebar-toggle" onClick={() => setPanel((p) => ({ ...p, collapsed: true }))} title="Hide panel" aria-label="Hide panel">»</button>
+          </div>
           {node ? (
             <NodeInspector
               node={node}

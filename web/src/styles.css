@@ -498,7 +498,17 @@ select {
 .canvas-wrap { flex: 1; min-height: 0; display: flex; }
 .canvas-stage { flex: 1; min-width: 0; overflow: auto; position: relative; }
 .canvas-svg { width: 100%; height: 100%; min-height: 420px; display: block; touch-action: none; user-select: none; }
-.canvas-panel { width: 320px; flex: none; border-left: 1px solid var(--border); background: var(--panel); overflow-y: auto; padding: 14px; }
+.canvas-panel { width: 340px; flex: none; background: var(--panel); overflow-y: auto; overflow-x: hidden; padding: 10px 14px 14px; min-width: 0; }
+.canvas-panel[hidden] { display: none; }
+/* Same splitter as the left sidebar: a 1px border, wider grab area, cyan on hover. */
+.canvas-splitter { width: 1px; flex: none; align-self: stretch; }
+.canvas-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 -4px 4px 0; }
+.canvas-panel-head .section-title { margin: 0; }
+.canvas-panel-show { left: auto; right: 12px; top: 12px; }
+/* Everything in the panel fits its width: fields shrink, rows wrap, long words break. */
+.canvas-panel *, .canvas-panel *::before, .canvas-panel *::after { box-sizing: border-box; }
+.canvas-panel input, .canvas-panel select, .canvas-panel textarea, .canvas-panel button { max-width: 100%; min-width: 0; }
+.canvas-panel .cf-title, .canvas-panel .cf-fix, .canvas-panel .cf-route, .canvas-panel .canvas-details li, .canvas-panel .canvas-stats li { overflow-wrap: anywhere; }
 .canvas-panel label { display: block; font-size: 11px; color: var(--muted); margin: 10px 0 4px; text-transform: uppercase; letter-spacing: 0.06em; }
 .canvas-panel label.check { display: flex; gap: 8px; align-items: center; text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--text); cursor: pointer; }
 .canvas-panel input[type="text"], .canvas-panel select { width: 100%; }
@@ -512,15 +522,16 @@ select {
 .cf-fix { font-size: 11px; color: var(--muted); margin: 6px 0 2px; line-height: 1.4; }
 .cf-ref { font-size: 10px; color: var(--cyan); font-family: var(--mono); margin-bottom: 4px; }
 .canvas-finding select { margin-top: 6px; font-size: 11px; }
-.cf-add { display: flex; gap: 6px; margin-top: 8px; }
-.cf-add input { flex: 1; min-width: 0; }
-.cf-add select { width: auto; }
+.cf-add { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.cf-add input { flex: 1 1 100%; min-width: 0; }
+.cf-add select { flex: 1 1 0; width: auto; min-width: 0; }
+.cf-add .btn { flex: none; }
 .canvas-builder { max-width: 260px; margin-left: 8px; font-size: 12px; }
 .canvas-zoom { position: absolute; right: 12px; bottom: 12px; z-index: 2; display: flex; gap: 4px; align-items: center; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 4px; font-family: var(--mono); font-size: 11px; }
 .canvas-zoom button { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; min-width: 28px; height: 26px; cursor: pointer; font-family: inherit; }
 .canvas-zoom button:hover { border-color: var(--cyan); color: var(--cyan); }
 .canvas-zoom span { min-width: 44px; text-align: center; color: var(--muted); }
-@media (max-width: 900px) { .canvas-wrap { flex-direction: column; } .canvas-panel { width: auto; border-left: none; border-top: 1px solid var(--border); } }
+@media (max-width: 900px) { .canvas-wrap { flex-direction: column; } .canvas-splitter { display: none; } .canvas-panel { width: auto !important; border-top: 1px solid var(--border); } }
 .user-col { display: flex; flex-direction: column; align-items: flex-end; max-width: 78%; }
 .user-col .user-bubble { max-width: 100%; }
 .composer-hint .warn, .warn { color: var(--amber); }
