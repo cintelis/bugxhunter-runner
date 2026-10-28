@@ -8,7 +8,7 @@ import { userContent } from "./wire";
 import { ATTACH_ACCEPT, AttachChips, useImageAttach } from "./imageAttach";
 import { renderAvailable, renderDrawio } from "./DrawioBlock";
 import {
-  NODE_H, NODE_W, empty, extractJson, findingsMarkdown, layout, normalize, stats, toDrawioSpec, worstOpen,
+  NODE_H, NODE_W, buildBudget, empty, extractJson, findingsMarkdown, layout, normalize, stats, toDrawioSpec, worstOpen,
   type Finding, type FindingStatus, type NodeKind, type Severity, type TMNode, type ThreatModel,
 } from "./canvas/model";
 import { CANVAS_SYSTEM, canvasUserPrompt } from "./canvas/prompt";
@@ -209,8 +209,9 @@ export function Canvas({ config, models, onExit }: Props) {
           { role: "user", content: userContent(canvasUserPrompt(description, att.images.length > 0 || att.docs.length > 0), att.images, att.docs) },
         ],
         temperature: 0.2,
-        // A diagram file makes for a big model; reasoning models also think before the JSON.
-        max_tokens: Math.max(config.maxTokens, att.docs.length ? 16384 : 8192),
+        // A diagram file makes for a big model, and reasoning models think before the JSON, so
+        // give them room (within the model's own output limit when the catalogue knows it).
+        max_tokens: buildBudget(config.maxTokens, att.docs.length > 0, chat.find((m) => m.id === builderId)?.max_output_length),
         // Streamed so a long think doesn't hit the runner's "started answering" limit; only the
         // answer text (not reasoning) reaches onDelta, so `text` is just the JSON.
         stream: true,
@@ -219,8 +220,13 @@ export function Canvas({ config, models, onExit }: Props) {
         signal: ctrl.signal,
         onDelta: (t) => { text += t; },
         onError: (msg) => setBuildError(msg),
-        onDone: () => {
-          if (!text.trim()) return;
+        onDone: (finish) => {
+          if (!text.trim()) {
+            setBuildError(finish === "length"
+              ? "The model used its whole output limit thinking and wrote no threat model. Try again, raise Max tokens, or pick a faster model."
+              : "The model returned no answer. Try again or pick another model.");
+            return;
+          }
           try {
             const next = layout(normalize(extractJson(text)));
             if (!next.nodes.length) throw new Error("The model returned no components.");
@@ -228,7 +234,9 @@ export function Canvas({ config, models, onExit }: Props) {
             setDescription("");
             att.clear();
           } catch (e) {
-            setBuildError(`Couldn't read the model's threat model: ${(e as Error).message}`);
+            setBuildError(finish === "length"
+              ? "The model ran out of output tokens before finishing the threat model. Raise Max tokens or ask for fewer components."
+              : `Couldn't read the model's threat model: ${(e as Error).message}`);
           }
         },
       },
@@ -546,7 +554,7 @@ export function Canvas({ config, models, onExit }: Props) {
           </div>
         </div>
         <div className="composer-hint">
-          {building ? "Building the threat model… (reasoning models can take 20–60 s)" : "Each build starts a new saved canvas; undo brings the previous one back. Saved on the runner, encrypted with your vault."}
+          {building ? "Building the threat model… (reasoning models can take several minutes on a big diagram)" : "Each build starts a new saved canvas; undo brings the previous one back. Saved on the runner, encrypted with your vault."}
         </div>
       </div>
     </main>

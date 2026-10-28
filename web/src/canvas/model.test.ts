@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractJson, findingsMarkdown, layout, normalize, stats, toDrawioSpec, worstOpen } from "./model";
+import { buildBudget, extractJson, findingsMarkdown, layout, normalize, stats, toDrawioSpec, worstOpen } from "./model";
 
 describe("extractJson", () => {
   it("reads a fenced block or a bare object surrounded by prose", () => {
@@ -101,5 +101,15 @@ describe("toDrawioSpec", () => {
     expect(spec.edges.map((e) => e.label)).toEqual(["SQL (plaintext)", "HTTPS"]);
     expect(new Set(spec.nodes.map((n) => n.id)).size).toBe(3);
     expect(spec.edges[0].from).toBe(spec.nodes[0].id);
+  });
+});
+
+describe("buildBudget", () => {
+  it("raises the limit for diagram files and respects the model's own cap", () => {
+    expect(buildBudget(4096, false)).toBe(8192);
+    expect(buildBudget(4096, true)).toBe(32768);
+    expect(buildBudget(40000, true)).toBe(40000);
+    expect(buildBudget(4096, true, 16000)).toBe(16000);
+    expect(buildBudget(4096, true, null)).toBe(32768);
   });
 });

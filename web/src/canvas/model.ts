@@ -266,3 +266,10 @@ export function toDrawioSpec(model: ThreatModel): Record<string, unknown> {
     legend: true,
   };
 }
+
+/** Output tokens for a canvas build: the user's setting, raised for diagram files (big models,
+ *  plus reasoning before the JSON), never above the model's own limit when it is known. */
+export function buildBudget(userMax: number, fromDiagramFile: boolean, modelMax?: number | null): number {
+  const want = Math.max(userMax, fromDiagramFile ? 32768 : 8192);
+  return modelMax && modelMax > 0 ? Math.min(want, Math.max(modelMax, 1024)) : want;
+}
