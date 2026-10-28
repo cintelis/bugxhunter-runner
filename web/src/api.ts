@@ -59,6 +59,7 @@ export interface StreamHandlers {
  */
 export async function runChat(req: ChatRequest, h: StreamHandlers): Promise<void> {
   if (req.stream === false) return chatOnce(req, h);
+  const started = Date.now();
   const r = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -129,6 +130,13 @@ export async function runChat(req: ChatRequest, h: StreamHandlers): Promise<void
     }
   }
   flushTools(toolAcc, h);
+  // No [DONE] and no finish reason: the connection closed mid-answer (a provider time limit or
+  // a dropped connection), which is not the same as the model choosing to stop.
+  if (!finish && !h.signal?.aborted) {
+    const mins = Math.round((Date.now() - started) / 60000);
+    h.onError(`The connection closed before the model finished${mins ? ` (after about ${mins} min)` : ""}. Long answers can hit a provider's time limit: try again, a faster model, or a smaller request.`);
+    return;
+  }
   h.onDone(finish);
 }
 
