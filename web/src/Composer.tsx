@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentModel, FileUpload, SlashCommand } from "./agentApi";
 import { formatBytes, formatTokens } from "./format";
 import { FileTextIcon, PaperclipIcon } from "./icons";
+import { dictate, speechSupported } from "./voice";
 
 export type AgentName = "build" | "plan";
 
@@ -55,6 +56,21 @@ export function Composer({ agent, setAgent, model, setModel, models, commands, b
   const [sel, setSel] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [listening, setListening] = useState(false);
+  const dictationRef = useRef<{ stop: () => void } | null>(null);
+
+  /** Browser-native dictation (Web Speech API), same as the Playground. Appends to any draft. */
+  function toggleMic() {
+    if (listening) { dictationRef.current?.stop(); return; }
+    const base = input.trim();
+    const session = dictate({
+      onStart: () => setListening(true),
+      onEnd: () => { setListening(false); dictationRef.current = null; },
+      onPartial: (text) => setInput(base ? base + " " + text : text),
+    });
+    dictationRef.current = session;
+    inputRef.current?.focus();
+  }
 
   // --- command history (Up/Down like a terminal) ---
   const [history, setHistory] = useState<string[]>(loadHistory);
@@ -266,7 +282,7 @@ export function Composer({ agent, setAgent, model, setModel, models, commands, b
           onKeyDown={onKey}
           onPaste={onPaste}
           rows={3}
-          placeholder={agent === "build" ? "Ask BugXHunter to change something…  (/ for commands)" : "Ask BugXHunter to plan or explain…  (/ for commands)"}
+          placeholder={listening ? "Listening…" : agent === "build" ? "Ask BugXHunter to change something…  (/ for commands)" : "Ask BugXHunter to plan or explain…  (/ for commands)"}
         />
         <div className="composer-bar">
           <button className="icon-btn attach-btn" onClick={() => fileRef.current?.click()} title="Attach files (or paste / drop them)" aria-label="Attach files">
@@ -293,6 +309,17 @@ export function Composer({ agent, setAgent, model, setModel, models, commands, b
             ))}
           </select>
           <div className="spacer" />
+          {speechSupported() && (
+            <button
+              className={"send-btn mic" + (listening ? " stop" : "")}
+              onClick={toggleMic}
+              disabled={busy}
+              title={listening ? "Stop dictation" : "Dictate"}
+              aria-label={listening ? "Stop dictation" : "Dictate"}
+            >
+              {listening ? "●" : "🎤"}
+            </button>
+          )}
           {busy ? (
             <button className="send-btn stop" onClick={onStop} title="Stop">■</button>
           ) : (
