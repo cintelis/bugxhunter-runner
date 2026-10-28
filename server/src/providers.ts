@@ -235,16 +235,60 @@ export function nvidiaModel(id: string, meta: NvidiaMeta): SCXModel {
   };
 }
 
-/** The curated NVIDIA models that have catalogue metadata and are in the allowlist. */
-function nvidiaModels(): SCXModel[] {
+/** NVIDIA NIM's live model ids (its /v1/models). Keyed, so the vault must be open. */
+async function nvidiaCatalogueLive(): Promise<string[]> {
+  const r = await fetch(`${PROVIDERS.nvidia.baseUrl}/models`, {
+    headers: { Authorization: `Bearer ${apiKey("nvidia")}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!r.ok) throw new Error(`NVIDIA /models replied ${r.status}`);
+  const data = ((await r.json()) as { data?: { id?: string }[] }).data ?? [];
+  return data.map((m) => m.id).filter((id): id is string => Boolean(id));
+}
+
+/** A live NVIDIA model without curated metadata: the raw id with best-effort defaults. */
+function nvidiaLiveModel(id: string): SCXModel {
+  return {
+    id: `nim/${id}`,
+    name: id,
+    created: 0,
+    input_modalities: ["text"],
+    output_modalities: ["text"],
+    context_length: null,
+    max_output_length: null,
+    pricing: {},
+    supported_sampling_parameters: ["temperature", "top_p", "max_tokens", "stop", "frequency_penalty", "presence_penalty", "seed"],
+    supported_features: [],
+    description: "NVIDIA NIM model from the live catalogue (metadata not curated; some endpoints are non-chat or may be unavailable).",
+    provider: "nvidia",
+  };
+}
+
+/**
+ * NVIDIA NIM models for the Playground: the full live catalogue (its /v1/models),
+ * same list the agent discovers, with curated metadata merged in for the known
+ * models. Falls back to the curated set if the catalogue can't be fetched (e.g.
+ * the vault is sealed, so there is no key to query it with).
+ */
+async function nvidiaModels(): Promise<SCXModel[]> {
   if (!configured("nvidia")) return [];
-  return NVIDIA_MODELS.filter((id) => NVIDIA_CATALOGUE[id]).map((id) => nvidiaModel(id, NVIDIA_CATALOGUE[id]));
+  const curated = () => NVIDIA_MODELS.filter((id) => NVIDIA_CATALOGUE[id]).map((id) => nvidiaModel(id, NVIDIA_CATALOGUE[id]));
+  try {
+    const ids = await nvidiaCatalogueLive();
+    if (!ids.length) return curated();
+    return ids
+      .map((id) => (NVIDIA_CATALOGUE[id] ? nvidiaModel(id, NVIDIA_CATALOGUE[id]) : nvidiaLiveModel(id)))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch (e) {
+    console.error("[nvidia] model list failed:", (e as Error).message);
+    return curated();
+  }
 }
 
 /** Every model the Playground can use: SCX's, plus OpenRouter's and NVIDIA's when their keys are configured. */
 export async function listModels(): Promise<SCXModel[]> {
   const scx = (await clients.scx.listModels()).map((m) => ({ ...m, provider: "scx" as const }));
-  const nvidia = nvidiaModels();
+  const nvidia = await nvidiaModels();
   if (!configured("openrouter")) return [...scx, ...nvidia];
   try {
     const all = (await openRouterCatalogue()).map(normaliseOpenRouter);
