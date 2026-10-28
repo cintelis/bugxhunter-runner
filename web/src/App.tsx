@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchModels, runChat } from "./api";
 import { agentStatus, agentCheckDirectory, type AgentStatus } from "./agentApi";
-import type { BotConfig, ChatMsg, SCXModel, ToolCall } from "./types";
+import type { BotConfig, ChatImage, ChatMsg, SCXModel, ToolCall } from "./types";
 import { stripToolIds, withToolIds } from "./tools";
 import { Sidebar, type Mode } from "./Sidebar";
 import { Chat } from "./Chat";
+import { Compare } from "./Compare";
+import { userContent } from "./wire";
 import { AgentPanel } from "./AgentPanel";
 import { speak, stopSpeaking } from "./voice";
 
@@ -151,6 +153,7 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [comparing, setComparing] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -177,7 +180,8 @@ export default function App() {
       } else if (m.role === "tool") {
         wire.push({ role: "tool", content: m.content, tool_call_id: m.tool_call_id });
       } else {
-        wire.push({ role: m.role, content: m.content });
+        // A user turn with images goes out in the OpenAI vision shape (see wire.ts).
+        wire.push({ role: m.role, content: m.role === "user" ? userContent(m.content, m.images) : m.content });
       }
     }
     return wire;
@@ -195,6 +199,15 @@ export default function App() {
 
     const enabledTools = config.tools.length ? stripToolIds(config.tools) : undefined;
     let spoken = "";
+    const started = performance.now();
+    let firstToken: number | undefined;
+    const setTiming = () =>
+      setMessages((prev) => {
+        const next = [...prev];
+        const a = next[assistantIndex];
+        if (a) next[assistantIndex] = { ...a, timing: { ttft: firstToken, total: performance.now() - started } };
+        return next;
+      });
 
     await runChat(
       {
@@ -211,6 +224,7 @@ export default function App() {
       {
         signal: ctrl.signal,
         onDelta: (text) => {
+          firstToken ??= performance.now() - started;
           spoken += text;
           setMessages((prev) => {
             const next = [...prev];
@@ -239,6 +253,7 @@ export default function App() {
           }),
         onError: (msg) => setError(msg),
         onDone: () => {
+          setTiming();
           if (config.speak && spoken.trim()) speak(spoken);
         },
       },
@@ -250,9 +265,9 @@ export default function App() {
     abortRef.current = null;
   }
 
-  function send(text: string) {
-    if (!text.trim() || busy) return;
-    const history: ChatMsg[] = [...messages, { role: "user", content: text }];
+  function send(text: string, images?: ChatImage[]) {
+    if ((!text.trim() && !images?.length) || busy) return;
+    const history: ChatMsg[] = [...messages, { role: "user", content: text, ...(images?.length ? { images } : {}) }];
     setMessages(history);
     void runTurn(history);
   }
@@ -334,6 +349,8 @@ export default function App() {
             </div>
           </main>
         )
+      ) : comparing ? (
+        <Compare config={config} models={models} onExit={() => setComparing(false)} />
       ) : (
         <Chat
           config={config}
@@ -345,6 +362,7 @@ export default function App() {
           onStop={stop}
           onReset={reset}
           onToolResult={submitToolResult}
+          onCompare={() => setComparing(true)}
         />
       )}
     </div>

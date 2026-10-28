@@ -13,13 +13,23 @@ export interface ToolDef extends WireToolDef {
   id?: string;
 }
 
+/** An image attached to a Playground user turn, held as a data: URL. */
+export interface ChatImage {
+  name: string;
+  url: string;
+}
+
 export interface ChatMsg {
   role: "system" | "user" | "assistant" | "tool";
   content: string | null;
+  /** Images sent with a user turn (vision models only); sent as image_url parts. */
+  images?: ChatImage[];
   tool_calls?: import("../../shared/scx").ToolCall[];
   tool_call_id?: string;
   /** UI-only: live token usage attached to assistant turns. */
   usage?: { prompt?: number; completion?: number; reasoning?: number };
+  /** UI-only: timings for an assistant turn, in ms (ttft = time to first token). */
+  timing?: { ttft?: number; total: number };
   /** UI-only: RAG sources retrieved for this turn. */
   sources?: RagSource[];
 }

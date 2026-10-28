@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import type { BotConfig, ChatMsg, SCXModel, ToolCall } from "./types";
+import type { BotConfig, ChatImage, ChatMsg, SCXModel, ToolCall } from "./types";
 import { dictate, speechSupported } from "./voice";
 import { Markdown } from "./Markdown";
 import { BootSequence, TerminalBar } from "./Terminal";
+import { PaperclipIcon } from "./icons";
+import { DEFAULT_STARTERS, presetFor } from "./presets";
+import { formatTiming } from "./format";
+import { AttachChips, useImageAttach } from "./imageAttach";
 
 interface Props {
   config: BotConfig;
@@ -10,25 +14,26 @@ interface Props {
   messages: ChatMsg[];
   busy: boolean;
   error: string | null;
-  onSend: (text: string) => void;
+  onSend: (text: string, images?: ChatImage[]) => void;
   onStop: () => void;
   onReset: () => void;
   onToolResult: (call: ToolCall, result: string) => void;
+  /** Switch to side-by-side model comparison. */
+  onCompare: () => void;
 }
 
-const SUGGESTIONS = [
-  "Introduce yourself",
-  "Write a haiku about the ocean",
-  "Explain embeddings in one sentence",
-  "Give me 3 startup name ideas",
-];
-
-export function Chat({ config, activeModel, messages, busy, error, onSend, onStop, onReset, onToolResult }: Props) {
+export function Chat({ config, activeModel, messages, busy, error, onSend, onStop, onReset, onToolResult, onCompare }: Props) {
   const [input, setInput] = useState("");
+  const att = useImageAttach();
+  const images = att.images;
   const [listening, setListening] = useState(false);
   const dictationRef = useRef<{ stop: () => void } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const seesImages = activeModel?.input_modalities?.includes("image") ?? false;
+  // Images on a text-only model would just fail upstream; say so instead of sending.
+  const blocked = images.length > 0 && !seesImages;
 
   // Grow the box with its content (CSS min/max-height bound it).
   useEffect(() => {
@@ -66,9 +71,10 @@ export function Chat({ config, activeModel, messages, busy, error, onSend, onSto
   }, [messages]);
 
   function submit() {
-    if (!input.trim() || busy) return;
-    onSend(input);
+    if ((!input.trim() && !images.length) || busy || blocked) return;
+    onSend(input, images.length ? images : undefined);
     setInput("");
+    att.clear();
   }
 
   function onKey(e: React.KeyboardEvent) {
@@ -80,6 +86,19 @@ export function Chat({ config, activeModel, messages, busy, error, onSend, onSto
 
   const visible = messages.filter((m) => m.role !== "system");
   const modelName = activeModel?.name ?? config.model;
+  const preset = presetFor(config.system);
+  const starters = preset?.starters ?? DEFAULT_STARTERS;
+
+  /** Starters fill the box (cursor at the end) so code, logs or an image can be added first. */
+  function applyStarter(text: string) {
+    setInput(text);
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(text.length, text.length);
+    });
+  }
 
   return (
     <main className="main">
@@ -87,6 +106,7 @@ export function Chat({ config, activeModel, messages, busy, error, onSend, onSto
         <span className={"status-pill" + (busy ? " live" : "")}>
           <span className="dot" />{busy ? (config.stream ? "streaming" : "thinking") : "ready"}
         </span>
+        <button className="btn ghost sm" onClick={onCompare} disabled={busy} title="Ask 2–3 models the same question side by side">compare</button>
         <button className="btn ghost sm" onClick={onReset} disabled={busy}>clear</button>
       </TerminalBar>
 
@@ -99,13 +119,21 @@ export function Chat({ config, activeModel, messages, busy, error, onSend, onSto
               lines={[
                 { kind: "p", text: `./bxh --playground --model ${modelName}`, pace: 26 },
                 { kind: "out", text: "Direct model access: no agent, no file system." },
-                { kind: "out", text: "Tune the prompt and generation settings on the left.", pace: 18 },
+                {
+                  kind: "out",
+                  text: preset
+                    ? `Preset: ${preset.label}.${seesImages ? " Attach, paste or drop an image to review." : ""}`
+                    : "Pick a security preset or tune the prompt on the left.",
+                  pace: 18,
+                },
                 { kind: "ok", text: "Model ready ", ok: "OK" },
               ]}
             />
             <div className="suggestions">
-              {SUGGESTIONS.map((s) => (
-                <button className="chip" key={s} onClick={() => onSend(s)}>{s}</button>
+              {starters.map((s) => (
+                <button className="chip" key={s} onClick={() => applyStarter(s)} title="Puts this in the message box">
+                  {s.trim()}
+                </button>
               ))}
             </div>
           </div>
@@ -120,16 +148,54 @@ export function Chat({ config, activeModel, messages, busy, error, onSend, onSto
       </div>
 
       <div className="composer">
-        <div className="composer-box" onClick={focusInput}>
+        <div
+          className="composer-box"
+          onClick={focusInput}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={att.onDrop}
+        >
+          <AttachChips images={images} onRemove={att.remove} />
           <textarea
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKey}
+            onPaste={att.onPaste}
             rows={3}
-            placeholder={listening ? "Listening…" : `Message ${modelName}…`}
+            placeholder={
+              listening
+                ? "Listening…"
+                : seesImages
+                  ? `Message ${modelName}… (attach, paste or drop an image to review)`
+                  : `Message ${modelName}…`
+            }
           />
           <div className="composer-bar">
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              onChange={(e) => {
+                if (e.target.files) void att.addImages(e.target.files);
+                e.target.value = "";
+              }}
+            />
+            <button
+              className="icon-btn attach-btn"
+              onClick={() => fileRef.current?.click()}
+              disabled={busy}
+              title={seesImages ? "Attach images (or paste / drop them)" : "Attach images (pick a vision model to send them)"}
+              aria-label="Attach images"
+            >
+              <PaperclipIcon />
+            </button>
+            {(blocked || att.attachError) && (
+              <span className="hint" style={{ color: "var(--amber)", margin: "0 8px" }}>
+                {blocked ? `${modelName} can't see images — pick a vision model (e.g. Nemotron 3.5 Super VL)` : att.attachError}
+              </span>
+            )}
             <div className="spacer" />
             {speechSupported() && (
               <button
@@ -143,7 +209,7 @@ export function Chat({ config, activeModel, messages, busy, error, onSend, onSto
             {busy ? (
               <button className="send-btn stop" onClick={onStop} title="Stop">■</button>
             ) : (
-              <button className="send-btn" onClick={submit} disabled={!input.trim()} title="Send">↑</button>
+              <button className="send-btn" onClick={submit} disabled={(!input.trim() && !images.length) || blocked} title="Send">↑</button>
             )}
           </div>
         </div>
@@ -176,7 +242,16 @@ function MessageRow({ msg, streaming, onToolResult }: {
   if (isUser) {
     return (
       <div className="msg user">
-        <div className="bubble user-bubble">{msg.content}</div>
+        <div className="bubble user-bubble">
+          {msg.content}
+          {msg.images?.length ? (
+            <div className="bubble-images">
+              {msg.images.map((img, i) => (
+                <img key={i} src={img.url} alt={img.name} title={img.name} />
+              ))}
+            </div>
+          ) : null}
+        </div>
       </div>
     );
   }
@@ -200,10 +275,16 @@ function MessageRow({ msg, streaming, onToolResult }: {
             ))}
           </div>
         )}
-        {msg.usage && (
+        {(msg.usage || msg.timing) && (
           <div className="msg-meta">
-            {msg.usage.prompt ?? 0} in · {msg.usage.completion ?? 0} out
-            {msg.usage.reasoning ? ` · ${msg.usage.reasoning} reasoning` : ""} tokens
+            {msg.timing && formatTiming(msg.timing, msg.usage?.completion, msg.usage?.reasoning)}
+            {msg.timing && msg.usage && " · "}
+            {msg.usage && (
+              <>
+                {msg.usage.prompt ?? 0} in · {msg.usage.completion ?? 0} out
+                {msg.usage.reasoning ? ` · ${msg.usage.reasoning} reasoning` : ""} tokens
+              </>
+            )}
           </div>
         )}
       </div>

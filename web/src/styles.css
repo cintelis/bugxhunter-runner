@@ -480,6 +480,19 @@ select {
 .attach-size { color: var(--muted); font-size: 11px; flex: none; }
 .attach-x { background: none; border: none; color: var(--muted); cursor: pointer; padding: 0 2px; font-size: 11px; }
 .attach-x:hover { color: var(--red); }
+/* Playground: images sent with a user turn. */
+.bubble-images { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.bubble-images img { max-width: 220px; max-height: 160px; border-radius: 6px; border: 1px solid var(--border); object-fit: contain; }
+
+/* Playground compare mode: one prompt, two or three models in columns. */
+.compare-prompt { padding: 14px 18px 0; color: var(--muted); font-size: 12px; white-space: pre-wrap; }
+.compare-grid { display: grid; grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr)); gap: 12px; padding: 14px 18px 18px; align-items: start; }
+.compare-col { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; display: flex; flex-direction: column; min-height: 220px; min-width: 0; }
+.compare-head { display: flex; gap: 6px; align-items: center; padding: 8px; border-bottom: 1px solid var(--border-soft); }
+.compare-head select { flex: 1; min-width: 0; }
+.compare-body { padding: 12px 14px; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.compare-col .msg-meta { padding: 0 14px 10px; }
+@media (max-width: 900px) { .compare-grid { grid-template-columns: 1fr; } }
 .user-col { display: flex; flex-direction: column; align-items: flex-end; max-width: 78%; }
 .user-col .user-bubble { max-width: 100%; }
 .composer-hint .warn, .warn { color: var(--amber); }

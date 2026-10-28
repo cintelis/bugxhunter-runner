@@ -12,6 +12,8 @@ import { GitHubDialog } from "./GitHubDialog";
 import { WorkspacesDialog } from "./WorkspacesDialog";
 import { FilesDialog } from "./FilesDialog";
 import { FoldersIcon, FolderIcon, GitHubIcon } from "./icons";
+import { isChatModel, matchesQuery } from "./modelFilter";
+import { PRESETS, presetFor } from "./presets";
 
 export type Mode = "runner" | "playground";
 
@@ -105,11 +107,19 @@ export function Sidebar({
   const supportsJson = features.includes("json_mode");
   const supportsReasoning = features.includes("reasoning");
 
-  // Text models, grouped by provider (SCX first, then NVIDIA and OpenRouter when configured).
+  // Chat models (non-chat ones hidden unless asked), narrowed by the search box, grouped by
+  // provider: SCX first, then NVIDIA and OpenRouter when configured. The selected model always
+  // stays in the list so the <select> never shows a value it doesn't have.
+  const [modelQuery, setModelQuery] = useState("");
+  const [showAllModels, setShowAllModels] = useState(false);
   const textModels = models.filter((m) => m.output_modalities.includes("text"));
+  const chatModels = textModels.filter((m) => showAllModels || isChatModel(m) || m.id === config.model);
+  const hiddenCount = textModels.filter((m) => !isChatModel(m)).length;
+  const shownModels = chatModels.filter((m) => matchesQuery(m, modelQuery) || m.id === config.model);
   const modelGroups = (["scx", "nvidia", "openrouter"] as const)
-    .map((p) => [p, textModels.filter((m) => (m.provider ?? "scx") === p)] as const)
+    .map((p) => [p, shownModels.filter((m) => (m.provider ?? "scx") === p)] as const)
     .filter(([, list]) => list.length > 0);
+  const activePreset = presetFor(config.system);
 
   function updateTool(i: number, patch: Partial<ToolDef["function"]>) {
     setConfig((c) => {
@@ -198,6 +208,14 @@ export function Sidebar({
 
         <div className="field">
           <label>Model</label>
+          <input
+            type="search"
+            placeholder={`Search ${chatModels.length} models…`}
+            value={modelQuery}
+            onChange={(e) => setModelQuery(e.target.value)}
+            style={{ marginBottom: 6 }}
+            aria-label="Search models"
+          />
           <select value={config.model} onChange={(e) => set("model", e.target.value)}>
             {modelGroups.map(([provider, list]) => (
               <optgroup key={provider} label={provider === "openrouter" ? "OpenRouter" : provider === "nvidia" ? "NVIDIA NIM" : "SCX.ai"}>
@@ -210,16 +228,39 @@ export function Sidebar({
               </optgroup>
             ))}
           </select>
+          {hiddenCount > 0 && (
+            <label className="hint" style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
+              <input type="checkbox" checked={showAllModels} onChange={(e) => setShowAllModels(e.target.checked)} />
+              Show non-chat models ({hiddenCount} hidden: embeddings, guards, speech…)
+            </label>
+          )}
           {modelError && <div className="hint" style={{ color: "var(--danger)" }}>{modelError}</div>}
           {activeModel?.description && <div className="hint">{activeModel.description}</div>}
           <div className="cap-badges">
             <span className={"badge" + (supportsTools ? " on" : "")}>tools</span>
             <span className={"badge" + (supportsJson ? " on" : "")}>json</span>
             <span className={"badge" + (supportsReasoning ? " on" : "")}>reasoning</span>
+            <span className={"badge" + (activeModel?.input_modalities?.includes("image") ? " on" : "")}>vision</span>
             {activeModel?.datacenters?.map((d) => (
               <span key={d.country_code} className="badge">{d.country_code}</span>
             ))}
           </div>
+        </div>
+
+        <div className="field">
+          <label>Security preset</label>
+          <select
+            value={activePreset?.id ?? "custom"}
+            onChange={(e) => {
+              const p = PRESETS.find((x) => x.id === e.target.value);
+              if (p) set("system", p.system);
+            }}
+          >
+            <option value="custom">Custom (your own system prompt)</option>
+            {PRESETS.map((p) => (
+              <option key={p.id} value={p.id}>{p.label}</option>
+            ))}
+          </select>
         </div>
 
         <div className="field">

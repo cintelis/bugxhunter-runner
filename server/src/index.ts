@@ -105,6 +105,8 @@ app.use("/api", (req, res, next) => {
 
 // Prompts can carry attachments (base64), so allow larger bodies there.
 app.use("/api/agent/prompt", express.json({ limit: "40mb" }));
+// Playground vision turns carry images inline as base64 data URLs (4 x 5 MB max in the UI).
+app.use("/api/chat", express.json({ limit: "32mb" }));
 app.use(express.json({ limit: "4mb" }));
 // Rate limits before anything else under /api, sign-in included (see ratelimit.ts).
 app.use("/api", apiLimiter);
