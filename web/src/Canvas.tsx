@@ -8,9 +8,10 @@ import { userContent } from "./wire";
 import { ATTACH_ACCEPT, AttachChips, useImageAttach } from "./imageAttach";
 import { renderAvailable, renderDrawio } from "./DrawioBlock";
 import {
-  NODE_H, NODE_W, buildBudget, empty, extractJson, findingsMarkdown, layout, normalize, stats, toDrawioSpec, worstOpen,
-  type Finding, type FindingStatus, type NodeKind, type Severity, type TMNode, type ThreatModel,
+  FLOW_KINDS, FLOW_LABEL, NODE_H, NODE_W, buildBudget, empty, extractJson, findingsMarkdown, layout, normalize, stats, toDrawioSpec, worstOpen,
+  type Finding, type FindingStatus, type FlowKind, type NodeKind, type Severity, type TMEdge, type TMNode, type ThreatModel,
 } from "./canvas/model";
+import { FONT_DETAIL, FONT_FLOW, FONT_KIND, FONT_TITLE, fitText, textWidth } from "./canvas/textfit";
 import { CANVAS_SYSTEM, canvasUserPrompt } from "./canvas/prompt";
 import { deleteSession, listSessions, loadSession, newSessionId, saveSession, type SavedSession } from "./sessionsApi";
 
@@ -36,6 +37,23 @@ const KIND_COLOR: Record<NodeKind, string> = { actor: "#00e5ff", service: "#8fa8
 const SEV_COLOR: Record<Severity, string> = { critical: "#ff3c3c", high: "#ff7a45", medium: "#ffb300", low: "#6e7681" };
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low"];
 const KINDS: NodeKind[] = ["actor", "service", "datastore", "external"];
+/** Flow colours by what they carry; plaintext is drawn red over any of them. */
+const FLOW_COLOR: Record<FlowKind, string> = {
+  data: "#9aa4b2",
+  management: "#c792ea",
+  attestation: "#e3b341",
+  identity: "#3fb950",
+  control: "#58a6ff",
+  blocked: "#5c6370",
+};
+const PLAINTEXT = "#ff3c3c";
+/** The stroke colour and dash of a flow: plaintext red, blocked dotted, implied short dashes. */
+function flowLook(e: TMEdge) {
+  const plain = e.encrypted === false;
+  const color = plain ? PLAINTEXT : FLOW_COLOR[e.kind ?? "data"];
+  const dash = e.kind === "blocked" ? "2 5" : plain ? "7 5" : e.implied ? "4 4" : undefined;
+  return { plain, color, dash, opacity: e.implied ? 0.6 : 1, marker: plain ? "tm-arrow-plain" : `tm-arrow-${e.kind ?? "data"}` };
+}
 
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
@@ -63,6 +81,7 @@ export function Canvas({ config, models, onExit }: Props) {
   const [loaded, setLoaded] = useState(false);
   const lastSavedJson = useRef("");
   const [selected, setSelected] = useState<string | null>(null);
+  const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
   const [description, setDescription] = useState("");
   const [building, setBuilding] = useState(false);
   const [buildError, setBuildError] = useState<string | null>(null);
@@ -80,6 +99,7 @@ export function Canvas({ config, models, onExit }: Props) {
     setModel(next);
     setCanvasId(id);
     setSelected(null);
+    setSelectedEdge(null);
     setView(null);
     lastSavedJson.current = alreadySaved ? JSON.stringify(next) : "";
   }
@@ -160,6 +180,7 @@ export function Canvas({ config, models, onExit }: Props) {
 
   const s = stats(model);
   const node = model.nodes.find((n) => n.id === selected) ?? null;
+  const edge = model.edges.find((e) => e.id === selectedEdge) ?? null;
 
   /**
    * A new canvas (build, import, clear): it gets its own id, so the one it replaces stays
@@ -191,6 +212,30 @@ export function Canvas({ config, models, onExit }: Props) {
   function deleteNode(id: string) {
     setModel((m) => ({ ...m, nodes: m.nodes.filter((n) => n.id !== id), edges: m.edges.filter((e) => e.from !== id && e.to !== id) }));
     setSelected(null);
+  }
+
+  // Flows: edit, attach findings, add from a component, delete.
+  const updateEdge = (id: string, patch: Partial<TMEdge>) =>
+    setModel((m) => ({ ...m, edges: m.edges.map((e) => (e.id === id ? { ...e, ...patch } : e)) }));
+  const updateEdgeFinding = (edgeId: string, fid: string, patch: Partial<Finding>) =>
+    setModel((m) => ({
+      ...m,
+      edges: m.edges.map((e) => (e.id === edgeId ? { ...e, findings: e.findings.map((f) => (f.id === fid ? { ...f, ...patch } : f)) } : e)),
+    }));
+  function addEdge(from: string, to: string, kind: FlowKind) {
+    const id = `e-${Date.now().toString(36)}`;
+    setModel((m) => ({ ...m, edges: [...m.edges, { id, from, to, kind, findings: [] }] }));
+    setSelected(null);
+    setSelectedEdge(id);
+  }
+  function deleteEdge(id: string) {
+    setModel((m) => ({ ...m, edges: m.edges.filter((e) => e.id !== id) }));
+    setSelectedEdge(null);
+  }
+  function selectEdge(ev: React.PointerEvent, id: string) {
+    ev.stopPropagation();
+    setSelected(null);
+    setSelectedEdge(id);
   }
 
   // --- build from diagram / description ----------------------------------------------------
@@ -347,6 +392,7 @@ export function Canvas({ config, models, onExit }: Props) {
     drag.current = { id: n.id, dx: p.x - (n.x ?? 0), dy: p.y - (n.y ?? 0) };
     svgRef.current?.setPointerCapture(e.pointerId);
     setSelected(n.id);
+    setSelectedEdge(null);
   }
   function startPan(e: React.PointerEvent) {
     const r = svgRef.current!.getBoundingClientRect();
@@ -392,7 +438,7 @@ export function Canvas({ config, models, onExit }: Props) {
       </TerminalBar>
 
       <div className="canvas-wrap">
-        <div className="canvas-stage grid-bg" onPointerDown={() => setSelected(null)}>
+        <div className="canvas-stage grid-bg" onPointerDown={() => { setSelected(null); setSelectedEdge(null); }}>
           {hasNodes && (
             <div className="canvas-zoom" onPointerDown={(e) => e.stopPropagation()}>
               <button onClick={() => zoomAt(1 / 1.25)} title="Zoom out" aria-label="Zoom out">−</button>
@@ -420,12 +466,13 @@ export function Canvas({ config, models, onExit }: Props) {
               style={{ cursor: panning ? "grabbing" : undefined }}
             >
               <defs>
-                <marker id="tm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-                  <path d="M0,0 L10,5 L0,10 z" fill="#6e7681" />
-                </marker>
-                <marker id="tm-arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-                  <path d="M0,0 L10,5 L0,10 z" fill="#ff3c3c" />
-                </marker>
+                {[...FLOW_KINDS.map((k) => [`tm-arrow-${k}`, FLOW_COLOR[k]] as const), ["tm-arrow-plain", PLAINTEXT] as const, ["tm-arrow-sel", "#ffffff"] as const].map(([id, fill]) => (
+                  <marker key={id} id={id} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M0,0 L10,5 L0,10 z" fill={fill} />
+                  </marker>
+                ))}
+                {/* Card contents never draw past the card's edge. */}
+                <clipPath id="tm-card-clip"><rect width={NODE_W} height={NODE_H} rx={10} /></clipPath>
               </defs>
               <rect x="-100000" y="-100000" width="200000" height="200000" fill="#0a0e14"
                 style={{ cursor: panning ? "grabbing" : "grab" }} onPointerDown={startPan} />
@@ -439,16 +486,42 @@ export function Canvas({ config, models, onExit }: Props) {
                 const dx = bx - ax, dy = by - ay;
                 const t = Math.min(Math.abs((NODE_W / 2) / (dx || 1e-6)), Math.abs((NODE_H / 2) / (dy || 1e-6)), 1);
                 const ex = bx - dx * t, ey = by - dy * t;
-                const plain = e.encrypted === false;
+                const look = flowLook(e);
+                const sel = selectedEdge === e.id;
+                const mx = (ax + ex) / 2, my = (ay + ey) / 2;
+                const full = [e.label, look.plain && !/plain/i.test(e.label ?? "") ? "(plaintext)" : "", e.implied ? "(implied)" : ""].filter(Boolean).join(" ");
+                // A label never runs much past its own line, and never past 240 px.
+                const room = Math.min(240, Math.max(70, Math.hypot(ex - ax, ey - ay) - 24));
+                const shownLabel = full ? fitText(full, room, FONT_FLOW) : "";
+                const labelW = shownLabel ? textWidth(shownLabel, FONT_FLOW) + 10 : 0;
+                const worstFlow = worstOpen(e);
+                const openFlow = e.findings?.filter((f) => f.status === "open").length ?? 0;
                 return (
-                  <g key={e.id}>
-                    <line x1={ax} y1={ay} x2={ex} y2={ey} stroke={plain ? "#ff3c3c" : "#6e7681"} strokeWidth={2}
-                      strokeDasharray={plain ? "7 5" : undefined} markerEnd={`url(#${plain ? "tm-arrow-red" : "tm-arrow"})`} />
-                    {e.label && (
-                      <text x={(ax + ex) / 2} y={(ay + ey) / 2 - 7} fill={plain ? "#ff8080" : "#8b949e"} fontSize={12}
-                        fontFamily="JetBrains Mono, monospace" textAnchor="middle">
-                        {clip(e.label + (plain && !/plain/i.test(e.label) ? " (plaintext)" : ""), 34)}
-                      </text>
+                  <g key={e.id} opacity={look.opacity} style={{ cursor: "pointer" }} onPointerDown={(ev) => selectEdge(ev, e.id)}>
+                    <title>{`${FLOW_LABEL[e.kind ?? "data"]} flow${e.implied ? " (implied)" : ""}${full ? `: ${full}` : ""}`}</title>
+                    {/* A wide invisible line makes the flow easy to click. */}
+                    <line x1={ax} y1={ay} x2={ex} y2={ey} stroke="transparent" strokeWidth={14} />
+                    <line x1={ax} y1={ay} x2={ex} y2={ey} stroke={sel ? "#ffffff" : look.color} strokeWidth={sel ? 3 : 2}
+                      strokeDasharray={look.dash} markerEnd={`url(#${sel ? "tm-arrow-sel" : look.marker})`} />
+                    {e.kind === "blocked" && (
+                      <g transform={`translate(${mx},${my})`}>
+                        <circle r={8} fill="#0a0e14" stroke={FLOW_COLOR.blocked} strokeWidth={2} />
+                        <line x1={-5} y1={5} x2={5} y2={-5} stroke={FLOW_COLOR.blocked} strokeWidth={2} />
+                      </g>
+                    )}
+                    {shownLabel && (
+                      <g transform={`translate(${mx},${my - (e.kind === "blocked" ? 18 : 10)})`}>
+                        <rect x={-labelW / 2} y={-9} width={labelW} height={15} rx={4} fill="#0a0e14" opacity={0.85} />
+                        <text y={2} fill={look.plain ? "#ff8080" : look.color} fontSize={11} fontFamily="JetBrains Mono, monospace" textAnchor="middle">
+                          {shownLabel}
+                        </text>
+                      </g>
+                    )}
+                    {openFlow > 0 && (
+                      <g transform={`translate(${mx + labelW / 2 + 4},${my - 20})`}>
+                        <rect width={20} height={16} rx={8} fill={SEV_COLOR[worstFlow ?? "low"]} />
+                        <text x={10} y={12} fill="#0a0e14" fontSize={10} fontWeight={700} textAnchor="middle" fontFamily="Inter, system-ui, sans-serif">{openFlow}</text>
+                      </g>
                     )}
                   </g>
                 );
@@ -458,20 +531,30 @@ export function Canvas({ config, models, onExit }: Props) {
                 const worst = worstOpen(n);
                 const open = n.findings.filter((f) => f.status === "open").length;
                 const x = n.x ?? 0, y = n.y ?? 0;
+                // Text widths: 16 px in from the left, 12 px from the right, and clear of the badge.
+                const textW = NODE_W - 16 - 12;
+                const kindLine = `${n.kind.toUpperCase()}${n.inScope ? "" : " · OUT OF SCOPE"}${n.tested ? " · TESTED ✓" : ""}`;
                 return (
                   <g key={n.id} transform={`translate(${x},${y})`} opacity={n.inScope ? 1 : 0.45}
                     style={{ cursor: "grab" }} onPointerDown={(e) => startDrag(e, n)}>
+                    <title>{[n.label, ...n.details].join("\n")}</title>
                     <rect width={NODE_W} height={NODE_H} rx={10} fill="#161b22"
                       stroke={selected === n.id ? "#ffffff" : KIND_COLOR[n.kind]} strokeWidth={selected === n.id ? 2.5 : 1.5}
                       strokeDasharray={n.inScope ? undefined : "5 4"} />
-                    {worst && <rect width={6} height={NODE_H} rx={3} fill={SEV_COLOR[worst]} />}
-                    <text x={16} y={22} fill="#e6edf3" fontSize={14} fontWeight={700} fontFamily="Inter, system-ui, sans-serif">{clip(n.label, 22)}</text>
-                    <text x={16} y={40} fill={KIND_COLOR[n.kind]} fontSize={10} fontFamily="JetBrains Mono, monospace">
-                      {n.kind.toUpperCase()}{n.inScope ? "" : " · OUT OF SCOPE"}{n.tested ? " · TESTED ✓" : ""}
-                    </text>
-                    {n.details.slice(0, 2).map((d, i) => (
-                      <text key={i} x={16} y={58 + i * 14} fill="#8b949e" fontSize={11} fontFamily="Inter, system-ui, sans-serif">{clip(d, 30)}</text>
-                    ))}
+                    <g clipPath="url(#tm-card-clip)">
+                      {worst && <rect width={6} height={NODE_H} fill={SEV_COLOR[worst]} />}
+                      <text x={16} y={22} fill="#e6edf3" fontSize={14} fontWeight={700} fontFamily="Inter, system-ui, sans-serif">
+                        {fitText(n.label, textW - (open > 0 ? 30 : 0), FONT_TITLE)}
+                      </text>
+                      <text x={16} y={40} fill={KIND_COLOR[n.kind]} fontSize={10} fontFamily="JetBrains Mono, monospace">
+                        {fitText(kindLine, textW, FONT_KIND)}
+                      </text>
+                      {n.details.slice(0, 2).map((d, i) => (
+                        <text key={i} x={16} y={58 + i * 14} fill="#8b949e" fontSize={11} fontFamily="Inter, system-ui, sans-serif">
+                          {fitText(d, textW, FONT_DETAIL)}
+                        </text>
+                      ))}
+                    </g>
                     {open > 0 && (
                       <g transform={`translate(${NODE_W - 30},8)`}>
                         <rect width={22} height={18} rx={9} fill={SEV_COLOR[worst ?? "low"]} />
@@ -489,11 +572,24 @@ export function Canvas({ config, models, onExit }: Props) {
           {node ? (
             <NodeInspector
               node={node}
+              others={model.nodes.filter((n) => n.id !== node.id)}
               onChange={(p) => updateNode(node.id, p)}
               onFinding={(fid, p) => updateFinding(node.id, fid, p)}
               onAddFinding={(f) => updateNode(node.id, { findings: [...node.findings, f] })}
               onRemoveFinding={(fid) => updateNode(node.id, { findings: node.findings.filter((f) => f.id !== fid) })}
+              onAddFlow={(to, kind) => addEdge(node.id, to, kind)}
               onDelete={() => deleteNode(node.id)}
+            />
+          ) : edge ? (
+            <EdgeInspector
+              edge={edge}
+              fromLabel={byId.get(edge.from)?.label ?? edge.from}
+              toLabel={byId.get(edge.to)?.label ?? edge.to}
+              onChange={(p) => updateEdge(edge.id, p)}
+              onFinding={(fid, p) => updateEdgeFinding(edge.id, fid, p)}
+              onAddFinding={(f) => updateEdge(edge.id, { findings: [...edge.findings, f] })}
+              onRemoveFinding={(fid) => updateEdge(edge.id, { findings: edge.findings.filter((f) => f.id !== fid) })}
+              onDelete={() => deleteEdge(edge.id)}
             />
           ) : (
             <div className="canvas-summary">
@@ -507,9 +603,20 @@ export function Canvas({ config, models, onExit }: Props) {
                   <li key={sev}><span className="sev-dot" style={{ background: SEV_COLOR[sev] }} />{s.open[sev]} {sev} open</li>
                 ))}
                 <li>{s.fixed} fixed or verified</li>
-                <li>{s.plaintextFlows} plaintext flow{s.plaintextFlows === 1 ? "" : "s"}</li>
+                <li>{s.flows} flow{s.flows === 1 ? "" : "s"}: {s.plaintextFlows} plaintext, {s.impliedFlows} implied, {s.blockedFlows} blocked</li>
               </ul>
-              <p className="hint">Click a component to edit it, mark scope and coverage, and track its findings. Drag to rearrange.</p>
+              <div className="section-title">Flows</div>
+              <ul className="canvas-legend">
+                {FLOW_KINDS.map((k) => (
+                  <li key={k}>
+                    <svg width="34" height="10" aria-hidden><line x1="1" y1="5" x2="33" y2="5" stroke={FLOW_COLOR[k]} strokeWidth="2" strokeDasharray={k === "blocked" ? "2 5" : undefined} /></svg>
+                    {FLOW_LABEL[k]} <span className="muted">({s.byKind[k]})</span>
+                  </li>
+                ))}
+                <li><svg width="34" height="10" aria-hidden><line x1="1" y1="5" x2="33" y2="5" stroke={PLAINTEXT} strokeWidth="2" strokeDasharray="7 5" /></svg>Plaintext (any type)</li>
+                <li><svg width="34" height="10" aria-hidden><line x1="1" y1="5" x2="33" y2="5" stroke={FLOW_COLOR.data} strokeWidth="2" strokeDasharray="4 4" opacity="0.6" /></svg>Implied: not drawn in the source</li>
+              </ul>
+              <p className="hint">Click a component or a flow to edit it and track its findings. Drag components to rearrange.</p>
 
               <div className="section-title">Saved canvases</div>
               {saveMsg && <div className="hint" style={{ color: saveMsg.ok ? "var(--muted)" : "var(--amber)" }}>{saveMsg.text}</div>}
@@ -597,16 +704,72 @@ function SavedCanvasList({ list, activeId, onOpen, onDelete }: {
   );
 }
 
-function NodeInspector({ node, onChange, onFinding, onAddFinding, onRemoveFinding, onDelete }: {
+/** Findings on a component or a flow: severity and status editable, add and remove. */
+function FindingsEditor({ ownerId, findings, onFinding, onAddFinding, onRemoveFinding }: {
+  ownerId: string;
+  findings: Finding[];
+  onFinding: (fid: string, p: Partial<Finding>) => void;
+  onAddFinding: (f: Finding) => void;
+  onRemoveFinding: (fid: string) => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [sev, setSev] = useState<Severity>("medium");
+  return (
+    <>
+      <div className="section-title">Findings ({findings.length})</div>
+      {findings.map((f) => (
+        <div className="canvas-finding" key={f.id}>
+          <div className="cf-head">
+            <span className="sev-pill" style={{ background: SEV_COLOR[f.severity] }}>{f.severity}</span>
+            <span className="cf-title">{f.title}</span>
+            <button className="attach-x" onClick={() => onRemoveFinding(f.id)} aria-label="Remove finding">✕</button>
+          </div>
+          {f.fix && <div className="cf-fix">Fix: {f.fix}</div>}
+          {f.ref && <div className="cf-ref">{f.ref}</div>}
+          <div className="cf-controls">
+            <select value={f.severity} onChange={(e) => onFinding(f.id, { severity: e.target.value as Severity })} aria-label="Severity">
+              {SEVERITIES.map((x) => <option key={x} value={x}>{x}</option>)}
+            </select>
+            <select value={f.status} onChange={(e) => onFinding(f.id, { status: e.target.value as FindingStatus })} aria-label="Status">
+              <option value="open">open</option>
+              <option value="fixed">fixed</option>
+              <option value="verified">verified (retested)</option>
+            </select>
+          </div>
+        </div>
+      ))}
+      <div className="cf-add">
+        <input type="text" placeholder="Add a finding…" value={title} onChange={(e) => setTitle(e.target.value)} />
+        <select value={sev} onChange={(e) => setSev(e.target.value as Severity)}>
+          {SEVERITIES.map((x) => <option key={x} value={x}>{x}</option>)}
+        </select>
+        <button
+          className="btn mini"
+          disabled={!title.trim()}
+          onClick={() => {
+            onAddFinding({ id: `${ownerId}-f${Date.now().toString(36)}`, title: title.trim(), severity: sev, status: "open" });
+            setTitle("");
+          }}
+        >
+          add
+        </button>
+      </div>
+    </>
+  );
+}
+
+function NodeInspector({ node, others, onChange, onFinding, onAddFinding, onRemoveFinding, onAddFlow, onDelete }: {
   node: TMNode;
+  others: TMNode[];
   onChange: (p: Partial<TMNode>) => void;
   onFinding: (fid: string, p: Partial<Finding>) => void;
   onAddFinding: (f: Finding) => void;
   onRemoveFinding: (fid: string) => void;
+  onAddFlow: (to: string, kind: FlowKind) => void;
   onDelete: () => void;
 }) {
-  const [title, setTitle] = useState("");
-  const [sev, setSev] = useState<Severity>("medium");
+  const [flowTo, setFlowTo] = useState("");
+  const [flowKind, setFlowKind] = useState<FlowKind>("data");
   return (
     <div className="canvas-inspector">
       <label>Component</label>
@@ -623,40 +786,63 @@ function NodeInspector({ node, onChange, onFinding, onAddFinding, onRemoveFindin
           <ul className="canvas-details">{node.details.map((d, i) => <li key={i}>{d}</li>)}</ul>
         </>
       )}
-      <div className="section-title">Findings ({node.findings.length})</div>
-      {node.findings.map((f) => (
-        <div className="canvas-finding" key={f.id}>
-          <div className="cf-head">
-            <span className="sev-pill" style={{ background: SEV_COLOR[f.severity] }}>{f.severity}</span>
-            <span className="cf-title">{f.title}</span>
-            <button className="attach-x" onClick={() => onRemoveFinding(f.id)} aria-label="Remove finding">✕</button>
+      <FindingsEditor ownerId={node.id} findings={node.findings} onFinding={onFinding} onAddFinding={onAddFinding} onRemoveFinding={onRemoveFinding} />
+      {others.length > 0 && (
+        <>
+          <div className="section-title">Add a flow from here</div>
+          <div className="cf-add">
+            <select value={flowTo} onChange={(e) => setFlowTo(e.target.value)} aria-label="Flow goes to">
+              <option value="">to…</option>
+              {others.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+            </select>
+            <select value={flowKind} onChange={(e) => setFlowKind(e.target.value as FlowKind)} aria-label="Flow type">
+              {FLOW_KINDS.map((k) => <option key={k} value={k}>{FLOW_LABEL[k]}</option>)}
+            </select>
+            <button className="btn mini" disabled={!flowTo} onClick={() => { onAddFlow(flowTo, flowKind); setFlowTo(""); }}>add</button>
           </div>
-          {f.fix && <div className="cf-fix">Fix: {f.fix}</div>}
-          {f.ref && <div className="cf-ref">{f.ref}</div>}
-          <select value={f.status} onChange={(e) => onFinding(f.id, { status: e.target.value as FindingStatus })}>
-            <option value="open">open</option>
-            <option value="fixed">fixed</option>
-            <option value="verified">verified (retested)</option>
-          </select>
-        </div>
-      ))}
-      <div className="cf-add">
-        <input type="text" placeholder="Add a finding…" value={title} onChange={(e) => setTitle(e.target.value)} />
-        <select value={sev} onChange={(e) => setSev(e.target.value as Severity)}>
-          {SEVERITIES.map((x) => <option key={x} value={x}>{x}</option>)}
-        </select>
-        <button
-          className="btn mini"
-          disabled={!title.trim()}
-          onClick={() => {
-            onAddFinding({ id: `${node.id}-f${Date.now().toString(36)}`, title: title.trim(), severity: sev, status: "open" });
-            setTitle("");
-          }}
-        >
-          add
-        </button>
-      </div>
+        </>
+      )}
       <button className="btn danger-outline sm" style={{ marginTop: 14 }} onClick={onDelete}>delete component</button>
+    </div>
+  );
+}
+
+function EdgeInspector({ edge, fromLabel, toLabel, onChange, onFinding, onAddFinding, onRemoveFinding, onDelete }: {
+  edge: TMEdge;
+  fromLabel: string;
+  toLabel: string;
+  onChange: (p: Partial<TMEdge>) => void;
+  onFinding: (fid: string, p: Partial<Finding>) => void;
+  onAddFinding: (f: Finding) => void;
+  onRemoveFinding: (fid: string) => void;
+  onDelete: () => void;
+}) {
+  const enc = edge.encrypted === true ? "yes" : edge.encrypted === false ? "no" : "unknown";
+  return (
+    <div className="canvas-inspector">
+      <label>Flow</label>
+      <div className="cf-route" title={`${fromLabel} → ${toLabel}`}>{fromLabel} <span className="muted">→</span> {toLabel}</div>
+      <label>Label</label>
+      <input type="text" value={edge.label ?? ""} placeholder="what it carries" onChange={(e) => onChange({ label: e.target.value || undefined })} />
+      <label>Type</label>
+      <select value={edge.kind ?? "data"} onChange={(e) => onChange({ kind: e.target.value as FlowKind })}>
+        {FLOW_KINDS.map((k) => <option key={k} value={k}>{FLOW_LABEL[k]}</option>)}
+      </select>
+      <label>Encrypted</label>
+      <select value={enc} onChange={(e) => onChange({ encrypted: e.target.value === "yes" ? true : e.target.value === "no" ? false : undefined })}>
+        <option value="unknown">not stated</option>
+        <option value="yes">yes</option>
+        <option value="no">no (plaintext)</option>
+      </select>
+      <label>Protocol</label>
+      <input type="text" value={edge.protocol ?? ""} placeholder="not stated" onChange={(e) => onChange({ protocol: e.target.value || undefined })} />
+      <label>Authentication</label>
+      <input type="text" value={edge.auth ?? ""} placeholder="not stated" onChange={(e) => onChange({ auth: e.target.value || undefined })} />
+      <label className="check" title="Not drawn in the source, but implied by its labels">
+        <input type="checkbox" checked={edge.implied === true} onChange={(e) => onChange({ implied: e.target.checked || undefined })} /> Implied (not drawn in the source)
+      </label>
+      <FindingsEditor ownerId={edge.id} findings={edge.findings ?? []} onFinding={onFinding} onAddFinding={onAddFinding} onRemoveFinding={onRemoveFinding} />
+      <button className="btn danger-outline sm" style={{ marginTop: 14 }} onClick={onDelete}>delete flow</button>
     </div>
   );
 }

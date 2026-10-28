@@ -31,12 +31,36 @@ export interface TMNode {
   y?: number;
 }
 
+/**
+ * What a flow carries. Colour on the canvas and the draw.io style follow it; "blocked" is a path
+ * the source shows as cut (e.g. host management disabled by BlueField Restricted mode).
+ */
+export type FlowKind = "data" | "management" | "attestation" | "identity" | "control" | "blocked";
+export const FLOW_KINDS: FlowKind[] = ["data", "management", "attestation", "identity", "control", "blocked"];
+export const FLOW_LABEL: Record<FlowKind, string> = {
+  data: "Data",
+  management: "Management",
+  attestation: "Attestation / evidence",
+  identity: "Identity / credential",
+  control: "Control / config",
+  blocked: "Blocked",
+};
+
 export interface TMEdge {
   id: string;
   from: string;
   to: string;
   label?: string;
+  kind: FlowKind;
+  /** true = encrypted, false = plaintext, undefined = the source doesn't say. */
   encrypted?: boolean;
+  /** Not drawn in the source, but implied by its labels. */
+  implied?: boolean;
+  /** e.g. "Redfish over HTTPS", "SPDM 1.1". */
+  protocol?: string;
+  /** e.g. "mTLS", "none". */
+  auth?: string;
+  findings: Finding[];
 }
 
 export interface ThreatModel {
@@ -61,6 +85,36 @@ function asKind(v: unknown): NodeKind {
   if (/db|database|store|bucket|storage|cache|queue|file|repo|config|secret/.test(k)) return "datastore";
   if (/third|external|saas|vendor|partner/.test(k)) return "external";
   return "service";
+}
+
+function asFlowKind(v: unknown, label: string): FlowKind {
+  const k = str(v).toLowerCase();
+  if ((FLOW_KINDS as string[]).includes(k)) return k as FlowKind;
+  if (!k) return /\bblocked\b/i.test(label) ? "blocked" : "data";
+  if (/block|denied|disabled|cut/.test(k)) return "blocked";
+  if (/attest|evidence|spdm|measure/.test(k)) return "attestation";
+  if (/ident|credential|cert|svid|token|key|auth/.test(k)) return "identity";
+  if (/manag|admin|mgmt|bmc|redfish|ssh|console/.test(k)) return "management";
+  if (/control|config|crd|gitops|policy|deploy|boot|admission/.test(k)) return "control";
+  return "data";
+}
+
+function parseFindings(list: unknown, idPrefix: string): Finding[] {
+  return (Array.isArray(list) ? list : []).flatMap((f, j): Finding[] => {
+    if (!f || typeof f !== "object") return [];
+    const fo = f as Record<string, unknown>;
+    const title = str(fo.title) || str(fo.issue) || str(fo.name);
+    if (!title) return [];
+    const status = str(fo.status).toLowerCase();
+    return [{
+      id: `${idPrefix}-f${j + 1}`,
+      title,
+      severity: asSeverity(fo.severity),
+      fix: str(fo.fix) || str(fo.mitigation) || undefined,
+      ref: str(fo.ref) || str(fo.cwe) || undefined,
+      status: status === "fixed" || status === "verified" ? status : "open",
+    }];
+  });
 }
 
 function asSeverity(v: unknown): Severity {
@@ -108,21 +162,7 @@ export function normalize(raw: unknown): ThreatModel {
     // First node wins a shared id or label, so a duplicate can't steal the original's edges.
     if (!idMap.has(given)) idMap.set(given, id);
     if (!idMap.has(label)) idMap.set(label, id);
-    const findings = (Array.isArray(o.findings) ? o.findings : []).flatMap((f, j): Finding[] => {
-      if (!f || typeof f !== "object") return [];
-      const fo = f as Record<string, unknown>;
-      const title = str(fo.title) || str(fo.issue) || str(fo.name);
-      if (!title) return [];
-      const status = str(fo.status).toLowerCase();
-      return [{
-        id: `${id}-f${j + 1}`,
-        title,
-        severity: asSeverity(fo.severity),
-        fix: str(fo.fix) || str(fo.mitigation) || undefined,
-        ref: str(fo.ref) || str(fo.cwe) || undefined,
-        status: status === "fixed" || status === "verified" ? status : "open",
-      }];
-    });
+    const findings = parseFindings(o.findings, id);
     return [{
       id,
       label,
@@ -142,12 +182,22 @@ export function normalize(raw: unknown): ThreatModel {
     const from = idMap.get(str(o.from)) ?? idMap.get(slug(str(o.from)));
     const to = idMap.get(str(o.to)) ?? idMap.get(slug(str(o.to)));
     if (!from || !to || from === to) return [];
+    // "(implied)" at the end of a label (how models were asked to mark them before) sets the flag.
+    let label = str(o.label);
+    const impliedSuffix = /\s*\(implied\)\s*$/i.test(label);
+    if (impliedSuffix) label = label.replace(/\s*\(implied\)\s*$/i, "");
+    const id = `e${i + 1}`;
     return [{
-      id: `e${i + 1}`,
+      id,
       from,
       to,
-      label: str(o.label) || str(o.protocol) || undefined,
+      label: label || str(o.protocol) || undefined,
+      kind: asFlowKind(o.kind ?? o.type, label),
       encrypted: typeof o.encrypted === "boolean" ? o.encrypted : undefined,
+      implied: o.implied === true || impliedSuffix || undefined,
+      protocol: str(o.protocol) || undefined,
+      auth: str(o.auth) || str(o.authentication) || undefined,
+      findings: parseFindings(o.findings, id),
     }];
   });
 
@@ -174,7 +224,7 @@ export function layout(model: ThreatModel): ThreatModel {
 }
 
 /** The worst open finding on a node, which decides its colour. */
-export function worstOpen(n: TMNode): Severity | null {
+export function worstOpen(n: { findings: Finding[] }): Severity | null {
   let worst: Severity | null = null;
   for (const f of n.findings) {
     if (f.status !== "open") continue;
@@ -190,16 +240,23 @@ export interface Stats {
   open: Record<Severity, number>;
   fixed: number;
   plaintextFlows: number;
+  flows: number;
+  impliedFlows: number;
+  blockedFlows: number;
+  /** Flows per kind, for the legend. */
+  byKind: Record<FlowKind, number>;
 }
 
 export function stats(model: ThreatModel): Stats {
   const open: Record<Severity, number> = { critical: 0, high: 0, medium: 0, low: 0 };
   let fixed = 0;
-  for (const n of model.nodes)
-    for (const f of n.findings) {
-      if (f.status === "open") open[f.severity]++;
-      else fixed++;
-    }
+  // Findings on flows count the same as findings on components.
+  for (const f of [...model.nodes.flatMap((n) => n.findings), ...model.edges.flatMap((e) => e.findings ?? [])]) {
+    if (f.status === "open") open[f.severity]++;
+    else fixed++;
+  }
+  const byKind = Object.fromEntries(FLOW_KINDS.map((k) => [k, 0])) as Record<FlowKind, number>;
+  for (const e of model.edges) byKind[e.kind ?? "data"]++;
   const scoped = model.nodes.filter((n) => n.inScope);
   return {
     components: model.nodes.length,
@@ -208,21 +265,30 @@ export function stats(model: ThreatModel): Stats {
     open,
     fixed,
     plaintextFlows: model.edges.filter((e) => e.encrypted === false).length,
+    flows: model.edges.length,
+    impliedFlows: model.edges.filter((e) => e.implied).length,
+    blockedFlows: byKind.blocked,
+    byKind,
   };
 }
 
 /** A findings table for a report, worst first. */
 export function findingsMarkdown(model: ThreatModel): string {
-  const rows = model.nodes
-    .flatMap((n) => n.findings.map((f) => ({ n, f })))
-    .sort((a, b) => SEVERITY_RANK[a.f.severity] - SEVERITY_RANK[b.f.severity]);
+  const name = new Map(model.nodes.map((n) => [n.id, n.label]));
+  const rows = [
+    ...model.nodes.flatMap((n) => n.findings.map((f) => ({ where: n.label, f }))),
+    ...model.edges.flatMap((e) => (e.findings ?? []).map((f) => ({
+      where: `${name.get(e.from) ?? e.from} → ${name.get(e.to) ?? e.to} (${FLOW_LABEL[e.kind ?? "data"].toLowerCase()} flow)`,
+      f,
+    }))),
+  ].sort((a, b) => SEVERITY_RANK[a.f.severity] - SEVERITY_RANK[b.f.severity]);
   const cell = (s = "") => s.replace(/\|/g, "\\|").replace(/\n/g, " ");
   const lines = [
     `# ${cell(model.title)}`,
     "",
-    "| Severity | Component | Finding | Fix | Ref | Status |",
+    "| Severity | Component or flow | Finding | Fix | Ref | Status |",
     "|---|---|---|---|---|---|",
-    ...rows.map(({ n, f }) => `| ${f.severity} | ${cell(n.label)} | ${cell(f.title)} | ${cell(f.fix)} | ${cell(f.ref)} | ${f.status} |`),
+    ...rows.map(({ where, f }) => `| ${f.severity} | ${cell(where)} | ${cell(f.title)} | ${cell(f.fix)} | ${cell(f.ref)} | ${f.status} |`),
   ];
   return lines.join("\n") + "\n";
 }
@@ -259,11 +325,18 @@ export function toDrawioSpec(model: ThreatModel): Record<string, unknown> {
     edges: placed.edges
       .filter((e) => ids.has(e.from) && ids.has(e.to))
       .map((e) => {
+        const kind = e.kind ?? "data";
         const plain = e.encrypted === false && !/plain/i.test(e.label ?? "");
-        const label = [e.label, plain ? "(plaintext)" : ""].filter(Boolean).join(" ");
-        return { from: ids.get(e.from), to: ids.get(e.to), style: "data", ...(label ? { label: short(label, 40) } : {}) };
+        // drawgen's arrow styles have their own names, so the flow type goes in the label and the
+        // style only keeps the kinds apart: red dashed = plaintext, grey dashed = blocked.
+        const style = plain ? "async" : kind === "blocked" ? "weak"
+          : kind === "management" || kind === "control" ? "sync"
+          : kind === "attestation" || kind === "identity" ? "ai" : "data";
+        const label = [kind === "data" ? "" : `${kind}:`, e.label, plain ? "(plaintext)" : "", e.implied ? "(implied)" : ""]
+          .filter(Boolean).join(" ");
+        return { from: ids.get(e.from), to: ids.get(e.to), style, ...(label ? { label: short(label, 48) } : {}) };
       }),
-    legend: true,
+    legend: { edges: [] }, // component kinds only: drawgen's edge names would mislabel these flows
   };
 }
 

@@ -39,7 +39,7 @@ describe("normalize", () => {
   });
 
   it("resolves edges by id or label and drops dangling and self edges", () => {
-    expect(m.edges).toEqual([{ id: "e1", from: "web", to: "database", label: "MySQL :3306", encrypted: false }]);
+    expect(m.edges).toMatchObject([{ id: "e1", from: "web", to: "database", label: "MySQL :3306", encrypted: false }]);
   });
 
   it("rejects non-objects", () => {
@@ -70,7 +70,7 @@ describe("layout, worstOpen, stats, findingsMarkdown", () => {
   });
 
   it("counts coverage over in-scope components", () => {
-    expect(stats(m)).toEqual({
+    expect(stats(m)).toMatchObject({
       components: 3, inScope: 2, tested: 1, fixed: 1, plaintextFlows: 1,
       open: { critical: 0, high: 1, medium: 1, low: 0 },
     });
@@ -111,5 +111,48 @@ describe("buildBudget", () => {
     expect(buildBudget(40000, true)).toBe(40000);
     expect(buildBudget(4096, true, 16000)).toBe(16000);
     expect(buildBudget(4096, true, null)).toBe(32768);
+  });
+});
+
+describe("flows", () => {
+  const raw = {
+    title: "Flows",
+    nodes: [{ id: "rot", label: "Root of trust" }, { id: "ver", label: "Verifier" }, { id: "host", label: "Host" }, { id: "bmc", label: "BMC" }],
+    edges: [
+      { from: "rot", to: "ver", label: "SPDM evidence", kind: "attestation", findings: [{ title: "Classical signature", severity: "high", ref: "CWE-327" }] },
+      { from: "host", to: "rot", label: "rshim - blocked by Restricted mode" },
+      { from: "ver", to: "bmc", label: "verdict (implied)", kind: "Policy" },
+      { from: "bmc", to: "rot", label: "Redfish", kind: "mgmt", protocol: "Redfish/HTTPS", auth: "mTLS", encrypted: true },
+      { from: "host", to: "ver", label: "legacy" },
+    ],
+  };
+
+  it("reads kinds, flags and findings, with sensible defaults", () => {
+    const m = normalize(raw);
+    expect(m.edges.map((e) => e.kind)).toEqual(["attestation", "blocked", "control", "management", "data"]);
+    expect(m.edges[2]).toMatchObject({ label: "verdict", implied: true });
+    expect(m.edges[3]).toMatchObject({ protocol: "Redfish/HTTPS", auth: "mTLS", encrypted: true });
+    expect(m.edges[0].findings).toEqual([expect.objectContaining({ title: "Classical signature", severity: "high", status: "open" })]);
+    expect(m.edges[4]).toMatchObject({ kind: "data", findings: [] });
+    expect(m.edges[4].implied).toBeUndefined();
+    // a saved canvas opens again unchanged
+    expect(normalize(JSON.parse(JSON.stringify(m)))).toEqual(m);
+  });
+
+  it("counts flow findings and flow types in the summary and the findings table", () => {
+    const m = normalize(raw);
+    const s = stats(m);
+    expect(s.open.high).toBe(1);
+    expect(s).toMatchObject({ flows: 5, impliedFlows: 1, blockedFlows: 1 });
+    expect(s.byKind).toMatchObject({ attestation: 1, blocked: 1, control: 1, management: 1, data: 1, identity: 0 });
+    expect(findingsMarkdown(m)).toContain("| high | Root of trust → Verifier (attestation / evidence flow) | Classical signature |");
+  });
+
+  it("carries flow types into the draw.io export", () => {
+    const spec = toDrawioSpec(layout(normalize(raw))) as { edges: { style: string; label?: string }[]; legend: unknown };
+    expect(spec.edges.map((e) => e.style)).toEqual(["ai", "weak", "sync", "sync", "data"]);
+    expect(spec.edges[0].label).toBe("attestation: SPDM evidence");
+    expect(spec.edges[2].label).toBe("control: verdict (implied)");
+    expect(spec.legend).toEqual({ edges: [] });
   });
 });

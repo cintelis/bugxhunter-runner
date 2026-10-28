@@ -793,3 +793,10 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .attach-chip.doc { padding-left: 8px; }
 .attach-doc-icon { color: var(--accent); font-size: 14px; line-height: 1; }
 .bubble-docs { margin-top: 6px; }
+
+/* Canvas: flow legend, flow inspector, finding controls */
+.canvas-legend { list-style: none; margin: 4px 0 8px; padding: 0; font-size: 12px; }
+.canvas-legend li { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+.cf-route { font-size: 12px; margin-bottom: 6px; overflow-wrap: anywhere; }
+.cf-controls { display: flex; gap: 6px; }
+.cf-controls select { flex: 1; min-width: 0; }
