@@ -15,3 +15,6 @@ auth.json
 .DS_Store
 npm-debug.log*
 *.log
+
+# Python bytecode (render service tests)
+__pycache__/

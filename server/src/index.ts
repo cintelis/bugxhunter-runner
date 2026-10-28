@@ -23,6 +23,9 @@ import { mountAuth, authRequired, issueSession } from "./auth.js";
 import { audit, followOpencode, LOG_DIR } from "./audit.js";
 import { saveAttachments, type Attachment } from "./attachments.js";
 import * as vault from "./vault.js";
+import * as playground from "./playground-store.js";
+import * as nvidiaHealth from "./nvidia-health.js";
+import * as render from "./render.js";
 import { apiLimiter, fileLimiter, staticLimiter } from "./ratelimit.js";
 import { createWorkspace, deleteWorkspace, listFiles, listWorkspaces, saveUpload, WORKSPACES_ROOT } from "./workspaces.js";
 import * as github from "./github.js";
@@ -107,6 +110,9 @@ app.use("/api", (req, res, next) => {
 app.use("/api/agent/prompt", express.json({ limit: "40mb" }));
 // Playground vision turns carry images inline as base64 data URLs (4 x 5 MB max in the UI).
 app.use("/api/chat", express.json({ limit: "32mb" }));
+// Saved Playground sessions carry the same images, sealed into the body.
+app.use("/api/playground", express.json({ limit: "40mb" }));
+app.use("/api/render", express.json({ limit: "4mb" })); // a .drawio file; specs are capped in render.ts
 app.use(express.json({ limit: "4mb" }));
 // Rate limits before anything else under /api, sign-in included (see ratelimit.ts).
 app.use("/api", apiLimiter);
@@ -138,6 +144,28 @@ const sendError = (res: express.Response, e: unknown) => {
 };
 
 app.get("/api/health", (_req, res) => res.json({ ok: true, baseUrl: PROVIDERS.scx.baseUrl }));
+
+// --- Saved Playground sessions (see playground-store.ts) ---------------------
+// Chats and canvases, sealed with the vault key into the runner-only data volume.
+
+app.get("/api/playground/sessions/:kind", (req, res) => {
+  try { res.json({ sessions: playground.list(req.params.kind as playground.SessionKind) }); } catch (e) { sendError(res, e); }
+});
+app.get("/api/playground/sessions/:kind/:id", (req, res) => {
+  try { res.json(playground.get(req.params.kind as playground.SessionKind, req.params.id)); } catch (e) { sendError(res, e); }
+});
+app.put("/api/playground/sessions/:kind/:id", (req, res) => {
+  try {
+    const { title, body } = req.body ?? {};
+    res.json(playground.put(req.params.kind as playground.SessionKind, req.params.id, String(title ?? ""), body));
+  } catch (e) { sendError(res, e); }
+});
+app.delete("/api/playground/sessions/:kind/:id", (req, res) => {
+  try { playground.remove(req.params.kind as playground.SessionKind, req.params.id); res.json({ ok: true }); } catch (e) { sendError(res, e); }
+});
+app.delete("/api/playground/sessions/:kind", (req, res) => {
+  try { res.json({ deleted: playground.removeAll(req.params.kind as playground.SessionKind) }); } catch (e) { sendError(res, e); }
+});
 
 // --- Key vault (see shared/vault.d.ts) --------------------------------------
 // The browser does the key derivation and wrapping; these routes only store
@@ -264,6 +292,29 @@ app.post("/api/github/clone", async (req, res) => {
   }
 });
 
+// --- Diagrams (drawgen, in the separate render service) ---------------------
+
+app.get("/api/render/status", async (_req, res) => res.json(await render.status()));
+
+app.post("/api/render/outline", async (req, res) => {
+  try {
+    res.json(await render.outline((req.body as { file?: unknown })?.file));
+  } catch (e) {
+    sendError(res, e);
+  }
+});
+
+app.post("/api/render/drawio", async (req, res) => {
+  try {
+    res.json(await render.drawio((req.body as { spec?: unknown })?.spec));
+  } catch (e) {
+    sendError(res, e);
+  }
+});
+
+/** Which NVIDIA models are hidden as retired, and when the catalogue was last probed. */
+app.get("/api/models/nvidia-health", (_req, res) => res.json(nvidiaHealth.status()));
+
 app.get("/api/models", async (_req, res) => {
   try {
     res.json({ data: await listModels() });
@@ -294,10 +345,15 @@ app.post("/api/chat", async (req, res) => {
         }
       }
     }
-    const { client, model } = clientFor(String(params.model ?? ""));
+    const { client, model, provider } = clientFor(String(params.model ?? ""));
     const call = { ...params, model };
+    // Keep the NVIDIA list honest: a 404 means the model was retired upstream.
+    const track = <T>(p: Promise<T>) => provider !== "nvidia" ? p : p.then(
+      (v) => { nvidiaHealth.markAlive(model); return v; },
+      (e) => { if (e instanceof SCXError && e.status === 404) nvidiaHealth.markRetired(model); throw e; },
+    );
     if (params.stream) {
-      const upstream = await client.chatStreamResponse(call);
+      const upstream = await track(client.chatStreamResponse(call));
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache, no-transform");
       res.setHeader("Connection", "keep-alive");
@@ -319,7 +375,7 @@ app.post("/api/chat", async (req, res) => {
       }
       res.end();
     } else {
-      const completion = await client.chat(call);
+      const completion = await track(client.chat(call));
       res.json(retrieved.length
         ? { ...completion, scx_sources: retrieved.map((r) => ({ doc: r.doc, score: Number(r.score.toFixed(3)) })) }
         : completion);

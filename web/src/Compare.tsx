@@ -7,7 +7,7 @@ import { PaperclipIcon } from "./icons";
 import { formatTiming } from "./format";
 import { isChatModel } from "./modelFilter";
 import { userContent } from "./wire";
-import { AttachChips, useImageAttach } from "./imageAttach";
+import { ATTACH_ACCEPT, AttachChips, useImageAttach } from "./imageAttach";
 
 // One prompt, run against two or three models side by side. Single-turn on purpose: the point
 // is to compare answers (and speed) to the same question, so each run starts clean, using the
@@ -62,14 +62,18 @@ export function Compare({ config, models, onExit }: Props) {
   }
 
   function run() {
-    if ((!prompt.trim() && !att.images.length) || running) return;
+    if ((!prompt.trim() && !att.images.length && !att.docs.length) || running || att.reading) return;
     stopAll();
     const images = att.images;
     const messages = [
       ...(config.system.trim() ? [{ role: "system", content: config.system }] : []),
-      { role: "user", content: userContent(prompt, images) },
+      { role: "user", content: userContent(prompt, images, att.docs) },
     ];
-    setLastPrompt((prompt.trim() || "Describe this image.") + (images.length ? `  [+${images.length} image${images.length > 1 ? "s" : ""}]` : ""));
+    const extras = [
+      images.length ? `${images.length} image${images.length > 1 ? "s" : ""}` : "",
+      ...att.docs.map((d) => d.name),
+    ].filter(Boolean);
+    setLastPrompt((prompt.trim() || (att.docs.length ? "Review this diagram for security issues." : "Describe this image.")) + (extras.length ? `  [+${extras.join(", ")}]` : ""));
     aborts.current = cols.map(() => new AbortController());
 
     cols.forEach((c, i) => {
@@ -185,7 +189,7 @@ export function Compare({ config, models, onExit }: Props) {
 
       <div className="composer">
         <div className="composer-box" onDragOver={(e) => e.preventDefault()} onDrop={att.onDrop}>
-          <AttachChips images={att.images} onRemove={att.remove} />
+          <AttachChips images={att.images} docs={att.docs} reading={att.reading} onRemove={att.remove} onRemoveDoc={att.removeDoc} />
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
@@ -198,7 +202,7 @@ export function Compare({ config, models, onExit }: Props) {
             <input
               ref={fileRef}
               type="file"
-              accept="image/*"
+              accept={ATTACH_ACCEPT}
               multiple
               hidden
               onChange={(e) => {
@@ -214,7 +218,7 @@ export function Compare({ config, models, onExit }: Props) {
             {running ? (
               <button className="send-btn stop" onClick={stopAll} title="Stop all">■</button>
             ) : (
-              <button className="send-btn" onClick={run} disabled={!prompt.trim() && !att.images.length} title="Run on all models">↑</button>
+              <button className="send-btn" onClick={run} disabled={(!prompt.trim() && !att.images.length && !att.docs.length) || att.reading} title="Run on all models">↑</button>
             )}
           </div>
         </div>

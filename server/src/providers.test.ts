@@ -13,6 +13,15 @@ describe("providers", () => {
     expect(providers.clientFor("openrouter/anthropic/claude-sonnet-4.5")).toMatchObject({ provider: "openrouter", model: "anthropic/claude-sonnet-4.5" });
   });
 
+  it("spots uncurated NVIDIA vision models from their ids", () => {
+    for (const id of ["meta/llama-3.2-11b-vision-instruct", "meta/llama-3.2-90b-vision-instruct", "microsoft/phi-3-vision-128k-instruct", "acme/model-vl-7b", "acme/model-vl"]) {
+      expect(providers.looksLikeVision(id), id).toBe(true);
+    }
+    for (const id of ["z-ai/glm-5.3-flash", "nvidia/nemotron-3.5-lightning-30b-a3b", "acme/evolve-7b", "acme/vlad-1"]) {
+      expect(providers.looksLikeVision(id), id).toBe(false);
+    }
+  });
+
   it("normalises an OpenRouter catalogue entry into the Playground's shape", () => {
     const m = providers.normaliseOpenRouter({
       id: "anthropic/claude-sonnet-4.5", name: "Anthropic: Claude Sonnet 4.5", context_length: 1_000_000,

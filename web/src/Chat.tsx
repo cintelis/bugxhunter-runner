@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import type { BotConfig, ChatImage, ChatMsg, SCXModel, ToolCall } from "./types";
+import type { BotConfig, ChatDoc, ChatImage, ChatMsg, SCXModel, ToolCall } from "./types";
 import { dictate, speechSupported } from "./voice";
-import { Markdown } from "./Markdown";
 import { BootSequence, TerminalBar } from "./Terminal";
 import { PaperclipIcon } from "./icons";
 import { DEFAULT_STARTERS, presetFor } from "./presets";
 import { formatTiming } from "./format";
-import { AttachChips, useImageAttach } from "./imageAttach";
+import { ATTACH_ACCEPT, AttachChips, useImageAttach } from "./imageAttach";
+import { RichReply } from "./DrawioBlock";
 
 interface Props {
   config: BotConfig;
@@ -14,15 +14,17 @@ interface Props {
   messages: ChatMsg[];
   busy: boolean;
   error: string | null;
-  onSend: (text: string, images?: ChatImage[]) => void;
+  onSend: (text: string, images?: ChatImage[], docs?: ChatDoc[]) => void;
   onStop: () => void;
   onReset: () => void;
   onToolResult: (call: ToolCall, result: string) => void;
   /** Switch to side-by-side model comparison. */
   onCompare: () => void;
+  /** Switch to the threat-model canvas. */
+  onCanvas: () => void;
 }
 
-export function Chat({ config, activeModel, messages, busy, error, onSend, onStop, onReset, onToolResult, onCompare }: Props) {
+export function Chat({ config, activeModel, messages, busy, error, onSend, onStop, onReset, onToolResult, onCompare, onCanvas }: Props) {
   const [input, setInput] = useState("");
   const att = useImageAttach();
   const images = att.images;
@@ -71,8 +73,8 @@ export function Chat({ config, activeModel, messages, busy, error, onSend, onSto
   }, [messages]);
 
   function submit() {
-    if ((!input.trim() && !images.length) || busy || blocked) return;
-    onSend(input, images.length ? images : undefined);
+    if ((!input.trim() && !images.length && !att.docs.length) || busy || blocked || att.reading) return;
+    onSend(input, images.length ? images : undefined, att.docs.length ? att.docs : undefined);
     setInput("");
     att.clear();
   }
@@ -106,6 +108,7 @@ export function Chat({ config, activeModel, messages, busy, error, onSend, onSto
         <span className={"status-pill" + (busy ? " live" : "")}>
           <span className="dot" />{busy ? (config.stream ? "streaming" : "thinking") : "ready"}
         </span>
+        <button className="btn ghost sm" onClick={onCanvas} disabled={busy} title="Threat-model canvas: map a system from a diagram and track its findings">canvas</button>
         <button className="btn ghost sm" onClick={onCompare} disabled={busy} title="Ask 2–3 models the same question side by side">compare</button>
         <button className="btn ghost sm" onClick={onReset} disabled={busy}>clear</button>
       </TerminalBar>
@@ -140,7 +143,7 @@ export function Chat({ config, activeModel, messages, busy, error, onSend, onSto
         )}
 
         {visible.map((m, i) => (
-          <MessageRow key={i} msg={m} streaming={busy && i === visible.length - 1} onToolResult={onToolResult} />
+          <MessageRow key={i} msg={m} streaming={busy && i === visible.length - 1} onToolResult={onToolResult} onFix={busy ? undefined : (t) => onSend(t)} />
         ))}
 
         {error && <div className="error-banner">{error}</div>}
@@ -154,7 +157,7 @@ export function Chat({ config, activeModel, messages, busy, error, onSend, onSto
           onDragOver={(e) => e.preventDefault()}
           onDrop={att.onDrop}
         >
-          <AttachChips images={images} onRemove={att.remove} />
+          <AttachChips images={images} docs={att.docs} reading={att.reading} onRemove={att.remove} onRemoveDoc={att.removeDoc} />
           <textarea
             ref={inputRef}
             value={input}
@@ -166,15 +169,15 @@ export function Chat({ config, activeModel, messages, busy, error, onSend, onSto
               listening
                 ? "Listening…"
                 : seesImages
-                  ? `Message ${modelName}… (attach, paste or drop an image to review)`
-                  : `Message ${modelName}…`
+                  ? `Message ${modelName}… (attach, paste or drop an image or a .drawio file to review)`
+                  : `Message ${modelName}… (attach or drop a .drawio file to review a diagram)`
             }
           />
           <div className="composer-bar">
             <input
               ref={fileRef}
               type="file"
-              accept="image/*"
+              accept={ATTACH_ACCEPT}
               multiple
               hidden
               onChange={(e) => {
@@ -186,11 +189,16 @@ export function Chat({ config, activeModel, messages, busy, error, onSend, onSto
               className="icon-btn attach-btn"
               onClick={() => fileRef.current?.click()}
               disabled={busy}
-              title={seesImages ? "Attach images (or paste / drop them)" : "Attach images (pick a vision model to send them)"}
-              aria-label="Attach images"
+              title={seesImages ? "Attach images or draw.io diagrams (or paste / drop them)" : "Attach draw.io diagrams (images need a vision model)"}
+              aria-label="Attach images or diagrams"
             >
               <PaperclipIcon />
             </button>
+            {!blocked && !att.attachError && att.docs.length > 0 && config.maxTokens < 12000 && (
+              <span className="hint" style={{ margin: "0 8px" }} title="Reasoning models think before they answer; a short limit can end the reply before any text">
+                Diagram reviews can need 10–16k output tokens; Max tokens is {config.maxTokens.toLocaleString()}.
+              </span>
+            )}
             {(blocked || att.attachError) && (
               <span className="hint" style={{ color: "var(--amber)", margin: "0 8px" }}>
                 {blocked ? `${modelName} can't see images — pick a vision model (e.g. Nemotron 3.5 Super VL)` : att.attachError}
@@ -219,8 +227,10 @@ export function Chat({ config, activeModel, messages, busy, error, onSend, onSto
   );
 }
 
-function MessageRow({ msg, streaming, onToolResult }: {
+function MessageRow({ msg, streaming, onToolResult, onFix }: {
   msg: ChatMsg; streaming: boolean; onToolResult: (c: ToolCall, r: string) => void;
+  /** Send a "fix your diagram" message (absent while a reply is streaming). */
+  onFix?: (text: string) => void;
 }) {
   const isUser = msg.role === "user";
   const isTool = msg.role === "tool";
@@ -251,6 +261,16 @@ function MessageRow({ msg, streaming, onToolResult }: {
               ))}
             </div>
           ) : null}
+          {msg.docs?.length ? (
+            <div className="attach-row bubble-docs">
+              {msg.docs.map((d, i) => (
+                <span className="attach-chip doc" key={i} title={`Sent as an exact outline (${d.text.length.toLocaleString()} characters)`}>
+                  <span className="attach-doc-icon" aria-hidden>◇</span>
+                  <span className="attach-name">{d.name}</span>
+                </span>
+              ))}
+            </div>
+          ) : null}
         </div>
       </div>
     );
@@ -261,7 +281,7 @@ function MessageRow({ msg, streaming, onToolResult }: {
       <div className="avatar" aria-hidden>▶</div>
       <div className="msg-body">
         <div>
-          {msg.content ? <Markdown text={msg.content} /> : null}
+          {msg.content ? <RichReply text={msg.content} streaming={streaming} onFix={onFix} /> : null}
           {streaming && !msg.tool_calls && <span className="cursor" />}
           {msg.tool_calls?.map((tc) => (
             <ToolCallCard key={tc.id} call={tc} onResult={onToolResult} />

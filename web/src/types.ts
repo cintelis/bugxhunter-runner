@@ -19,11 +19,21 @@ export interface ChatImage {
   url: string;
 }
 
+/** A draw.io diagram attached to a Playground user turn, sent as a text outline (see wire.ts). */
+export interface ChatDoc {
+  name: string;
+  /** The outline the render service made from the file. */
+  text: string;
+  pages?: string[];
+}
+
 export interface ChatMsg {
   role: "system" | "user" | "assistant" | "tool";
   content: string | null;
   /** Images sent with a user turn (vision models only); sent as image_url parts. */
   images?: ChatImage[];
+  /** draw.io diagrams sent with a user turn, as outlines appended to the text. */
+  docs?: ChatDoc[];
   tool_calls?: import("../../shared/scx").ToolCall[];
   tool_call_id?: string;
   /** UI-only: live token usage attached to assistant turns. */
@@ -56,4 +66,6 @@ export interface BotConfig {
   useKnowledge: boolean;
   /** Speak assistant replies aloud (browser TTS). */
   speak: boolean;
+  /** Save Playground chats to the runner, sealed with the vault key. */
+  saveSessions: boolean;
 }

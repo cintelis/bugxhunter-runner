@@ -264,6 +264,25 @@ export function setItem(name: string, value: string) {
   audit("vault.item.set", { name });
 }
 
+/**
+ * Seal data for another at-rest store (Playground sessions) with the vault key, which never
+ * leaves this module. The AAD binds the ciphertext to its record, so a sealed blob can't be
+ * moved to another record and still open. Needs a vault that is set up and unlocked.
+ */
+export function sealData(plaintext: string, aad: string): Sealed {
+  if (!load()) throw httpError(409, "Set up the vault (sidebar → keys) to save Playground sessions; they are encrypted with it.");
+  if (!dek) throw httpError(503, "The vault is sealed (locked). Unlock it to save.");
+  touch();
+  return seal(dek, plaintext, aad);
+}
+
+/** Open data sealed by sealData(). Throws if sealed, or if the blob or its AAD was tampered with. */
+export function openData(sealed: Sealed, aad: string): string {
+  if (!dek) throw httpError(503, "The vault is sealed (locked). Unlock it to open saved sessions.");
+  touch();
+  return open(dek, sealed, aad).toString("utf8");
+}
+
 export function deleteItem(name: string) {
   const v = load();
   if (!v) throw httpError(404, "No vault yet.");

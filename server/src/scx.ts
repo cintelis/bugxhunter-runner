@@ -114,6 +114,12 @@ export class SCXClient {
         },
         body: json !== undefined ? JSON.stringify(json) : rest.body,
       });
+    } catch (e) {
+      if (ctrl.signal.aborted) {
+        const host = new URL(this.baseUrl).host;
+        throw new SCXError(504, `${host} did not start answering within ${Math.round(this.timeoutMs / 1000)}s. The model may be busy or queued; try again or pick another model.`, "timeout");
+      }
+      throw e;
     } finally {
       clearTimeout(t);
     }

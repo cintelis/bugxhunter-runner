@@ -11,7 +11,7 @@ Don't open a public issue for security problems.
 - **Signed.** Every release's `checksums.txt` is signed with the Cintelis
   release key, an Ed25519 key kept offline by the maintainer and never
   stored on GitHub. It covers the release archives and `images.txt`, which
-  pins both container images by digest. `scripts/verify-release.sh` refuses
+  pins the container images (runner, agent, agent-slim and render) by digest. `scripts/verify-release.sh` refuses
   any release whose signature doesn't verify.
 - **Built by CI, with provenance.** Release archives and images are built by
   this repository's release workflow and carry a signed build-provenance
@@ -112,8 +112,7 @@ ssh-keygen -Y verify -f allowed_signers -I bugxhunter-release -n bugxhunter-rele
 sha256sum --ignore-missing -c checksums.txt
 
 # 3. pull the images by the digests in the signed images.txt, not by tag
-docker pull "$(sed -n 1p images.txt)"
-docker pull "$(sed -n 2p images.txt)"
+while read -r ref; do docker pull "$ref"; done < images.txt
 
 # 4. optionally, they were built by this repository's release workflow
 gh attestation verify bugxhunter-runner_<version>_app.tar.gz --repo cintelis/bugxhunter-runner

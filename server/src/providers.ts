@@ -22,9 +22,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { SCXModel } from "../../shared/scx.js";
-import { SCXClient } from "./scx.js";
+import { SCXClient, SCXError } from "./scx.js";
 import { httpError } from "./errors.js";
 import * as vault from "./vault.js";
+import * as nvidiaHealth from "./nvidia-health.js";
 
 export type ProviderId = "scx" | "openrouter" | "nvidia";
 export type KeySource = "vault" | "file" | "env" | "opencode-auth" | "none";
@@ -246,13 +247,16 @@ async function nvidiaCatalogueLive(): Promise<string[]> {
   return data.map((m) => m.id).filter((id): id is string => Boolean(id));
 }
 
+/** Uncurated NVIDIA models that take images, judged from the id ("...-vision-...", "...-vl-..."). */
+export const looksLikeVision = (id: string) => /vision|(^|[-/])vl($|-)/i.test(id);
+
 /** A live NVIDIA model without curated metadata: the raw id with best-effort defaults. */
 function nvidiaLiveModel(id: string): SCXModel {
   return {
     id: `nim/${id}`,
     name: id,
     created: 0,
-    input_modalities: ["text"],
+    input_modalities: looksLikeVision(id) ? ["text", "image"] : ["text"],
     output_modalities: ["text"],
     context_length: null,
     max_output_length: null,
@@ -276,12 +280,27 @@ async function nvidiaModels(): Promise<SCXModel[]> {
   try {
     const ids = await nvidiaCatalogueLive();
     if (!ids.length) return curated();
+    void nvidiaHealth.probeIfDue(ids, probeNvidia);
     return ids
+      .filter((id) => !nvidiaHealth.isRetired(id))
       .map((id) => (NVIDIA_CATALOGUE[id] ? nvidiaModel(id, NVIDIA_CATALOGUE[id]) : nvidiaLiveModel(id)))
       .sort((a, b) => a.name.localeCompare(b.name));
   } catch (e) {
     console.error("[nvidia] model list failed:", (e as Error).message);
     return curated();
+  }
+}
+
+/** One tiny chat to see whether an NVIDIA model's endpoint still exists (404 = retired). */
+// A retired model answers 404 at once; a slow or queued one is just "unknown", so keep this short.
+const probeClient = new SCXClient({ apiKey: () => apiKey("nvidia"), baseUrl: PROVIDERS.nvidia.baseUrl, timeoutMs: 15_000 });
+
+export async function probeNvidia(id: string): Promise<nvidiaHealth.ProbeResult> {
+  try {
+    await probeClient.chat({ model: id, messages: [{ role: "user", content: "hi" }], max_tokens: 1, stream: false });
+    return "ok";
+  } catch (e) {
+    return e instanceof SCXError && e.status === 404 ? "missing" : "unknown";
   }
 }
 

@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchModels, runChat } from "./api";
 import { agentStatus, agentCheckDirectory, type AgentStatus } from "./agentApi";
-import type { BotConfig, ChatImage, ChatMsg, SCXModel, ToolCall } from "./types";
+import type { BotConfig, ChatDoc, ChatImage, ChatMsg, SCXModel, ToolCall } from "./types";
 import { stripToolIds, withToolIds } from "./tools";
 import { Sidebar, type Mode } from "./Sidebar";
 import { Chat } from "./Chat";
 import { Compare } from "./Compare";
+import { Canvas } from "./Canvas";
 import { userContent } from "./wire";
+import { deleteSession, listSessions, loadSession, newSessionId, saveSession, type SavedSession } from "./sessionsApi";
 import { AgentPanel } from "./AgentPanel";
 import { speak, stopSpeaking } from "./voice";
 
@@ -30,6 +32,7 @@ const DEFAULT_CONFIG: BotConfig = {
   tools: [],
   useKnowledge: false,
   speak: false,
+  saveSessions: true,
 };
 
 export interface RunnerSettings {
@@ -153,7 +156,7 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [comparing, setComparing] = useState(false);
+  const [view, setView] = useState<"chat" | "compare" | "canvas">("chat");
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -170,6 +173,72 @@ export default function App() {
 
   const activeModel = useMemo(() => models.find((m) => m.id === config.model), [models, config.model]);
 
+  // --- Saved chats: sealed with the vault key on the runner (see sessionsApi.ts) ---
+  // A chat gets an id on its first save and is re-saved after each finished turn. lastSaved
+  // stops a re-save of what was just loaded or saved, and a save while a reply streams.
+  const [chatId, setChatId] = useState<string | null>(null);
+  const [savedChats, setSavedChats] = useState<SavedSession[] | null>(null);
+  const [saveStatus, setSaveStatus] = useState<{ ok: boolean; text: string } | null>(null);
+  const lastSaved = useRef<ChatMsg[] | null>(null);
+  const chatIdRef = useRef<string | null>(null);
+
+  const refreshChats = useCallback(() => {
+    listSessions("chat")
+      .then((s) => setSavedChats(s))
+      .catch((e) => setSaveStatus({ ok: false, text: String(e.message ?? e) }));
+  }, []);
+  useEffect(() => {
+    if (mode === "playground") refreshChats();
+  }, [mode, refreshChats]);
+
+  useEffect(() => {
+    if (busy || !config.saveSessions || messages === lastSaved.current) return;
+    const first = messages.find((m) => m.role === "user");
+    if (!first) return;
+    lastSaved.current = messages;
+    const id = chatIdRef.current ?? newSessionId();
+    chatIdRef.current = id;
+    setChatId(id);
+    const title = (first.content?.trim() || (first.docs?.length ? `Diagram review: ${first.docs[0].name}` : first.images?.length ? "Image review" : "Chat")).replace(/\s+/g, " ").slice(0, 80);
+    saveSession("chat", id, title, { v: 1, model: config.model, system: config.system, messages })
+      .then(() => {
+        setSaveStatus({ ok: true, text: "Saved, encrypted with your vault" });
+        refreshChats();
+      })
+      .catch((e) => setSaveStatus({ ok: false, text: `Not saved: ${String(e.message ?? e)}` }));
+  }, [busy, messages, config.saveSessions, config.model, config.system, refreshChats]);
+
+  async function openChat(id: string) {
+    if (busy) return;
+    try {
+      const s = await loadSession<{ model?: string; system?: string; messages: ChatMsg[] }>("chat", id);
+      const msgs = Array.isArray(s.body?.messages) ? s.body.messages : [];
+      lastSaved.current = msgs;
+      chatIdRef.current = id;
+      setChatId(id);
+      setMessages(msgs);
+      setError(null);
+      setView("chat");
+      setConfig((c) => ({
+        ...c,
+        ...(s.body.model && models.some((m) => m.id === s.body.model) ? { model: s.body.model } : {}),
+        ...(typeof s.body.system === "string" ? { system: s.body.system } : {}),
+      }));
+    } catch (e) {
+      setSaveStatus({ ok: false, text: String((e as Error).message ?? e) });
+    }
+  }
+
+  async function removeChat(id: string) {
+    try {
+      await deleteSession("chat", id);
+      if (chatIdRef.current === id) reset();
+      refreshChats();
+    } catch (e) {
+      setSaveStatus({ ok: false, text: String((e as Error).message ?? e) });
+    }
+  }
+
   /** Build the wire messages: system prompt + transcript. */
   function buildWireMessages(history: ChatMsg[]) {
     const wire: any[] = [];
@@ -181,7 +250,7 @@ export default function App() {
         wire.push({ role: "tool", content: m.content, tool_call_id: m.tool_call_id });
       } else {
         // A user turn with images goes out in the OpenAI vision shape (see wire.ts).
-        wire.push({ role: m.role, content: m.role === "user" ? userContent(m.content, m.images) : m.content });
+        wire.push({ role: m.role, content: m.role === "user" ? userContent(m.content, m.images, m.docs) : m.content });
       }
     }
     return wire;
@@ -265,9 +334,9 @@ export default function App() {
     abortRef.current = null;
   }
 
-  function send(text: string, images?: ChatImage[]) {
-    if ((!text.trim() && !images?.length) || busy) return;
-    const history: ChatMsg[] = [...messages, { role: "user", content: text, ...(images?.length ? { images } : {}) }];
+  function send(text: string, images?: ChatImage[], docs?: ChatDoc[]) {
+    if ((!text.trim() && !images?.length && !docs?.length) || busy) return;
+    const history: ChatMsg[] = [...messages, { role: "user", content: text, ...(images?.length ? { images } : {}), ...(docs?.length ? { docs } : {}) }];
     setMessages(history);
     void runTurn(history);
   }
@@ -285,10 +354,14 @@ export default function App() {
     setBusy(false);
   }
 
+  /** Start a new chat; the current one stays saved. */
   function reset() {
     stop();
     setMessages([]);
     setError(null);
+    chatIdRef.current = null;
+    setChatId(null);
+    lastSaved.current = null;
   }
 
   return (
@@ -317,6 +390,13 @@ export default function App() {
         modelError={modelError}
         activeModel={activeModel}
         onReset={reset}
+        saved={{
+          list: savedChats,
+          activeId: chatId,
+          status: saveStatus,
+          onOpen: (id) => void openChat(id),
+          onDelete: (id) => void removeChat(id),
+        }}
       />
       <div
         className="splitter"
@@ -349,8 +429,10 @@ export default function App() {
             </div>
           </main>
         )
-      ) : comparing ? (
-        <Compare config={config} models={models} onExit={() => setComparing(false)} />
+      ) : view === "compare" ? (
+        <Compare config={config} models={models} onExit={() => setView("chat")} />
+      ) : view === "canvas" ? (
+        <Canvas config={config} models={models} onExit={() => setView("chat")} />
       ) : (
         <Chat
           config={config}
@@ -362,7 +444,8 @@ export default function App() {
           onStop={stop}
           onReset={reset}
           onToolResult={submitToolResult}
-          onCompare={() => setComparing(true)}
+          onCompare={() => setView("compare")}
+          onCanvas={() => setView("canvas")}
         />
       )}
     </div>

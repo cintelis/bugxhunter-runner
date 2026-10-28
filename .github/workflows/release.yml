@@ -20,6 +20,7 @@ permissions:
 env:
   IMAGE_RUNNER: ghcr.io/${{ github.repository_owner }}/bugxhunter-runner
   IMAGE_AGENT: ghcr.io/${{ github.repository_owner }}/bugxhunter-agent
+  IMAGE_RENDER: ghcr.io/${{ github.repository_owner }}/bugxhunter-render
 
 jobs:
   # Fail fast, before six image builds: the tag must be the package version.
@@ -54,6 +55,8 @@ jobs:
           - { image: agent,  flavor: "",      arch: arm64 }
           - { image: agent,  flavor: "-slim", arch: amd64 }
           - { image: agent,  flavor: "-slim", arch: arm64 }
+          - { image: render, flavor: "",      arch: amd64 }
+          - { image: render, flavor: "",      arch: arm64 }
     # native runners: no QEMU, so the agent toolchain and the OpenCode warm-up run at full speed
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     permissions:
@@ -100,6 +103,7 @@ jobs:
       runner_digest: ${{ steps.join.outputs.runner_digest }}
       agent_digest: ${{ steps.join.outputs.agent_digest }}
       agent_slim_digest: ${{ steps.join.outputs.agent_slim_digest }}
+      render_digest: ${{ steps.join.outputs.render_digest }}
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -119,7 +123,7 @@ jobs:
         run: |
           set -eu
           # key = image + flavour suffix, as the digest files are named
-          for key in runner agent agent-slim; do
+          for key in runner agent agent-slim render; do
             image="${key%-slim}"; flavor="${key#"$image"}"
             ref="ghcr.io/${{ github.repository_owner }}/bugxhunter-$image"
             refs=""
@@ -145,6 +149,11 @@ jobs:
         with:
           subject-name: ${{ env.IMAGE_AGENT }}
           subject-digest: ${{ steps.join.outputs.agent_slim_digest }}
+          push-to-registry: true
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_RENDER }}
+          subject-digest: ${{ steps.join.outputs.render_digest }}
           push-to-registry: true
 
   release:
@@ -197,6 +206,7 @@ jobs:
             echo "${IMAGE_RUNNER}:v${VERSION}@${{ needs.manifests.outputs.runner_digest }}"
             echo "${IMAGE_AGENT}:v${VERSION}@${{ needs.manifests.outputs.agent_digest }}"
             echo "${IMAGE_AGENT}:v${VERSION}-slim@${{ needs.manifests.outputs.agent_slim_digest }}"
+            echo "${IMAGE_RENDER}:v${VERSION}@${{ needs.manifests.outputs.render_digest }}"
           } > dist/images.txt
           (cd dist && for f in *.tar.gz images.txt; do sha256sum "$f"; done > checksums.txt && cat images.txt checksums.txt)
 

@@ -9,6 +9,29 @@ export interface Preset {
   starters: string[];
 }
 
+/** How to write a drawgen spec (https://github.com/cintelis/drawio-tools), for system prompts. */
+export const DRAWIO_GUIDE = `To draw a diagram, put a drawgen spec (YAML) in a fenced block tagged drawio; the app renders it as an editable draw.io diagram. One diagram per block. Format:
+
+\`\`\`drawio
+title: Order flow            # required
+layout: auto                 # let the app place nodes; omit x/y on nodes
+direction: right             # right (default) or down
+nodes:                       # id, label, kind are required; sub is an optional second line
+  - {id: user, label: Shopper, kind: actor}
+  - {id: api, label: Orders API, kind: service, sub: "Node 22"}
+  - {id: db, label: Postgres, kind: datastore}
+edges:                       # from, to required; label optional; style optional
+  - {from: user, to: api, label: HTTPS}
+  - {from: api, to: db, label: SQL, style: data}
+legend: true
+\`\`\`
+
+kind (colour means type only, the label carries the meaning): actor, external, service, ai, worker, datastore, queue, ui, gov, security, decision, step, terminal, note.
+edge style: sync (default), async, data, ai, weak. Edge keys: from, to, label, style, both, curved.
+Zones need manual layout (x, y, w, h on zones and x, y on every node), so prefer layout: auto without zones.
+Keep labels short (two or three words), at most about 15 nodes, ids lowercase without spaces. Draw at most one edge between any two nodes: combine what flows between them into one label (e.g. "GET /user, /download, /run"). Quote any label that contains : ? # { } [ ] or a comma, e.g. label: "GET /user?id=". Put explanations in prose outside the block, not in the diagram.
+For an attack path use kind: actor for the attacker, step for each stage, and put the technique or CWE in sub. Use decision for branches.`;
+
 export const PRESETS: Preset[] = [
   {
     id: "code-review",
@@ -41,6 +64,18 @@ export const PRESETS: Preset[] = [
       "Review the attached diagram for security issues.",
       "What would an attacker target first in this screenshot?",
       "Check this login page screenshot for security and phishing red flags.",
+    ],
+  },
+  {
+    id: "draw",
+    label: "Diagram drawer",
+    system:
+      "You explain systems, code and security findings with diagrams. Read what you are given, then draw it: data flows, request paths, trust relationships or attack paths. Draw only what the material shows and say what you assumed. After the diagram, add two to four sentences on what it shows and the main security points.\n\n" +
+      DRAWIO_GUIDE,
+    starters: [
+      "Draw the request flow of this code, from the user to every data store:\n\n",
+      "Draw the attack path for these findings, from initial access to impact:\n\n",
+      "Draw this system's components and data flows, marking which links are unencrypted:\n\n",
     ],
   },
   {

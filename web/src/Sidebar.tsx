@@ -14,6 +14,7 @@ import { FilesDialog } from "./FilesDialog";
 import { FoldersIcon, FolderIcon, GitHubIcon } from "./icons";
 import { isChatModel, matchesQuery } from "./modelFilter";
 import { PRESETS, presetFor } from "./presets";
+import type { SavedSession } from "./sessionsApi";
 
 export type Mode = "runner" | "playground";
 
@@ -40,6 +41,16 @@ interface Props {
   modelError: string | null;
   activeModel?: SCXModel;
   onReset: () => void;
+  /** Saved Playground chats (sealed on the runner with the vault key). */
+  saved: SavedChats;
+}
+
+export interface SavedChats {
+  list: SavedSession[] | null;
+  activeId: string | null;
+  status: { ok: boolean; text: string } | null;
+  onOpen: (id: string) => void;
+  onDelete: (id: string) => void;
 }
 
 const EXAMPLE_TOOL: ToolDef = {
@@ -57,7 +68,7 @@ const EXAMPLE_TOOL: ToolDef = {
 
 export function Sidebar({
   onCollapse, sessions, mode, setMode, runner, status, statusError, onOpenDirectory, onForgetDirectory,
-  config, setConfig, models, modelError, activeModel, onReset,
+  config, setConfig, models, modelError, activeModel, onReset, saved,
 }: Props) {
   const set = <K extends keyof BotConfig>(k: K, v: BotConfig[K]) => setConfig((c) => ({ ...c, [k]: v }));
 
@@ -120,6 +131,17 @@ export function Sidebar({
     .map((p) => [p, shownModels.filter((m) => (m.provider ?? "scx") === p)] as const)
     .filter(([, list]) => list.length > 0);
   const activePreset = presetFor(config.system);
+
+  // NVIDIA models the runner hid because their endpoints answer 404 (retired upstream).
+  const hasNvidia = models.some((m) => m.provider === "nvidia");
+  const [retired, setRetired] = useState<string[]>([]);
+  useEffect(() => {
+    if (!hasNvidia) return;
+    fetch("/api/models/nvidia-health")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => setRetired(Array.isArray(j?.retired) ? j.retired : []))
+      .catch(() => {});
+  }, [hasNvidia, models]);
 
   function updateTool(i: number, patch: Partial<ToolDef["function"]>) {
     setConfig((c) => {
@@ -233,6 +255,11 @@ export function Sidebar({
               <input type="checkbox" checked={showAllModels} onChange={(e) => setShowAllModels(e.target.checked)} />
               Show non-chat models ({hiddenCount} hidden: embeddings, guards, speech…)
             </label>
+          )}
+          {retired.length > 0 && (
+            <div className="hint" title={retired.join(", ")}>
+              {retired.length} retired NVIDIA model{retired.length === 1 ? "" : "s"} hidden (no longer served)
+            </div>
           )}
           {modelError && <div className="hint" style={{ color: "var(--danger)" }}>{modelError}</div>}
           {activeModel?.description && <div className="hint">{activeModel.description}</div>}
@@ -386,11 +413,19 @@ export function Sidebar({
           {" "}SCX-native audio (scx-tts/scx-stt) is gated on this tier.
         </div>
 
-        <div className="section-title">Session</div>
+        <div className="section-title">Saved chats</div>
+        <label className="hint" style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
+          <input type="checkbox" checked={config.saveSessions} onChange={(e) => set("saveSessions", e.target.checked)} />
+          Save chats on this runner, encrypted with your vault
+        </label>
         <div className="btn-row">
-          <button className="btn block ghost" onClick={onReset}>Clear chat</button>
-          <button className="btn block ghost" onClick={exportConfig}>Export</button>
+          <button className="btn block ghost" onClick={onReset}>+ New chat</button>
+          <button className="btn block ghost" onClick={exportConfig} title="Download the bot settings as JSON">Export settings</button>
         </div>
+        {saved.status && (
+          <div className="hint" style={{ color: saved.status.ok ? "var(--muted)" : "var(--amber)" }}>{saved.status.text}</div>
+        )}
+        <SavedChatList saved={saved} />
       </div>
       )}
       <div className="sidebar-foot">
@@ -500,6 +535,52 @@ function RunnerSidebar({ runner, status, statusError, onOpen, onForget, sessions
         </div>
       )}
     </div>
+  );
+}
+
+/** Saved Playground chats: click to reopen, ✕ (twice) to delete for good. */
+function SavedChatList({ saved }: { saved: SavedChats }) {
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  useEffect(() => {
+    if (!confirming) return;
+    const t = setTimeout(() => setConfirming(null), 3000);
+    return () => clearTimeout(t);
+  }, [confirming]);
+
+  const list = saved.list ?? [];
+  if (saved.list && !list.length) return <div className="hint">No saved chats yet.</div>;
+  const shown = showAll ? list : list.slice(0, 8);
+  return (
+    <>
+      <div className="session-list">
+        {shown.map((s) => (
+          <div key={s.id} className={"session-item" + (s.id === saved.activeId ? " on" : "")}>
+            <button className="session-open" onClick={() => saved.onOpen(s.id)} title={s.title}>
+              <span className="session-title">{s.title || "Untitled chat"}</span>
+              <span className="session-meta">{timeAgo(Date.parse(s.updatedAt))}</span>
+            </button>
+            <button
+              className={"session-del" + (confirming === s.id ? " confirm" : "")}
+              onClick={() => {
+                if (confirming !== s.id) return setConfirming(s.id);
+                setConfirming(null);
+                saved.onDelete(s.id);
+              }}
+              title={confirming === s.id ? "Click again to delete" : "Delete chat"}
+              aria-label={confirming === s.id ? "Confirm delete" : "Delete chat"}
+            >
+              {confirming === s.id ? "Delete?" : "✕"}
+            </button>
+          </div>
+        ))}
+      </div>
+      {list.length > 8 && (
+        <button className="btn ghost sm block" onClick={() => setShowAll((v) => !v)}>
+          {showAll ? "Show fewer" : `Show all ${list.length}`}
+        </button>
+      )}
+    </>
   );
 }
 

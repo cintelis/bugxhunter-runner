@@ -44,15 +44,18 @@ services:
       OPENCODE_URL: http://agent:4096
       OPEN_RUNNER_WORKSPACE: /workspace
       OPEN_RUNNER_LOG_DIR: /logs             # audit log, one JSONL file per day
+      OPEN_RUNNER_RENDER_URL: http://render:8080   # diagram specs -> editable .drawio.svg
     volumes:
       - workspace:/workspace               # same volume as the agent: attachments
       - logs:/logs                         # audit + egress logs; NOT mounted in the agent, so it can't edit them
       - runner-data:/data                  # the sealed key vault (ciphertext only; see SECURITY.md)
     ports:
       - "127.0.0.1:${OPEN_RUNNER_PORT:-8790}:8790"   # localhost only; put TLS in front before exposing
-    networks: [net]
+    networks: [net, render]
     depends_on:
       agent:
+        condition: service_healthy
+      render:
         condition: service_healthy
     read_only: true
     tmpfs: [/tmp]
@@ -88,6 +91,25 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  # Diagram renderer: turns the diagram specs models write in the Playground into
+  # editable .drawio.svg files (drawgen). Model output is parsed here, not in the
+  # runner that holds the keys: no internet (the `render` network is internal and
+  # shared only with the runner), no volumes, no secrets, read-only, tiny limits.
+  render:
+    image: ghcr.io/cintelis/bugxhunter-render:${BXH_VERSION:-latest}
+    build:
+      context: .
+      dockerfile: docker/render.Dockerfile
+    networks: [render]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 512m
+    cpus: 1
+    restart: unless-stopped
+
   # Passive egress logger: shares the agent's network namespace and sniffs its
   # outbound traffic (tcpdump), recording distinct destinations + DNS lookups to
   # /logs/egress-<date>.jsonl. Log-only — it never blocks traffic and
@@ -111,6 +133,8 @@ services:
 
 networks:
   net: {}   # normal bridge: agent + runner share it, agent reaches the internet via NAT
+  render:   # runner <-> render only; internal, so the renderer has no route out
+    internal: true
 
 volumes:
   workspace: {}

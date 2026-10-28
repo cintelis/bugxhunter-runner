@@ -26,6 +26,8 @@ jobs:
           - { image: agent,  flavor: "",      arch: arm64 }
           - { image: agent,  flavor: "-slim", arch: amd64 }
           - { image: agent,  flavor: "-slim", arch: arm64 }
+          - { image: render, flavor: "",      arch: amd64 }
+          - { image: render, flavor: "",      arch: arm64 }
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
@@ -74,7 +76,7 @@ jobs:
         run: |
           set -eu
           short="${GITHUB_SHA::7}"
-          for key in runner agent agent-slim; do
+          for key in runner agent agent-slim render; do
             image="${key%-slim}"; flavor="${key#"$image"}"
             ref="ghcr.io/${{ github.repository_owner }}/bugxhunter-$image"
             refs=""

@@ -32,3 +32,22 @@ describe("SCXError", () => {
     expect(e.name).toBe("SCXError");
   });
 });
+
+describe("SCXClient timeouts", () => {
+  it("reports an upstream that never answers as a 504 with a clear message", async () => {
+    const { SCXClient } = await import("./scx.js");
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = ((_u: unknown, init?: RequestInit) => new Promise((_, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("This operation was aborted", "AbortError")));
+    })) as typeof fetch;
+    try {
+      const c = new SCXClient({ apiKey: () => "k", baseUrl: "https://integrate.api.nvidia.com/v1", timeoutMs: 20 });
+      const err = await c.chat({ model: "m", messages: [] }).catch((e) => e);
+      expect(err).toBeInstanceOf(SCXError);
+      expect(err.status).toBe(504);
+      expect(err.message).toContain("integrate.api.nvidia.com did not start answering within 0s");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});

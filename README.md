@@ -15,8 +15,21 @@ green accents) and Fira Code throughout. Started from the `sovgov-poc` chatbot d
   `plan` (read-only) agent. Every file edit and shell command waits for your approval.
   Markdown replies, collapsible tool calls and reasoning, per-turn token counts, and a
   **Changes** view of what the agent edited (git repos only — OpenCode tracks changes via git).
-- **Playground** — chat with any SCX model directly (no agent), with tool-calling, JSON mode,
-  an embeddings-backed knowledge base and browser voice.
+- **Playground** — chat with any SCX, NVIDIA or OpenRouter model directly (no agent), with
+  tool-calling, JSON mode, an embeddings-backed knowledge base and browser voice. Also:
+  - **Security presets** (code review, threat modelling, diagram review, diagram drawing,
+    phishing, log triage) and **compare mode** (2–3 models side by side, with speed and tokens).
+  - **Images** for vision models, and **draw.io files** (`.drawio`, compressed or not, and
+    `.drawio.svg`) for any model: the file becomes an exact text outline of its zones, boxes,
+    legend colours and arrows, so labels are never misread.
+  - **Diagrams in replies**: a model writes a ```` ```drawio ```` spec and the app draws it as an
+    editable `.drawio.svg` ([drawgen](https://github.com/cintelis/drawio-tools)), checks it, and
+    can send the problems back for a fix.
+  - **Threat-model canvas**: build a model from a diagram or description, track findings,
+    scope and coverage, zoom and pan, export JSON, `findings.md`, SVG or draw.io.
+  - **Saved sessions**: chats and canvases are sealed with the vault key on the runner
+    (Docker: the `runner-data` volume), never in browser storage.
+  - Retired NVIDIA models (their endpoints answer 404) are found and hidden automatically.
 
 ## Screenshots
 
@@ -92,12 +105,17 @@ the size (`npx bugxhunter docker --slim`, or `BXH_AGENT_FLAVOR=-slim` in `.env`)
 key and turns on passkey sign-in. (`setup.ps1 -CopyScxKey` copies
 the key into `.env` instead, in the clear.)
 
-Two containers:
+Three containers (plus the egress logger):
 
 | Container | Holds | Network |
 |---|---|---|
 | `runner` | Web UI, login, SCX key, `/scx/v1` key proxy | shared bridge, published on 127.0.0.1 |
 | `agent` | OpenCode, the agent's shell + scan tools, `/workspace` volume | shared bridge — **direct internet** |
+| `render` | drawgen: model-written diagram specs → `.drawio.svg`, and `.drawio` files → outlines | internal network shared only with `runner` — **no internet** |
+
+- Model output and uploaded diagram files are parsed in `render`, not in the `runner` that holds
+  the keys: no volumes, no secrets, read-only, non-root, 512 MB and 1 CPU, each job in its own
+  process with a 10 s limit. drawgen is installed from a release wheel pinned by SHA-256.
 
 - The agent's model calls go to `runner`'s proxy with a proxy token; the proxy swaps in the real
   key and only allows `/chat/completions` and `/models`. **The SCX key never enters the agent
@@ -298,6 +316,8 @@ from a Sigilant checkout beside this one; the image takes the SDK built from an 
 | `ALLOWED_HOSTS` | localhost only | Extra `Host` header values to accept (comma list), e.g. the domain a reverse proxy serves. Everything else gets 403, which blocks DNS-rebinding attacks |
 | `OPEN_RUNNER_ALLOWED_ROOTS` | any folder | Local mode: folders the UI may open, PATH-style list (`;` on Windows, `:` elsewhere). Set it before sharing the app |
 | `OPENCODE_URL` | unset (spawn locally) | Use a remote OpenCode server (Docker sets `http://agent:4096`) |
+| `OPEN_RUNNER_RENDER_URL` | unset (diagrams off) | The render service for diagrams and `.drawio` files (Docker sets `http://render:8080`) |
+| `OPEN_RUNNER_PLAYGROUND_DIR` | `playground/` beside the vault | Saved Playground chats and canvases, sealed with the vault key |
 | `OPEN_RUNNER_WORKSPACE` | `/workspace` (local: `~/bugxhunter/repos`) | Remote mode: projects must live under this folder. Both modes: where GitHub clones land |
 | `SCX_PROXY_TOKEN` | unset | Enables the `/scx/v1` key proxy for the sandboxed agent |
 
@@ -351,9 +371,9 @@ npm test             # vitest: the pure logic in server/src and web/src
 npm run build        # web -> web/dist, server -> server/dist (what the Docker image ships)
 ```
 
-GitHub Actions: `ci.yml` runs the checks and builds both Docker images on every push and PR,
+GitHub Actions: `ci.yml` runs the checks (including the render service's Python tests) and builds the Docker images on every push and PR,
 `codeql.yml` scans for security issues weekly and on PRs, `docker-publish.yml` pushes the images to
-GHCR (`ghcr.io/cintelis/bugxhunter-runner` and `bugxhunter-agent`) on `master` and on `v*` tags, and Dependabot
+GHCR (`ghcr.io/cintelis/bugxhunter-runner`, `bugxhunter-agent` and `bugxhunter-render`) on `master` and on `v*` tags, and Dependabot
 keeps npm, Actions and base images current.
 
 Server and browser share one type contract in `shared/` (`agent.d.ts`, `scx.d.ts`): the server's
@@ -392,6 +412,11 @@ publisher** on npmjs.com set to this repository and `release.yml`, once; no npm 
 | `server/src/opencode.ts` | Starts/stops the OpenCode server, one SDK client per project folder, event mapping |
 | `server/src/index.ts` | Express: `/api/agent/*` (OpenCode) and `/api/chat`, `/api/models`, `/api/kb` (SCX) |
 | `server/src/scx.ts`, `rag.ts` | SCX client and in-memory knowledge base (Playground) |
+| `server/src/providers.ts`, `nvidia-health.ts` | NVIDIA / OpenRouter providers; hides NVIDIA models whose endpoints are retired |
+| `server/src/playground-store.ts` | Saved Playground sessions, sealed with the vault key |
+| `server/src/render.ts`, `docker/render-server.py`, `docker/drawio_outline.py` | The render service (diagrams, `.drawio` outlines) and the runner's client for it |
+| `web/src/Canvas.tsx`, `web/src/canvas/` | The threat-model canvas |
+| `web/src/DrawioBlock.tsx`, `diagrams.ts` | Diagrams in replies |
 | `shared/` | Type contract between server and browser |
 | `scripts/` | `sign-release.sh` (maintainer, offline key), `verify-release.sh` (users), `release-table.sh`, the release public key |
 | `web/src/AgentPanel.tsx` | Runner transcript, approvals and session flow; `DiffModal.tsx` and `QuestionCard.tsx` hold the Changes view and agent questions |
