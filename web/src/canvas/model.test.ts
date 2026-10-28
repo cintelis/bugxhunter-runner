@@ -107,10 +107,10 @@ describe("toDrawioSpec", () => {
 describe("buildBudget", () => {
   it("raises the limit for diagram files and respects the model's own cap", () => {
     expect(buildBudget(4096, false)).toBe(8192);
-    expect(buildBudget(4096, true)).toBe(32768);
-    expect(buildBudget(40000, true)).toBe(40000);
+    expect(buildBudget(4096, true)).toBe(65536);
+    expect(buildBudget(80000, true)).toBe(80000);
     expect(buildBudget(4096, true, 16000)).toBe(16000);
-    expect(buildBudget(4096, true, null)).toBe(32768);
+    expect(buildBudget(4096, true, null)).toBe(65536);
   });
 });
 
