@@ -1,6 +1,8 @@
 # Release: `git tag -a v1.2.3 -m "..." && git push origin v1.2.3` builds the
 # tag into a DRAFT release with signed build provenance. Nothing is published
-# until the maintainer verifies and signs it offline (scripts/sign-release.sh).
+# until the maintainer verifies and signs it offline (scripts/sign-release.sh),
+# the npm package included: the `npm` job runs when the release is published,
+# which is what the signing script does last, not when the tag is pushed.
 #
 # Images are built natively for linux/amd64 and linux/arm64 (Apple Silicon,
 # Graviton) on GitHub's own runners of each architecture, pushed by digest
@@ -13,6 +15,8 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -25,6 +29,7 @@ env:
 jobs:
   # Fail fast, before six image builds: the tag must be the package version.
   prepare:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
@@ -236,8 +241,11 @@ jobs:
   # package is attested to this workflow run; `npm audit signatures` checks it).
   # Needs the package's "trusted publisher" on npmjs.com to be this repository
   # and this workflow file, with direct publishing allowed; no token is stored.
+  # Runs on the `release: published` event, i.e. after the maintainer has
+  # verified and signed the draft, so npm never carries an unsigned release.
+  # The checkout is the release's tag; the tag must still match package.json.
   npm:
-    needs: release
+    if: github.event_name == 'release' && !github.event.release.prerelease
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -249,6 +257,12 @@ jobs:
           node-version: 22
           cache: npm
           registry-url: https://registry.npmjs.org
+      - name: Tag must match package.json
+        run: |
+          set -eu
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(node -p "require('./package.json').version")
+          [ "$tag" = "$pkg" ] || { echo "release is v$tag but package.json says $pkg" >&2; exit 1; }
       - run: npm install -g npm@latest # trusted publishing needs npm 11.5+
       - run: npm ci
       - run: npm run build

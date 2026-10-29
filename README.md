@@ -405,8 +405,9 @@ It asks for the key's passphrase once. Only admins can push `v*` tags.
 After publishing, the script regenerates the release table above (`scripts/release-table.sh`)
 and opens a pull request for it that merges itself once CI passes.
 
-The tag also publishes the npm package (`npm run pack:npm` assembles it from the same build;
-the workflow's `npm` job publishes it with provenance). That needs the package's **trusted
+Publishing the release (the signing script's last step) also publishes the npm package:
+the workflow's `npm` job runs on the *release published* event, so npm never carries an
+unsigned release (`npm run pack:npm` assembles it from the same build, with provenance). That needs the package's **trusted
 publisher** on npmjs.com set to this repository and `release.yml`, once; no npm token is stored.
 
 ## Layout
