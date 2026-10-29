@@ -76,7 +76,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
  * Claude models the agent may use (ANTHROPIC_MODELS, comma list of Anthropic model ids).
  * The Playground lists every model the key can use; the agent's picker only these.
  */
-export const ANTHROPIC_MODELS = (process.env.ANTHROPIC_MODELS ?? "claude-opus-5-5,claude-sonnet-5-5,claude-haiku-5-5")
+export const ANTHROPIC_MODELS = (process.env.ANTHROPIC_MODELS?.trim() || "claude-opus-5-5,claude-sonnet-5-5,claude-haiku-5-5")
   .split(",").map((s) => s.trim()).filter(Boolean);
 
 /** OpenRouter ids the agent may use (OPENROUTER_MODELS=anthropic/claude-sonnet-4.5,openai/gpt-6.1-sol). */
@@ -101,7 +101,7 @@ const NVIDIA_CATALOGUE: Record<string, NvidiaMeta> = {
   "nvidia/nemotron-3.5-super-vl-120b-a12b": { name: "Nemotron 3.5 Super VL 120B", context: 128_000, output: 16_000, image: true, features: ["tools", "json_mode"], description: "Vision-language Nemotron; reads images (good for the vision subagent)." },
 };
 /** Upstream NVIDIA ids the Playground and agent may use (default = the curated set above). */
-export const NVIDIA_MODELS = (process.env.NVIDIA_MODELS ?? Object.keys(NVIDIA_CATALOGUE).join(","))
+export const NVIDIA_MODELS = (process.env.NVIDIA_MODELS?.trim() || Object.keys(NVIDIA_CATALOGUE).join(","))
   .split(",").map((s) => s.trim()).filter(Boolean);
 
 export const PORT = Number(process.env.PORT ?? 8790);
