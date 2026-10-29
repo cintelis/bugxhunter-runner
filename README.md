@@ -272,25 +272,13 @@ you run this in — Docker's bridge NAT doesn't restrict outbound on its own.
 
 ## Through Sigilant (governed runs)
 
-`sigilant/` is the runner's side of running under [Sigilant](https://github.com/cintelis/sigilant): the runner is a
-registered agent there, every call it makes is decided by a gateway against the scope the customer signed, risky ones
-wait for a person, and each is written to a signed audit chain. Two processes, one image (`sigilant/Dockerfile`):
-
-| | |
-|---|---|
-| `serve-tools.ts` | the tools a gateway forwards to: `repo.read`, `repo.comment`, `repo.block`, `repo.alerts` (GitHub's own Dependabot, code scanning and secret scanning alerts, read through the app), `target.request`, `finding.record`, `retest.summary` (what a retest came to, once, at its end), and for discovery `repo.scan`, `net.discover`, `discovery.report`; `run.usage`, which the runner's own process reports each step's usage with; GitHub with the engagement's token (`GITHUB_TOKEN_FILE`) |
-| `github-app.ts` | the runner on GitHub as a GitHub App: a JWT signed with the app's key, exchanged for an installation token and renewed before it runs out, so that comments and reviews carry the app's name and logo (GitHub requires RS256 for the JWT; that RSA is GitHub's, confined to this file) |
-| `usage.ts` | follows a run on the runner and reports each step — tokens, cost, time, tool calls — through the gateway as it completes; `run.ts` and the webhook do this for every run they start |
-| `serve-bridge.ts` | an MCP server the agent is pointed at (`mcp.sigilant` in OpenCode's config), which holds the runner's identity and puts every call through the gateway |
-| `opencode.json`, `AGENTS.md` | the agent's configuration for a governed run, merged over the image's (`OPENCODE_CONFIG`): the bridge as its one MCP server, the sandbox's own tools off, and what a denial or a held call means |
-| `run.ts` | starts a run on the runner's API with nobody at the keyboard: `--pr owner/name#N` reviews a pull request |
-| `serve-webhook.ts` | the webhooks: GitHub's (`/hooks/github`), where a pull request opened or updated on a repository it serves starts that review, and a deploy's (`/hooks/deploy`), where a deploy of a target it serves starts a retest of what changed; signatures checked, deliveries seen before ignored |
-| `serve-scheduler.ts` | the timetable: a retest of each target every so often (`SCHEDULE_RETEST_EVERY`, 24h) and a discovery of the scope less often (`SCHEDULE_DISCOVER_EVERY`, 7d), each run followed and its usage reported; remembers when each last ran in the workspace, so a restart neither forgets nor starts everything again; `--now retest` or `--now discover` for one by hand |
-| `deploy.ts` | tells the webhook a deploy has happened — the target, its version, the paths it changed — signed and named, so that CI or the host starts the retest with one command |
-
-The package stands on its own (`cd sigilant && npm install && npm run typecheck && npm test`), with `@sigilant/sdk`
-from a Sigilant checkout beside this one; the image takes the SDK built from an image of Sigilant's
-(`SIGILANT_SDK_IMAGE`). Sigilant's `deploy/compose/bugxhunter.yaml` runs both beside its stack.
+The runner can run under [Sigilant](https://sigilant.io), Cintelis's agent governance platform: it is a
+registered agent there, every call it makes is decided by a gateway against the scope the customer signed,
+risky ones wait for a person, and each is written to a signed audit chain. Sigilant's side of that (the
+runner's tools behind the gateway, the MCP bridge its agent calls through, the GitHub App, the webhooks and
+the scheduler) lives in Sigilant's repository, which is private. This repository needs nothing for it beyond
+what it already has: the runner's API, the agent's `OPENCODE_CONFIG` merge, and `SCX_API_FILE` for a runner
+nobody is there to unlock.
 
 ## Configuration (environment variables)
 
