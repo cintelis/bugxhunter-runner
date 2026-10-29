@@ -11,7 +11,10 @@ import express from "express";
 import fs from "node:fs";
 import path from "node:path";
 import { SCXError, type ChatParams } from "./scx.js";
-import { PROVIDERS, PROXY_TOKEN, PORT, OPENROUTER_MODELS, apiKey, clients, clientFor, keySource, listModels } from "./providers.js";
+import {
+  PROVIDERS, PROXY_TOKEN, PORT, OPENROUTER_MODELS, apiKey, clients, clientFor, isRetiredStatus, keySource, listModels,
+  proxyPaths, proxyTokenOk, upstreamHeaders,
+} from "./providers.js";
 import { KnowledgeBase, buildContextBlock } from "./rag.js";
 import {
   getClient, serverUrl, resolveDirectory, projectFile, listAgentModels, toUiEvent, toUiMessages, parseModelId, oc, query, httpError,
@@ -47,21 +50,20 @@ if (TRUST_PROXY) {
 }
 
 /**
- * Key-injecting proxy for the agent, one route per provider (/scx/v1, and
- * /openrouter/v1). The agent's OpenCode talks to these with the proxy token,
- * and we forward chat/model calls upstream with the real key. So no provider
- * key ever enters the container (or, locally, the process) the agent's shell
- * runs in. Mounted before the JSON parser so request bodies pass through
- * untouched.
+ * Key-injecting proxy for the agent, one route per provider (/scx/v1,
+ * /openrouter/v1, /nvidia/v1, /anthropic/v1). The agent's OpenCode talks to
+ * these with the proxy token, and we forward model calls upstream with the real
+ * key. So no provider key ever enters the container (or, locally, the process)
+ * the agent's shell runs in. Mounted before the JSON parser so request bodies
+ * pass through untouched. Anthropic's API takes its key in `x-api-key`, so the
+ * proxy token arrives there too for that route (see proxyTokenOk).
  */
-const PROXY_PATHS = new Set(["/chat/completions", "/models"]);
 for (const p of Object.values(PROVIDERS)) {
   const prefix = `/${p.id}/v1`;
   app.all(`${prefix}/*path`, async (req, res) => { // Express 5: a wildcard needs a name
     const sub = req.path.slice(prefix.length);
-    const auth = req.headers.authorization ?? "";
-    if (auth !== `Bearer ${PROXY_TOKEN}`) return res.status(401).json({ error: { message: "bad proxy token" } });
-    if (!PROXY_PATHS.has(sub)) return res.status(404).json({ error: { message: `not proxied: ${sub}` } });
+    if (!proxyTokenOk(p, req.headers, PROXY_TOKEN)) return res.status(401).json({ error: { message: "bad proxy token" } });
+    if (!proxyPaths(p).has(sub)) return res.status(404).json({ error: { message: `not proxied: ${sub}` } });
     try {
       const chunks: Buffer[] = [];
       for await (const c of req) chunks.push(c as Buffer);
@@ -69,12 +71,7 @@ for (const p of Object.values(PROVIDERS)) {
       res.on("close", () => ctrl.abort());
       const upstream = await fetch(p.baseUrl + sub + (req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""), {
         method: req.method,
-        headers: {
-          Authorization: `Bearer ${apiKey(p.id)}`,
-          ...(p.headers ?? {}),
-          "Content-Type": req.headers["content-type"] ?? "application/json",
-          Accept: req.headers.accept ?? "*/*",
-        },
+        headers: upstreamHeaders(p, req.headers, apiKey(p.id)),
         body: req.method === "GET" || req.method === "HEAD" ? undefined : Buffer.concat(chunks),
         signal: ctrl.signal,
       });
@@ -348,10 +345,10 @@ app.post("/api/chat", async (req, res) => {
     }
     const { client, model, provider } = clientFor(String(params.model ?? ""));
     const call = { ...params, model };
-    // Keep the NVIDIA list honest: a 404 means the model was retired upstream.
+    // Keep the NVIDIA list honest: a 404 or 410 means the model was retired upstream.
     const track = <T>(p: Promise<T>) => provider !== "nvidia" ? p : p.then(
       (v) => { nvidiaHealth.markAlive(model); return v; },
-      (e) => { if (e instanceof SCXError && e.status === 404) nvidiaHealth.markRetired(model); throw e; },
+      (e) => { if (e instanceof SCXError && isRetiredStatus(e.status)) nvidiaHealth.markRetired(model); throw e; },
     );
     if (params.stream) {
       const upstream = await track(client.chatStreamResponse(call));

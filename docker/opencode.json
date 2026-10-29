@@ -285,6 +285,34 @@
           }
         }
       }
+    },
+    "anthropic": {
+      "npm": "@ai-sdk/anthropic",
+      "name": "Anthropic",
+      "options": {
+        "baseURL": "http://runner:8790/anthropic/v1",
+        "apiKey": "{env:SCX_PROXY_TOKEN}"
+      },
+      "models": {
+        "claude-opus-5-5": {
+          "name": "Claude Opus 5.5",
+          "limit": { "context": 1000000, "output": 128000 },
+          "attachment": true,
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        },
+        "claude-sonnet-5-5": {
+          "name": "Claude Sonnet 5.5",
+          "limit": { "context": 1000000, "output": 128000 },
+          "attachment": true,
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        },
+        "claude-haiku-5-5": {
+          "name": "Claude Haiku 5.5",
+          "limit": { "context": 1000000, "output": 128000 },
+          "attachment": true,
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        }
+      }
     }
   }
 }

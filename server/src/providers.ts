@@ -22,12 +22,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { SCXModel } from "../../shared/scx.js";
-import { SCXClient, SCXError } from "./scx.js";
+import { SCXClient, SCXError, type ChatCompletion, type ChatParams } from "./scx.js";
+import { ANTHROPIC_PREFIX, AnthropicChatClient, listAnthropicModels, normaliseAnthropic } from "./anthropic.js";
 import { httpError } from "./errors.js";
 import * as vault from "./vault.js";
 import * as nvidiaHealth from "./nvidia-health.js";
 
-export type ProviderId = "scx" | "openrouter" | "nvidia";
+export type ProviderId = "scx" | "openrouter" | "nvidia" | "anthropic";
 export type KeySource = "vault" | "file" | "env" | "opencode-auth" | "none";
 
 export interface ProviderDef {
@@ -43,6 +44,8 @@ export interface ProviderDef {
   /** Provider id in OpenCode's ~/.local/share/opencode/auth.json. */
   authId: string;
   headers?: Record<string, string>;
+  /** Wire format: the OpenAI chat API (default), or Anthropic's Messages API. */
+  kind?: "openai" | "anthropic";
 }
 
 export const PROVIDERS: Record<ProviderId, ProviderDef> = {
@@ -61,7 +64,20 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     // `NVIDI_NGC_POC` is the name the NGC proof-of-concept key already uses in .env; `NVIDIA_API_KEY` is the tidy one.
     vaultItem: "NVIDIA_API_KEY", envVars: ["NVIDIA_API_KEY", "NVIDI_NGC_POC"], fileVar: "NVIDIA_API_KEY_FILE", authId: "nvidia",
   },
+  anthropic: {
+    id: "anthropic", name: "Anthropic", baseUrl: process.env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com/v1",
+    // Scrubbed from the environment like the others, so the agent's shell never inherits it.
+    vaultItem: "ANTHROPIC_API_KEY", envVars: ["ANTHROPIC_API_KEY"], fileVar: "ANTHROPIC_API_KEY_FILE", authId: "anthropic",
+    kind: "anthropic",
+  },
 };
+
+/**
+ * Claude models the agent may use (ANTHROPIC_MODELS, comma list of Anthropic model ids).
+ * The Playground lists every model the key can use; the agent's picker only these.
+ */
+export const ANTHROPIC_MODELS = (process.env.ANTHROPIC_MODELS ?? "claude-opus-5-5,claude-sonnet-5-5,claude-haiku-5-5")
+  .split(",").map((s) => s.trim()).filter(Boolean);
 
 /** OpenRouter ids the agent may use (OPENROUTER_MODELS=anthropic/claude-sonnet-4.5,openai/gpt-6.1-sol). */
 export const OPENROUTER_MODELS = (process.env.OPENROUTER_MODELS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -160,14 +176,33 @@ export function apiKey(id: ProviderId): string {
   }
 }
 
-export const clients: Record<ProviderId, SCXClient> = {
+export const clients: Record<Exclude<ProviderId, "anthropic">, SCXClient> = {
   scx: new SCXClient({ apiKey: () => apiKey("scx"), baseUrl: PROVIDERS.scx.baseUrl }),
   openrouter: new SCXClient({ apiKey: () => apiKey("openrouter"), baseUrl: PROVIDERS.openrouter.baseUrl, headers: PROVIDERS.openrouter.headers }),
   nvidia: new SCXClient({ apiKey: () => apiKey("nvidia"), baseUrl: PROVIDERS.nvidia.baseUrl }),
 };
 
-/** Playground model ids: SCX ids as-is, OpenRouter ids prefixed `openrouter/`, NVIDIA NIM ids `nim/`. */
-export function clientFor(model: string): { client: SCXClient; model: string; provider: ProviderId } {
+/** Output limits of the Claude models seen in the last model list, to cap max_tokens. */
+const anthropicLimits = new Map<string, number | null>();
+
+/** The Anthropic SDK wants the API root; PROVIDERS keeps the /v1 base the proxy forwards to. */
+const anthropicRoot = () => PROVIDERS.anthropic.baseUrl.replace(/\/v1\/?$/, "");
+
+const anthropicClient = new AnthropicChatClient({
+  apiKey: () => apiKey("anthropic"),
+  baseUrl: anthropicRoot(),
+  maxOutput: (model) => anthropicLimits.get(model),
+});
+
+/** What the chat route needs from any provider's client. */
+export interface ChatClient {
+  chat(params: ChatParams): Promise<ChatCompletion>;
+  chatStreamResponse(params: ChatParams): Promise<Response>;
+}
+
+/** Playground model ids: SCX ids as-is, OpenRouter ids prefixed `openrouter/`, NVIDIA NIM ids `nim/`, Claude `anthropic/`. */
+export function clientFor(model: string): { client: ChatClient; model: string; provider: ProviderId } {
+  if (model.startsWith(ANTHROPIC_PREFIX)) return { client: anthropicClient, model: model.slice(ANTHROPIC_PREFIX.length), provider: "anthropic" };
   if (model.startsWith("openrouter/")) return { client: clients.openrouter, model: model.slice("openrouter/".length), provider: "openrouter" };
   if (model.startsWith("nim/")) return { client: clients.nvidia, model: model.slice("nim/".length), provider: "nvidia" };
   return { client: clients.scx, model, provider: "scx" };
@@ -291,8 +326,13 @@ async function nvidiaModels(): Promise<SCXModel[]> {
   }
 }
 
-/** One tiny chat to see whether an NVIDIA model's endpoint still exists (404 = retired). */
-// A retired model answers 404 at once; a slow or queued one is just "unknown", so keep this short.
+/** Upstream statuses that mean the model is gone for good, not momentarily unavailable:
+ *  404 (endpoint removed) and 410 Gone (NVIDIA's end-of-life response, with a note like
+ *  "model '...' has reached its end of life"). */
+export const isRetiredStatus = (status: number) => status === 404 || status === 410;
+
+/** One tiny chat to see whether an NVIDIA model's endpoint still exists (404/410 = retired). */
+// A retired model answers 404 or 410 at once; a slow or queued one is just "unknown", so keep this short.
 const probeClient = new SCXClient({ apiKey: () => apiKey("nvidia"), baseUrl: PROVIDERS.nvidia.baseUrl, timeoutMs: 15_000 });
 
 export async function probeNvidia(id: string): Promise<nvidiaHealth.ProbeResult> {
@@ -300,23 +340,48 @@ export async function probeNvidia(id: string): Promise<nvidiaHealth.ProbeResult>
     await probeClient.chat({ model: id, messages: [{ role: "user", content: "hi" }], max_tokens: 1, stream: false }, { timeoutMs: 15_000 });
     return "ok";
   } catch (e) {
-    return e instanceof SCXError && e.status === 404 ? "missing" : "unknown";
+    return e instanceof SCXError && isRetiredStatus(e.status) ? "missing" : "unknown";
   }
 }
 
-/** Every model the Playground can use: SCX's, plus OpenRouter's and NVIDIA's when their keys are configured. */
+const oneLineMessage = (e: unknown) => String((e as Error)?.message ?? e).replace(/\s+/g, " ").slice(0, 300);
+
+/** Claude models for the Playground, when an Anthropic key is configured (and readable: the vault open). */
+async function anthropicModels(): Promise<SCXModel[]> {
+  if (!configured("anthropic")) return [];
+  try {
+    const models = await listAnthropicModels(apiKey("anthropic"), anthropicRoot());
+    for (const m of models) anthropicLimits.set(m.id, m.max_tokens);
+    return models.map(normaliseAnthropic);
+  } catch (e) {
+    console.error("[anthropic] model list failed:", oneLineMessage(e));
+    return [];
+  }
+}
+
+/** Every model the Playground can use: SCX's, plus Anthropic's, NVIDIA's and OpenRouter's when their keys are configured. */
 export async function listModels(): Promise<SCXModel[]> {
-  const scx = (await clients.scx.listModels()).map((m) => ({ ...m, provider: "scx" as const }));
-  const nvidia = await nvidiaModels();
-  if (!configured("openrouter")) return [...scx, ...nvidia];
+  const [scxResult, anthropic, nvidia] = await Promise.all([
+    clients.scx.listModels().then((list) => ({ list }), (error: unknown) => ({ error })),
+    anthropicModels(),
+    nvidiaModels(),
+  ]);
+  // Without a working SCX key, still offer the other providers' models (a runner may use only
+  // Claude, say); the SCX error stands only when there is nothing else to show.
+  if ("error" in scxResult) {
+    if (!anthropic.length && !nvidia.length && !configured("openrouter")) throw scxResult.error;
+    console.error("[scx] model list failed:", oneLineMessage(scxResult.error));
+  }
+  const scx = ("list" in scxResult ? scxResult.list : []).map((m) => ({ ...m, provider: "scx" as const }));
+  if (!configured("openrouter")) return [...scx, ...anthropic, ...nvidia];
   try {
     const all = (await openRouterCatalogue()).map(normaliseOpenRouter);
     const allow = new Set(OPENROUTER_MODELS.map((id) => `openrouter/${id}`));
     const picked = allow.size ? all.filter((m) => allow.has(m.id)) : all;
-    return [...scx, ...nvidia, ...picked.sort((a, b) => a.name.localeCompare(b.name))];
+    return [...scx, ...anthropic, ...nvidia, ...picked.sort((a, b) => a.name.localeCompare(b.name))];
   } catch (e) {
     console.error("[openrouter] model list failed:", (e as Error).message);
-    return [...scx, ...nvidia];
+    return [...scx, ...anthropic, ...nvidia];
   }
 }
 
@@ -376,5 +441,82 @@ export async function nvidiaOpencodeProvider(proxyBaseUrl: string): Promise<Reco
     name: "NVIDIA NIM",
     options: { baseURL: proxyBaseUrl, apiKey: PROXY_TOKEN },
     models,
+  };
+}
+
+/** Limits the agent assumes for Claude models when the Models API cannot be asked (vault sealed). */
+const CLAUDE_DEFAULT_LIMIT = { context: 1_000_000, output: 128_000 };
+
+/**
+ * An OpenCode provider for the agent: Claude through OpenCode's native Anthropic
+ * client, calling back through the runner's proxy (/anthropic/v1) with the proxy
+ * token, so the Anthropic key never reaches the agent. Only when a key is
+ * configured; limits from the Models API when the vault is open.
+ */
+export async function anthropicOpencodeProvider(proxyBaseUrl: string): Promise<Record<string, unknown> | null> {
+  if (!ANTHROPIC_MODELS.length || !configured("anthropic")) return null;
+  const info = new Map<string, { name: string; context: number | null; output: number | null }>();
+  try {
+    for (const m of await listAnthropicModels(apiKey("anthropic"), anthropicRoot())) {
+      info.set(m.id, { name: m.display_name, context: m.max_input_tokens, output: m.max_tokens });
+    }
+  } catch (e) {
+    console.error("[anthropic] could not fetch model limits, using defaults:", oneLineMessage(e));
+  }
+  const models: Record<string, unknown> = {};
+  for (const id of ANTHROPIC_MODELS) {
+    const m = info.get(id);
+    models[id] = {
+      name: m?.name ?? id,
+      limit: { context: m?.context ?? CLAUDE_DEFAULT_LIMIT.context, output: m?.output ?? CLAUDE_DEFAULT_LIMIT.output },
+      attachment: true,
+      modalities: { input: ["text", "image"], output: ["text"] },
+    };
+  }
+  return {
+    npm: "@ai-sdk/anthropic",
+    name: "Anthropic",
+    options: { baseURL: proxyBaseUrl, apiKey: PROXY_TOKEN },
+    models,
+  };
+}
+
+// --- The agent's key-injecting proxy (routes in index.ts) ------------------------
+
+type Headers = Record<string, string | string[] | undefined>;
+const header = (h: Headers, name: string) => { const v = h[name]; return Array.isArray(v) ? v[0] : v; };
+
+/** Upstream paths the proxy forwards for a provider (everything else is a 404). */
+export function proxyPaths(p: ProviderDef): Set<string> {
+  return p.kind === "anthropic"
+    ? new Set(["/messages", "/messages/count_tokens", "/models"])
+    : new Set(["/chat/completions", "/models"]);
+}
+
+const sameSecret = (a: string, b: string) => {
+  const x = Buffer.from(a), y = Buffer.from(b);
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+};
+
+/** Whether a proxy call carries the proxy token: as a Bearer token, or (Anthropic clients) in x-api-key. */
+export function proxyTokenOk(p: ProviderDef, h: Headers, token: string): boolean {
+  const bearer = header(h, "authorization") ?? "";
+  if (sameSecret(bearer, `Bearer ${token}`)) return true;
+  return p.kind === "anthropic" && sameSecret(header(h, "x-api-key") ?? "", token);
+}
+
+/** Headers for the upstream call: the real key in the provider's own scheme, plus what the client negotiated. */
+export function upstreamHeaders(p: ProviderDef, h: Headers, key: string): Record<string, string> {
+  const common = {
+    "Content-Type": header(h, "content-type") ?? "application/json",
+    Accept: header(h, "accept") ?? "*/*",
+  };
+  if (p.kind !== "anthropic") return { Authorization: `Bearer ${key}`, ...(p.headers ?? {}), ...common };
+  const beta = header(h, "anthropic-beta");
+  return {
+    "x-api-key": key,
+    "anthropic-version": header(h, "anthropic-version") ?? "2023-06-01",
+    ...(beta ? { "anthropic-beta": beta } : {}),
+    ...common,
   };
 }

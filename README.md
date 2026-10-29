@@ -15,7 +15,7 @@ green accents) and Fira Code throughout. Started from the `sovgov-poc` chatbot d
   `plan` (read-only) agent. Every file edit and shell command waits for your approval.
   Markdown replies, collapsible tool calls and reasoning, per-turn token counts, and a
   **Changes** view of what the agent edited (git repos only — OpenCode tracks changes via git).
-- **Playground** — chat with any SCX, NVIDIA or OpenRouter model directly (no agent), with
+- **Playground** — chat with any SCX, Anthropic (Claude), NVIDIA or OpenRouter model directly (no agent), with
   tool-calling, JSON mode, an embeddings-backed knowledge base and browser voice. Also:
   - **Security presets** (code review, threat modelling, AI system review, pentest planning,
     diagram review, diagram drawing, tabletop exercises, CTF coaching, phishing, log triage,
@@ -215,6 +215,30 @@ The agent never holds the key: its calls go to the runner's `/openrouter/v1` pro
 token, exactly like SCX, in both local and Docker modes. Pricing is OpenRouter's; the Playground
 shows each model's per-token rates.
 
+## Claude via the Anthropic API
+
+1. Add your Anthropic key to the vault as `ANTHROPIC_API_KEY` (keys dialog). The **Playground**
+   then lists every Claude model the key can use under an **Anthropic** heading, addressed as
+   `anthropic/<id>` (for example `anthropic/claude-opus-5-5`).
+2. The **agent** gets Claude Opus 5.5, Sonnet 5.5 and Haiku 5.5 in the Runner's model picker.
+   Locally, `ANTHROPIC_MODELS` (comma-separated model ids) changes that list; in Docker the list
+   is in `docker/opencode.json`.
+
+As with the other providers, the agent never holds the key: OpenCode's own Anthropic client calls
+the runner's `/anthropic/v1` proxy with the proxy token, and the runner adds the key.
+
+Things that differ from the OpenAI-style providers:
+
+- **Sampling settings are not sent.** Current Claude models reject temperature and top-p, so the
+  Playground's sliders don't apply to them. Forced tool use is sent as "auto" for the same reason.
+- **Safety classifiers.** Claude's classifiers can decline some security requests. On models that
+  support it, the Playground asks for Anthropic's server-side fallback, so a declined request is
+  retried on the model Anthropic recommends for that category. A decline that still stands shows
+  as an error naming the category. For authorised security work, Anthropic's
+  [Cyber Verification Program](https://support.claude.com/en/articles/14604842-real-time-cyber-safeguards-on-claude-opus-and-sonnet)
+  can lift cyber-category declines.
+- **Prompt caching** is on, so repeated history in a long chat is billed at the cached rate.
+
 ## GitHub repositories (read-only)
 
 To review a repository, clone it into the workspace from the sidebar (**clone from GitHub** under
@@ -307,6 +331,10 @@ nobody is there to unlock.
 | `OPENROUTER_API_KEY` | the vault, else unset | OpenRouter key in the clear; prefer the vault item of the same name |
 | `OPENROUTER_MODELS` | unset | Comma list of OpenRouter model ids the agent may use; becomes an OpenCode provider through the proxy |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter endpoint |
+| `ANTHROPIC_API_KEY_FILE` | unset | A file holding the Anthropic key, as `SCX_API_FILE` |
+| `ANTHROPIC_API_KEY` | the vault, else unset | Anthropic key in the clear; prefer the vault item of the same name |
+| `ANTHROPIC_MODELS` | `claude-opus-5-5,claude-sonnet-5-5,claude-haiku-5-5` | Claude model ids in the agent's picker (local mode; Docker: `docker/opencode.json`) |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1` | Anthropic endpoint |
 | `GITHUB_CLIENT_ID` | the BugXHunter app | A fork's own GitHub App (device flow); `GITHUB_APP_SLUG` names its install page |
 | `OPEN_RUNNER_VAULT_FILE` | `~/.config/bugxhunter/vault.json` | The sealed vault (Docker: `/data/vault.json` on the `runner-data` volume) |
 | `OPEN_RUNNER_VAULT_IDLE_MINUTES` | `120` | Auto-lock after this long without a model call or API write; `0` = never |
@@ -418,7 +446,7 @@ publisher** on npmjs.com set to this repository and `release.yml`, once; no npm 
 | `server/src/opencode.ts` | Starts/stops the OpenCode server, one SDK client per project folder, event mapping |
 | `server/src/index.ts` | Express: `/api/agent/*` (OpenCode) and `/api/chat`, `/api/models`, `/api/kb` (SCX) |
 | `server/src/scx.ts`, `rag.ts` | SCX client and in-memory knowledge base (Playground) |
-| `server/src/providers.ts`, `nvidia-health.ts` | NVIDIA / OpenRouter providers; hides NVIDIA models whose endpoints are retired |
+| `server/src/providers.ts`, `anthropic.ts`, `nvidia-health.ts` | Anthropic / NVIDIA / OpenRouter providers (Claude via the official SDK); hides NVIDIA models whose endpoints are retired |
 | `server/src/playground-store.ts` | Saved Playground sessions, sealed with the vault key |
 | `server/src/render.ts`, `docker/render-server.py`, `docker/drawio_outline.py` | The render service (diagrams, `.drawio` outlines) and the runner's client for it |
 | `web/src/Canvas.tsx`, `web/src/canvas/` | The threat-model canvas |

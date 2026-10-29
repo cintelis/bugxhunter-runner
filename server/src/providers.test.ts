@@ -5,6 +5,8 @@ import path from "node:path";
 
 process.env.OPEN_RUNNER_VAULT_FILE = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "bxh-prov-")), "vault.json");
 process.env.OPENROUTER_MODELS = "anthropic/claude-sonnet-4.5, openai/gpt-5";
+process.env.ANTHROPIC_API_KEY = "sk-ant-test-not-real";
+process.env.ANTHROPIC_API_KEY_FILE = "/nonexistent";
 const providers = await import("./providers.js");
 
 describe("providers", () => {
@@ -49,5 +51,50 @@ describe("providers", () => {
     expect(process.env.SCX_API).toBeUndefined();
     expect(process.env.OPENROUTER_API_KEY).toBeUndefined();
     expect(["vault", "file", "env", "opencode-auth", "none"]).toContain(providers.keySource("openrouter"));
+  });
+});
+
+describe("isRetiredStatus", () => {
+  it("treats 404 and 410 as retired, nothing else", () => {
+    expect(providers.isRetiredStatus(404)).toBe(true);
+    expect(providers.isRetiredStatus(410)).toBe(true); // NVIDIA end-of-life response
+    for (const s of [200, 401, 403, 429, 500, 502, 504]) expect(providers.isRetiredStatus(s), String(s)).toBe(false);
+  });
+});
+
+describe("anthropic provider", () => {
+  it("routes anthropic/ ids to Claude, leaving OpenRouter's anthropic/ ids alone", () => {
+    expect(providers.clientFor("anthropic/claude-opus-5-5")).toMatchObject({ provider: "anthropic", model: "claude-opus-5-5" });
+    expect(providers.clientFor("openrouter/anthropic/claude-sonnet-4.5")).toMatchObject({ provider: "openrouter" });
+  });
+
+  it("scrubs the key from the environment so the agent never inherits it", () => {
+    expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(process.env.ANTHROPIC_API_KEY_FILE).toBeUndefined();
+  });
+
+  const claude = providers.PROVIDERS.anthropic;
+  const scx = providers.PROVIDERS.scx;
+
+  it("accepts the proxy token in x-api-key for Anthropic only", () => {
+    expect(providers.proxyTokenOk(claude, { "x-api-key": "tok" }, "tok")).toBe(true);
+    expect(providers.proxyTokenOk(claude, { authorization: "Bearer tok" }, "tok")).toBe(true);
+    expect(providers.proxyTokenOk(claude, { "x-api-key": "nope" }, "tok")).toBe(false);
+    expect(providers.proxyTokenOk(scx, { "x-api-key": "tok" }, "tok")).toBe(false);
+    expect(providers.proxyTokenOk(scx, { authorization: "Bearer tok" }, "tok")).toBe(true);
+  });
+
+  it("forwards only the Messages API paths for Anthropic", () => {
+    expect([...providers.proxyPaths(claude)]).toEqual(["/messages", "/messages/count_tokens", "/models"]);
+    expect(providers.proxyPaths(claude).has("/chat/completions")).toBe(false);
+    expect(providers.proxyPaths(scx).has("/chat/completions")).toBe(true);
+  });
+
+  it("sends the real key in Anthropic's scheme, passing on the client's version and betas", () => {
+    const h = providers.upstreamHeaders(claude, { "x-api-key": "tok", "anthropic-version": "2023-06-01", "anthropic-beta": "a,b" }, "sk-ant-real");
+    expect(h).toMatchObject({ "x-api-key": "sk-ant-real", "anthropic-version": "2023-06-01", "anthropic-beta": "a,b" });
+    expect(h).not.toHaveProperty("Authorization");
+    expect(providers.upstreamHeaders(claude, {}, "k")["anthropic-version"]).toBe("2023-06-01");
+    expect(providers.upstreamHeaders(scx, {}, "sk-scx")).toMatchObject({ Authorization: "Bearer sk-scx" });
   });
 });

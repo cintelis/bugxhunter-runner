@@ -37,6 +37,10 @@ services:
       # (OPENROUTER_API_KEY) or here; OPENROUTER_MODELS lists the ids the agent may use.
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODELS: ${OPENROUTER_MODELS:-}
+      # Optional: Claude models (https://platform.claude.com). Key in the vault
+      # (ANTHROPIC_API_KEY) or here; ANTHROPIC_MODELS lists the ids the agent's picker shows.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODELS: ${ANTHROPIC_MODELS:-}
       OPEN_RUNNER_VAULT_FILE: /data/vault.json
       OPEN_RUNNER_VAULT_IDLE_MINUTES: ${OPEN_RUNNER_VAULT_IDLE_MINUTES:-120}
       OPEN_RUNNER_SECRET: ${OPEN_RUNNER_SECRET:-}

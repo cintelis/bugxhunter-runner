@@ -14,7 +14,7 @@ import { ATTACH_ACCEPT, AttachChips, useImageAttach } from "./imageAttach";
 // sidebar's system prompt and generation settings. Tools and knowledge grounding stay in chat.
 
 const MAX_COLS = 3;
-const PROVIDER_LABEL: Record<string, string> = { scx: "SCX.ai", nvidia: "NVIDIA NIM", openrouter: "OpenRouter" };
+const PROVIDER_LABEL: Record<string, string> = { scx: "SCX.ai", anthropic: "Anthropic", nvidia: "NVIDIA NIM", openrouter: "OpenRouter" };
 
 interface Column {
   model: string;
@@ -122,7 +122,7 @@ export function Compare({ config, models, onExit }: Props) {
     }
   }
 
-  const groups = (["scx", "nvidia", "openrouter"] as const)
+  const groups = (["scx", "anthropic", "nvidia", "openrouter"] as const)
     .map((p) => [p, chat.filter((m) => (m.provider ?? "scx") === p)] as const)
     .filter(([, list]) => list.length > 0);
   const anyVision = cols.some((c) => models.find((m) => m.id === c.model)?.input_modalities?.includes("image"));

@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 import { createOpencodeServer, createOpencodeClient } from "@opencode-ai/sdk";
 import type { AgentEvent, AgentModel, MessagePart, StoredMessage } from "../../shared/agent.js";
 import { httpError } from "./errors.js";
-import { openrouterOpencodeProvider, nvidiaOpencodeProvider, OPENROUTER_MODELS, PORT } from "./providers.js";
+import { anthropicOpencodeProvider, openrouterOpencodeProvider, nvidiaOpencodeProvider, ANTHROPIC_MODELS, OPENROUTER_MODELS, PORT } from "./providers.js";
 
 export type { AgentEvent, AgentModel, StoredMessage };
 
@@ -56,12 +56,15 @@ export const VISION_AGENT = {
 /**
  * Config layered on the user's own OpenCode setup. With OPENROUTER_MODELS set,
  * it adds an `openrouter` provider that calls back through this server's
- * key-injecting proxy, so the OpenRouter key stays in the vault.
+ * key-injecting proxy, so the OpenRouter key stays in the vault. NVIDIA and
+ * Anthropic work the same way when their keys are configured (Claude through
+ * OpenCode's native Anthropic client, the ids in ANTHROPIC_MODELS).
  */
 async function inlineConfig() {
   const openrouter = await openrouterOpencodeProvider(`http://127.0.0.1:${PORT}/openrouter/v1`);
   const nvidia = await nvidiaOpencodeProvider(`http://127.0.0.1:${PORT}/nvidia/v1`);
-  const provider = { ...(openrouter ? { openrouter } : {}), ...(nvidia ? { nvidia } : {}) };
+  const anthropic = await anthropicOpencodeProvider(`http://127.0.0.1:${PORT}/anthropic/v1`);
+  const provider = { ...(openrouter ? { openrouter } : {}), ...(nvidia ? { nvidia } : {}), ...(anthropic ? { anthropic } : {}) };
   return {
     model: DEFAULT_MODEL,
     agent: {
@@ -312,9 +315,12 @@ export async function listAgentModels(client: Client): Promise<AgentModel[]> {
   const providers: any[] = r?.data?.providers ?? [];
   const out: AgentModel[] = [];
   const allowed = new Set(OPENROUTER_MODELS);
+  const claude = new Set(ANTHROPIC_MODELS);
   for (const p of providers) {
     for (const [mid, m] of Object.entries<any>(p.models ?? {})) {
       if (p.id === "openrouter" && allowed.size && !allowed.has(mid)) continue;
+      // OpenCode merges its own Anthropic catalogue in too; show only the configured Claude models.
+      if (p.id === "anthropic" && !claude.has(mid)) continue;
       out.push({
         id: `${p.id}/${mid}`,
         name: m.name ?? mid,
