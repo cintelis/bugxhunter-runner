@@ -123,7 +123,7 @@ anything matching the flag format.
 `objdump`/`readelf`, `binwalk`, `exiftool`, `exiv2`, `pngcheck`, `steghide`, `foremost`, `7z`,
 `tshark` (read captures: `-r file.pcap -q -z conv,tcp`, `-Y http`, `--export-objects http,dir`),
 `john` (with `/opt/wordlists` and the `*2john` converters), `sqlmap` (only after a manual probe
-shows injection), `gdb`, `ltrace`, `strace`, and Python's `pwntools`, `pycryptodome` (Debian's
+shows injection), `gdb`, `strace` (`ltrace` on amd64 only), and Python's `pwntools`, `pycryptodome` (Debian's
 build imports as `Cryptodome`, not `Crypto`), `z3` and `yara`.
 
 **On demand, under the persistent `/workspace/.tools`** (`/home/node` does not survive a restart):

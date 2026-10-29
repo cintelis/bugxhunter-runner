@@ -86,9 +86,11 @@ RUN if [ "$SECTOOLS" = "1" ]; then set -eux; \
 # RsaCtfTool and the big wordlists are installed on demand (docker/agent-AGENTS.md).
 ARG CTFTOOLS=
 RUN if [ "${CTFTOOLS:-$SECTOOLS}" = "1" ]; then set -eux; \
+      # ltrace is packaged for amd64 only; strace is everywhere
+      case "$(dpkg --print-architecture)" in amd64) LTRACE=ltrace;; *) LTRACE=;; esac; \
       apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         file binutils binwalk libimage-exiftool-perl exiv2 pngcheck steghide foremost p7zip-full unzip \
-        tshark john sqlmap gdb ltrace strace \
+        tshark john sqlmap gdb strace $LTRACE \
         python3-pwntools python3-pycryptodome python3-z3 python3-yara \
       && rm -rf /var/lib/apt/lists/*; \
     fi

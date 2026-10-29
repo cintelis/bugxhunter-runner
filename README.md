@@ -253,7 +253,7 @@ labs, CTFs). Build with `--build-arg SECTOOLS=0` to leave them out.
   (passive).
 - **Secrets (local, no network):** `gitleaks` — scan copied-in repos and JS bundles for leaked keys.
 - **CTF and forensics (full image):** `file`, `binutils`, `binwalk`, `exiftool`, `exiv2`, `pngcheck`,
-  `steghide`, `foremost`, `7z`, `tshark`, `john`, `sqlmap`, `gdb`, `ltrace`, `strace`, and Python's
+  `steghide`, `foremost`, `7z`, `tshark`, `john`, `sqlmap`, `gdb`, `strace` (`ltrace` on amd64), and Python's
   `pwntools`, `pycryptodome`, `z3` and `yara`, for labs and CTFs the user owns or is registered for.
   `--build-arg CTFTOOLS=0` leaves them out; `CTFTOOLS=1` adds them to a slim build. gef, RsaCtfTool,
   Volatility 3, radare2 and rockyou install on demand into `/workspace/.tools` (recipes in
