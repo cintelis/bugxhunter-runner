@@ -812,3 +812,13 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .cf-route { font-size: 12px; margin-bottom: 6px; overflow-wrap: anywhere; }
 .cf-controls { display: flex; gap: 6px; }
 .cf-controls select { flex: 1; min-width: 0; }
+
+/* A flag found in output (CTFs, labs): the format is set in the sidebar. */
+mark.flag {
+  background: var(--amber-soft);
+  color: var(--amber);
+  outline: 1px solid var(--amber);
+  border-radius: 3px;
+  padding: 0 3px;
+  font-weight: 600;
+}

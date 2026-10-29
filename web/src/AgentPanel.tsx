@@ -6,6 +6,7 @@ import {
 } from "./agentApi";
 import type { FilePart, MessagePart, PermissionRequest, ToolPart } from "../../shared/agent";
 import { Markdown } from "./Markdown";
+import { FlagText } from "./FlagText";
 import { setFileRoots } from "./filelinks";
 import { Composer, LOCAL_COMMANDS, type AgentName } from "./Composer";
 import { formatBytes, formatTokens } from "./format";
@@ -48,6 +49,8 @@ function bootLines(project: string, agent: AgentName): BootLine[] {
 const SUGGESTIONS = [
   "Summarise the architecture of this project.",
   "Find and explain the main entry points.",
+  "Review this project against the OWASP Top 10:2025 and report findings with ids and fixes.",
+  "Map every place this code calls a model or runs an agent, and assess it against the OWASP LLM and Agentic Top 10 and ATLAS.",
   "/init",
 ];
 
@@ -660,7 +663,7 @@ function ToolCard({ t }: { t: ToolPart }) {
         <span className="tool-state">{t.status === "running" || t.status === "pending" ? <span className="spin" /> : t.status === "error" ? "failed" : t.status === "interrupted" ? "interrupted" : ""}</span>
         {hasBody && <span className={"chev" + (open ? " open" : "")}>›</span>}
       </button>
-      {open && hasBody && <pre className="tool-output">{t.error ? "error: " + t.error : t.output}</pre>}
+      {open && hasBody && <pre className="tool-output"><FlagText text={t.error ? "error: " + t.error : String(t.output ?? "")} /></pre>}
     </div>
   );
 }

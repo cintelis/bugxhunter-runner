@@ -14,6 +14,7 @@ import { FilesDialog } from "./FilesDialog";
 import { FoldersIcon, FolderIcon, GitHubIcon } from "./icons";
 import { isChatModel, matchesQuery } from "./modelFilter";
 import { PRESETS, presetFor } from "./presets";
+import { DEFAULT_FLAG_PATTERN, flagPattern, isValid, setFlagPattern } from "./flags";
 import type { SavedSession } from "./sessionsApi";
 
 export type Mode = "runner" | "playground";
@@ -70,6 +71,8 @@ export function Sidebar({
   onCollapse, sessions, mode, setMode, runner, status, statusError, onOpenDirectory, onForgetDirectory,
   config, setConfig, models, modelError, activeModel, onReset, saved,
 }: Props) {
+  // CTFs and labs: the flag format, highlighted wherever output is shown (this browser only).
+  const [flagRe, setFlagRe] = useState(flagPattern());
   const set = <K extends keyof BotConfig>(k: K, v: BotConfig[K]) => setConfig((c) => ({ ...c, [k]: v }));
 
   const [authOn, setAuthOn] = useState(false);
@@ -429,6 +432,18 @@ export function Sidebar({
       </div>
       )}
       <div className="sidebar-foot">
+        <div className="field">
+          <label>Flag format</label>
+          <input
+            type="text"
+            value={flagRe}
+            placeholder={DEFAULT_FLAG_PATTERN}
+            spellCheck={false}
+            onChange={(e) => { setFlagRe(e.target.value); setFlagPattern(e.target.value); }}
+            title="A regular expression. Anything matching it is highlighted in replies and tool output (CTFs, labs). Blank = the default: a short prefix before braces, e.g. flag{...}."
+          />
+          {flagRe.trim() && !isValid(flagRe) && <div className="hint" style={{ color: "var(--amber)" }}>Not a valid regular expression; the default is in use.</div>}
+        </div>
         <VaultPanel />
         {authOn && <button className="btn ghost sm block" onClick={logout}>Sign out</button>}
         {/* Same treatment as cisoai.au's "Powered by Claude": Anthropic's ivory Claude

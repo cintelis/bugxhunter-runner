@@ -78,6 +78,21 @@ RUN if [ "$SECTOOLS" = "1" ]; then set -eux; \
       done; \
     fi
 
+# ── CTF and forensics tools ──
+# For labs and capture-the-flag work on the user's own challenges: file triage,
+# steganography, captures, password cracking, debugging and exploit scripting.
+# Follows SECTOOLS unless set: --build-arg CTFTOOLS=0 leaves them out of the
+# full image, CTFTOOLS=1 adds them to a slim one. radare2, volatility3, gef,
+# RsaCtfTool and the big wordlists are installed on demand (docker/agent-AGENTS.md).
+ARG CTFTOOLS=
+RUN if [ "${CTFTOOLS:-$SECTOOLS}" = "1" ]; then set -eux; \
+      apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        file binutils binwalk libimage-exiftool-perl exiv2 pngcheck steghide foremost p7zip-full unzip \
+        tshark john sqlmap gdb ltrace strace \
+        python3-pwntools python3-pycryptodome python3-z3 python3-yara \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 # ── Language toolchains: Rust and Go ──
 # So the agent can build, test and audit Rust and Go repositories. Each follows
 # SECTOOLS unless set: in the full image, not in `-slim`. --build-arg RUST=1 /

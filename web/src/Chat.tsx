@@ -5,6 +5,7 @@ import { BootSequence, TerminalBar } from "./Terminal";
 import { PaperclipIcon } from "./icons";
 import { DEFAULT_STARTERS, presetFor } from "./presets";
 import { formatTiming } from "./format";
+import { FlagText } from "./FlagText";
 import { ATTACH_ACCEPT, AttachChips, useImageAttach } from "./imageAttach";
 import { RichReply } from "./DrawioBlock";
 
@@ -242,7 +243,7 @@ function MessageRow({ msg, streaming, onToolResult, onFix }: {
         <div className="msg-body">
           <div className="tool-call">
             <span className="tc-name">tool result</span>
-            <pre>{msg.content}</pre>
+            <pre><FlagText text={String(msg.content ?? "")} /></pre>
           </div>
         </div>
       </div>

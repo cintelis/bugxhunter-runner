@@ -17,8 +17,15 @@ green accents) and Fira Code throughout. Started from the `sovgov-poc` chatbot d
   **Changes** view of what the agent edited (git repos only — OpenCode tracks changes via git).
 - **Playground** — chat with any SCX, NVIDIA or OpenRouter model directly (no agent), with
   tool-calling, JSON mode, an embeddings-backed knowledge base and browser voice. Also:
-  - **Security presets** (code review, threat modelling, diagram review, diagram drawing,
-    phishing, log triage) and **compare mode** (2–3 models side by side, with speed and tokens).
+  - **Security presets** (code review, threat modelling, AI system review, pentest planning,
+    diagram review, diagram drawing, tabletop exercises, CTF coaching, phishing, log triage,
+    vulnerability explaining) and **compare mode** (2–3 models side by side, with speed and tokens).
+    Every preset, the canvas and the agent work from one catalogue (`web/src/intel`): OWASP Top
+    10:2025, API Security Top 10:2023, Top 10 for LLM Applications 2025, Top 10 for Agentic
+    Applications 2026, Mobile Top 10 2024, ASVS 5.0, WSTG 4.2, STRIDE, and MITRE ATLAS tactics,
+    techniques and mitigations for attacks on AI systems, so findings cite the same ids everywhere.
+  - **Flag highlighting** for CTFs and labs: anything matching the flag format (a regular expression
+    in the sidebar, default `flag{...}` and the like) is marked in replies and tool output, in both modes.
   - **Images** for vision models, and **draw.io files** (`.drawio`, compressed or not, and
     `.drawio.svg`) for any model: the file becomes an exact text outline of its zones, boxes,
     legend colours and arrows, so labels are never misread.
@@ -245,6 +252,12 @@ labs, CTFs). Build with `--build-arg SECTOOLS=0` to leave them out.
   `ffuf` (+ SecLists wordlists in `/opt/wordlists`), `testssl`, `curl`, `openssl`, `subfinder`
   (passive).
 - **Secrets (local, no network):** `gitleaks` — scan copied-in repos and JS bundles for leaked keys.
+- **CTF and forensics (full image):** `file`, `binutils`, `binwalk`, `exiftool`, `exiv2`, `pngcheck`,
+  `steghide`, `foremost`, `7z`, `tshark`, `john`, `sqlmap`, `gdb`, `ltrace`, `strace`, and Python's
+  `pwntools`, `pycryptodome`, `z3` and `yara`, for labs and CTFs the user owns or is registered for.
+  `--build-arg CTFTOOLS=0` leaves them out; `CTFTOOLS=1` adds them to a slim build. gef, RsaCtfTool,
+  Volatility 3, radare2 and rockyou install on demand into `/workspace/.tools` (recipes in
+  `docker/agent-AGENTS.md`), and the agent's instructions carry a first-look playbook per category.
 - **Rust and Go:** `cargo` (with `clippy`, `rustfmt` and `cargo audit` for RustSec advisories) and
   `go` (with `govulncheck`), to build, test and audit Rust and Go repositories. `--build-arg RUST=0`
   or `GO=0` leaves one out; `RUST=1` / `GO=1` adds it to a slim build.
@@ -407,6 +420,7 @@ publisher** on npmjs.com set to this repository and `release.yml`, once; no npm 
 | `server/src/playground-store.ts` | Saved Playground sessions, sealed with the vault key |
 | `server/src/render.ts`, `docker/render-server.py`, `docker/drawio_outline.py` | The render service (diagrams, `.drawio` outlines) and the runner's client for it |
 | `web/src/Canvas.tsx`, `web/src/canvas/` | The threat-model canvas |
+| `web/src/intel/`, `web/src/presets.ts`, `docker/agent-AGENTS.md` | The security catalogue (OWASP, ASVS, WSTG, STRIDE, MITRE ATLAS) as data, the prompts built from it, and the agent's methodology, which a test keeps in step with the catalogue |
 | `web/src/DrawioBlock.tsx`, `diagrams.ts` | Diagrams in replies |
 | `shared/` | Type contract between server and browser |
 | `scripts/` | `sign-release.sh` (maintainer, offline key), `verify-release.sh` (users), `release-table.sh`, the release public key |

@@ -43,10 +43,10 @@ interface View {
   h: number;
 }
 
-const KIND_COLOR: Record<NodeKind, string> = { actor: "#00e5ff", service: "#8fa8ff", datastore: "#ffb300", external: "#b4bcc6" };
+const KIND_COLOR: Record<NodeKind, string> = { actor: "#00e5ff", service: "#8fa8ff", ai: "#c58cff", datastore: "#ffb300", external: "#b4bcc6" };
 const SEV_COLOR: Record<Severity, string> = { critical: "#ff3c3c", high: "#ff7a45", medium: "#ffb300", low: "#6e7681" };
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low"];
-const KINDS: NodeKind[] = ["actor", "service", "datastore", "external"];
+const KINDS: NodeKind[] = ["actor", "service", "ai", "datastore", "external"];
 /** Flow colours by what they carry; plaintext is drawn red over any of them. */
 const FLOW_COLOR: Record<FlowKind, string> = {
   data: "#9aa4b2",

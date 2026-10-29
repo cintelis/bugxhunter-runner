@@ -18,6 +18,7 @@ describe("normalize", () => {
       { id: "web", label: "Web Server", kind: "service", details: ["PHP 7.2"], findings: [{ title: "debug on", severity: "HIGH", fix: "turn it off" }] },
       { label: "Database", kind: "mysql db", findings: [{ issue: "root no password", severity: "crit", cwe: "CWE-521" }, { severity: "low" }] },
       { id: "web", label: "Duplicate id", kind: "weird" },
+      { id: "bot", label: "Support assistant", kind: "LLM agent" },
       "not a node",
     ],
     edges: [
@@ -29,9 +30,10 @@ describe("normalize", () => {
   const m = normalize(raw);
 
   it("keeps valid nodes, makes ids unique and maps loose kinds and severities", () => {
-    expect(m.nodes.map((n) => n.id)).toEqual(["web", "database", "web-2"]);
+    expect(m.nodes.map((n) => n.id)).toEqual(["web", "database", "web-2", "bot"]);
     expect(m.nodes[1].kind).toBe("datastore");
     expect(m.nodes[2].kind).toBe("service");
+    expect(m.nodes[3].kind).toBe("ai"); // models, agents and RAG are their own kind
     expect(m.nodes[0].findings[0].severity).toBe("high");
     expect(m.nodes[1].findings).toHaveLength(1); // the untitled finding is dropped
     expect(m.nodes[1].findings[0]).toMatchObject({ severity: "critical", ref: "CWE-521", status: "open" });

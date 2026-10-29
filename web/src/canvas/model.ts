@@ -4,7 +4,8 @@
 // edit it, and it can be exported and fed back in later. Positions live on the nodes; anything
 // a model leaves out is filled in by normalize() and layout().
 
-export type NodeKind = "actor" | "service" | "datastore" | "external";
+/** "ai" is a model, an LLM endpoint, an agent, a copilot or a RAG retriever: assessed with ATLAS as well as STRIDE. */
+export type NodeKind = "actor" | "service" | "ai" | "datastore" | "external";
 export type Severity = "critical" | "high" | "medium" | "low";
 export type FindingStatus = "open" | "fixed" | "verified";
 
@@ -69,7 +70,7 @@ export interface ThreatModel {
   edges: TMEdge[];
 }
 
-const KINDS: NodeKind[] = ["actor", "service", "datastore", "external"];
+const KINDS: NodeKind[] = ["actor", "service", "ai", "datastore", "external"];
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low"];
 const SEVERITY_RANK: Record<Severity, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
@@ -82,6 +83,7 @@ function asKind(v: unknown): NodeKind {
   const k = str(v).toLowerCase();
   if ((KINDS as string[]).includes(k)) return k as NodeKind;
   if (/user|client|admin|customer|attacker|person|internet/.test(k)) return "actor";
+  if (/\b(ai|llm|model|agent|copilot|assistant|rag|retriev|inference|embedding)/.test(k)) return "ai";
   if (/db|database|store|bucket|storage|cache|queue|file|repo|config|secret/.test(k)) return "datastore";
   if (/third|external|saas|vendor|partner/.test(k)) return "external";
   return "service";
@@ -212,7 +214,7 @@ const PITCH_X = NODE_W + COL_GAP;
 const PITCH_Y = NODE_H + ROW_GAP;
 /** A column taller than this wraps into the next one, so big systems spread sideways. */
 const MAX_ROWS = 6;
-const KIND_ORDER: Record<NodeKind, number> = { actor: 0, external: 1, service: 2, datastore: 3 };
+const KIND_ORDER: Record<NodeKind, number> = { actor: 0, external: 1, service: 2, ai: 3, datastore: 4 };
 const placed = (n: TMNode) => n.x !== undefined && n.y !== undefined;
 
 /**
