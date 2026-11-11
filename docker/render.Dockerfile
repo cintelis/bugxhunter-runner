@@ -6,7 +6,7 @@
 # network only the runner shares), no volumes, no secrets and a read-only filesystem.
 # drawgen's built-in renderer needs only the standard library and PyYAML, so no
 # draw.io Desktop or browser is installed.
-FROM python:3.12-slim
+FROM python:3.15-slim
 
 # drawgen is pinned to a release wheel and checked against its published SHA-256.
 ARG DRAWGEN_VERSION=0.2.0
