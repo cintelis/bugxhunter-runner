@@ -19,7 +19,7 @@
  */
 
 import {
-  routeModel, harnessFor, classifyCommand, allCapped, hostOf,
+  routeModel, harnessFor, classifyCommand, commandHazard, allCapped, originOf, escalateAfter,
   type ReconFinding, type EnvFidelity, type ReconHarness, type RouteSignals, type GateContext,
 } from "./recon.js";
 
@@ -36,8 +36,20 @@ const DEFAULT_RECON_HARNESS: Required<Pick<ReconHarness, "maxRounds" | "budgetTo
   maxRounds: 80,
   budgetTokens: 3_000_000,
 };
-/** Stuck turns (beyond the escalation point) before the loop gives up. */
-const MAX_STUCK = 4;
+
+/** A positive integer, or the fallback (defends against undefined/NaN/Infinity overrides). */
+const posInt = (v: unknown, d: number): number => (typeof v === "number" && Number.isInteger(v) && v >= 1 ? v : d);
+
+/** Merge harness overrides over the profile and hard defaults WITHOUT letting an
+ *  undefined/NaN/Infinity override erase a cap — the loop is never unbounded. */
+function resolveHarness(override?: ReconHarness): ReconHarness {
+  const merged = { ...DEFAULT_RECON_HARNESS, ...harnessFor("executor"), ...override };
+  return {
+    ...merged,
+    maxRounds: posInt(merged.maxRounds, DEFAULT_RECON_HARNESS.maxRounds),
+    budgetTokens: posInt(merged.budgetTokens, DEFAULT_RECON_HARNESS.budgetTokens),
+  };
+}
 
 /** A pending tool permission, reduced to what the gate needs. */
 export interface ReconPermission {
@@ -52,10 +64,20 @@ export interface ReconPermission {
  * approve? Shell commands defer to `classifyCommand`; file-mutating and
  * network-reaching tools always ask; plain reads flow; the unknown fails closed.
  */
-export function reconGateDecision(p: ReconPermission, ctx: GateContext = {}): "allow" | "ask" {
+/** allow = auto-run; ask = pause for the human; deny = never run (hard-blocked). */
+export type GateDecision = "allow" | "ask" | "deny";
+
+export function reconGateDecision(p: ReconPermission, ctx: GateContext = {}): GateDecision {
   const tool = (p.tool ?? "").toLowerCase();
   if (!tool) return "ask"; // guard: a permission with no tool fails closed
-  if (tool === "bash" || tool === "shell") return p.command ? classifyCommand(p.command, ctx) : "ask";
+  if (tool === "bash" || tool === "shell") {
+    if (!p.command) return "ask";
+    // Deny the handful of shapes that wreck the agent host or turn it into a
+    // zombie (reverse shell, download->shell, exfil) — even a human shouldn't
+    // one-click-approve those. These are NOT in-scope attacks on the target.
+    if (commandHazard(p.command)) return "deny";
+    return classifyCommand(p.command, ctx); // allow (tiny safe set) | ask (everything else)
+  }
   if (tool === "read" || tool === "grep" || tool === "glob" || tool === "list" || tool === "ls") return "allow";
   // edit/write/patch/multiedit (mutate files), webfetch/fetch (reach out): always ask.
   return "ask";
@@ -145,7 +167,7 @@ export interface ReconSessionRunner {
    * Run the executor once on `model` with `prompt`, applying `gate` to each
    * permission as it streams in. Resolves when the turn goes idle.
    */
-  runTurn(args: { prompt: string; model: string; gate: (p: ReconPermission) => "allow" | "ask" }): Promise<ReconTurnResult>;
+  runTurn(args: { prompt: string; model: string; gate: (p: ReconPermission) => GateDecision }): Promise<ReconTurnResult>;
 }
 
 export interface ReconDriverOptions {
@@ -190,13 +212,10 @@ export const RECON_CONTINUE =
  * budget / rounds. The harness for the executor role supplies the caps.
  */
 export async function driveRecon(opts: ReconDriverOptions): Promise<ReconRunResult> {
-  // MERGE (not replace) the harness over the profile and the hard defaults, so an
-  // override like { maxRounds: 3 } can never drop the token cap, and an empty
-  // harness still has caps — the loop is never unbounded (H3).
-  const harness: ReconHarness = { ...DEFAULT_RECON_HARNESS, ...harnessFor("executor"), ...opts.harness };
-  const run = new ReconRun(harness);
-  const scopeHost = hostOf(opts.scope);
-  const gate = (p: ReconPermission) => reconGateDecision(p, { scopeHost });
+  const run = new ReconRun(resolveHarness(opts.harness));
+  const { host: scopeHost, port: scopePort } = originOf(opts.scope);
+  const gate = (p: ReconPermission) => reconGateDecision(p, { scopeHost, scopePort });
+  const maxStuck = escalateAfter() + 2; // give escalation a chance before giving up
   let prompt = buildReconKickoff(opts);
   // One-shot: the worst severity found LAST turn informs THIS turn's routing, then clears.
   let severityHint: Severity | undefined;
@@ -220,12 +239,11 @@ export async function driveRecon(opts: ReconDriverOptions): Promise<ReconRunResu
     severityHint = worstSeverity(res.findings);
     if (res.stuck) run.recordStuck(); else run.resetAttempts();
 
+    if (res.done) return finish(run, "done");                       // a clean finish wins over the caps
     if (run.outOfBudget()) return finish(run, "budget");
     if (run.outOfRounds()) return finish(run, "rounds");
-    if (run.attempts >= MAX_STUCK) return finish(run, "stuck"); // persistently stuck, even escalated (H3)
-    if (res.done) return finish(run, "done");
-    // Nothing advanced and not stuck (escalation wouldn't help) — the surface is spent.
-    if (!res.madeProgress && !res.stuck) return finish(run, "idle");
+    if (run.attempts >= maxStuck) return finish(run, "stuck");      // persistently stuck, even escalated (H3)
+    if (!res.madeProgress && !res.stuck) return finish(run, "idle"); // surface spent
 
     prompt = RECON_CONTINUE;
   }
