@@ -133,9 +133,10 @@ services:
       OPEN_RUNNER_LOG_DIR: /logs
       # monitor (default, log-only) or enforce (deny-by-default allowlist).
       EGRESS_MODE: ${EGRESS_MODE:-monitor}
-      # Comma list of extra allowed destinations under enforce (hosts / IPs /
-      # CIDRs) — e.g. your out-of-band collaborator host. The in-scope target is
-      # added by the runner; the model proxy (runner) is always allowed.
+      # Comma list of allowed destinations under enforce (hosts / IPs / CIDRs):
+      # put the in-scope target(s) here, plus any out-of-band collaborator host.
+      # The model proxy (runner) is always allowed. NB: automatic per-engagement
+      # injection of the target by the runner is a follow-up — for now list it here.
       EGRESS_ALLOW: ${EGRESS_ALLOW:-}
     volumes:
       - logs:/logs

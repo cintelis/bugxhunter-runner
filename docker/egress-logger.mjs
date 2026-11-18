@@ -27,7 +27,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import {
-  readPolicy, buildChainRules, ipAllowed, isV6, EGRESS_CHAIN,
+  readPolicy, buildChainRules, renderRestore, ipAllowed, isV6, EGRESS_CHAIN,
 } from "./egress-filter.mjs";
 
 const LOG_DIR = process.env.OPEN_RUNNER_LOG_DIR ?? "/workspace/logs";
@@ -116,6 +116,36 @@ function run(bin, args) {
 }
 const ipt = (fam, args) => run(fam === "inet6" ? "ip6tables" : "iptables", ["-w", ...args]);
 
+// Spawn a binary and feed `input` on stdin (used for iptables-restore).
+function runInput(bin, args, input) {
+  return new Promise((resolve) => {
+    const p = spawn(bin, args, { stdio: ["pipe", "pipe", "pipe"] });
+    let out = "", err = "";
+    p.stdout.on("data", (d) => (out += d));
+    p.stderr.on("data", (d) => (err += d));
+    p.on("error", (e) => resolve({ code: -1, out, err: e.message }));
+    p.on("exit", (code) => resolve({ code: code ?? -1, out, err }));
+    p.stdin.on("error", () => {}); // ignore EPIPE if the binary is missing
+    p.stdin.end(input);
+  });
+}
+
+// Nameservers from /etc/resolv.conf, split by family and excluding loopback
+// (Docker's embedded 127.0.0.11 is already covered by the `-o lo` accept).
+function readResolvers() {
+  const v4 = [], v6 = [];
+  let text = "";
+  try { text = fs.readFileSync("/etc/resolv.conf", "utf8"); } catch { /* none */ }
+  for (const line of text.split("\n")) {
+    const m = line.match(/^\s*nameserver\s+([0-9a-fA-F:.]+)/);
+    if (!m) continue;
+    const ip = m[1];
+    if (/^127\./.test(ip) || ip === "::1") continue; // loopback → lo rule covers it
+    (isV6(ip) ? v6 : v4).push(ip);
+  }
+  return { v4, v6 };
+}
+
 async function resolveHost(host) {
   const v4 = [], v6 = [];
   const a = await dns.resolve4(host).catch(() => []);
@@ -137,19 +167,20 @@ async function resolveAccepts(allow) {
   return { v4: [...v4].sort(), v6: [...v6].sort() };
 }
 
-async function ensureFamily(fam) {
-  const mk = await ipt(fam, ["-N", EGRESS_CHAIN]); // code 1 = chain exists (fine)
-  if (mk.code === -1) throw new Error(`${fam} tables unavailable: ${mk.err}`); // binary missing
+// Apply one family's chain as a single kernel transaction (no empty-chain
+// window), then ensure OUTPUT jumps to it. Throws on any failure so the caller
+// never falsely reports enforcement.
+async function applyFamily(fam, accepts, dnsAddrs) {
+  const restoreBin = fam === "inet6" ? "ip6tables-restore" : "iptables-restore";
+  const text = renderRestore(buildChainRules(accepts, fam, dnsAddrs));
+  const r = await runInput(restoreBin, ["--noflush"], text);
+  if (r.code === -1) throw new Error(`${fam} tables unavailable: ${r.err}`);        // binary missing
+  if (r.code !== 0) throw new Error(`${fam} restore failed: ${r.err.trim()}`);       // bad ruleset / no perms
+  // The chain now exists; make sure OUTPUT jumps to it exactly once.
   const has = await ipt(fam, ["-C", "OUTPUT", "-j", EGRESS_CHAIN]);
-  if (has.code !== 0) await ipt(fam, ["-I", "OUTPUT", "1", "-j", EGRESS_CHAIN]);
-}
-
-async function populateFamily(fam, accepts) {
-  await ensureFamily(fam);
-  await ipt(fam, ["-F", EGRESS_CHAIN]);
-  for (const rule of buildChainRules(accepts, fam)) {
-    const r = await ipt(fam, rule);
-    if (r.code !== 0) console.error(`[egress] ${fam} rule failed:`, rule.join(" "), r.err.trim());
+  if (has.code !== 0) {
+    const ins = await ipt(fam, ["-I", "OUTPUT", "1", "-j", EGRESS_CHAIN]);
+    if (ins.code !== 0) throw new Error(`${fam} jump install failed: ${ins.err.trim()}`);
   }
 }
 
@@ -183,10 +214,22 @@ let deniedCumulative = 0;
 let prevDenied = { inet: 0, inet6: 0 };
 let v6Ok = true;
 
+let warnedInvalid = false;
+
 async function reconcile() {
   let fileText;
   try { fileText = await fsp.readFile(POLICY_FILE, "utf8"); } catch { /* no policy file */ }
-  const { mode, allow } = readPolicy(process.env, fileText);
+  const { mode, allow, fileInvalid } = readPolicy(process.env, fileText);
+
+  // A malformed / unknown policy file while we're enforcing: hold the last-good
+  // state rather than tear enforcement down on a torn read. (readPolicy has
+  // already ignored the file's contents; this guards the mode transition too.)
+  if (fileInvalid) {
+    if (!warnedInvalid) { write({ event: "egress.policy_invalid", file: POLICY_FILE }); warnedInvalid = true; }
+    if (appliedMode === "enforce") return;
+  } else {
+    warnedInvalid = false;
+  }
   currentAllow = allow;
 
   if (mode === "monitor") {
@@ -202,11 +245,18 @@ async function reconcile() {
 
   // enforce
   const accepts = await resolveAccepts(allow);
-  const sig = JSON.stringify(accepts);
+  const dns = readResolvers();
+  const sig = JSON.stringify({ accepts, dns });
   if (sig !== appliedSig || appliedMode !== "enforce") {
-    await populateFamily("inet", accepts.v4);
-    const v6 = await populateFamily("inet6", accepts.v6).then(() => true).catch(() => false);
-    v6Ok = v6;
+    try {
+      await applyFamily("inet", accepts.v4, dns.v4);
+    } catch (e) {
+      // IPv4 enforcement failed: do NOT claim enforce. Leave any existing rules
+      // in place and retry next cycle; surface it so the runner can halt.
+      write({ event: "egress.enforce.failed", family: "inet", error: e.message });
+      return;
+    }
+    v6Ok = await applyFamily("inet6", accepts.v6, dns.v6).then(() => true).catch(() => false);
     if (!v6Ok) write({ event: "egress.enforce.v6_unavailable" });
     prevDenied = { inet: 0, inet6: 0 };
     appliedMode = "enforce";
@@ -214,7 +264,7 @@ async function reconcile() {
     write({
       event: "egress.enforce.sync", mode: "enforce",
       allow: { hosts: allow.hosts, literals: allow.literals.map((l) => l.addr), infra: INFRA_HOSTS },
-      accept: { v4: accepts.v4, v6: v6Ok ? accepts.v6 : "unavailable" },
+      accept: { v4: accepts.v4, v6: v6Ok ? accepts.v6 : "unavailable" }, dns,
     });
   }
 

@@ -6,8 +6,9 @@ export type EgressMode = "monitor" | "enforce";
 export type Family = "inet" | "inet6";
 export interface AllowLiteral { addr: string; family: Family }
 export interface AllowList { hosts: string[]; literals: AllowLiteral[] }
-export interface Policy { mode: EgressMode; allow: AllowList }
+export interface Policy { mode: EgressMode; allow: AllowList; fileInvalid: boolean }
 
+export function recognizedMode(raw: unknown): EgressMode | null;
 export function egressMode(raw: unknown): EgressMode;
 export function isV6(s: string): boolean;
 export function parseAllow(raw: unknown): AllowList;
@@ -15,5 +16,6 @@ export function readPolicy(env: Record<string, string | undefined>, fileText: st
 export function ip4ToInt(ip: string): number | null;
 export function ipInCidr(ip: string, cidr: string): boolean;
 export function ipAllowed(ip: string, allow: AllowList): boolean;
-export function buildChainRules(acceptAddrs: string[], family?: Family): string[][];
+export function buildChainRules(acceptAddrs: string[], family?: Family, dnsAddrs?: string[]): string[][];
+export function renderRestore(rules: string[][]): string;
 export const EGRESS_CHAIN: string;

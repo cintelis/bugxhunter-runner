@@ -64,16 +64,44 @@ The toggle belongs **per-engagement** (block mode is an engagement decision), wi
 The same `egress-logger` sidecar is the enforcement point — a mode flag, not new infra.
 
 **Mechanism (implemented).** The sidecar shares the agent's network namespace. In `enforce` it installs
-a deny-by-default `BXH_EGRESS` chain (`iptables` + `ip6tables`): loopback, established flows and DNS are
-allowed, then each resolved allow destination (the in-scope target, `EGRESS_ALLOW` hosts/IPs/CIDRs, and
-the model proxy), and the rest is REJECTed and rate-logged. Allow hostnames are re-resolved each cycle so
-CDN/rotating IPs keep working. **Privilege separation:** only the sidecar holds `CAP_NET_ADMIN`, so the
-agent — which shares the namespace but not the capability — cannot alter or remove the rules; and the
-rules live in the kernel namespace, so they persist (fail-closed) even if the sidecar is restarted.
-**Runtime toggle:** mode + allow come from `EGRESS_MODE`/`EGRESS_ALLOW`, overridable without a restart by
-a JSON policy file (`/logs/egress-policy.json`, `{mode, allow}`) the runner writes per engagement; the
-sidecar re-reads it each cycle and reconciles (installing or tearing down the chain). Denials surface in
-the egress log as an `egress.denied` running count (from the REJECT rule's packet counter).
+a deny-by-default `BXH_EGRESS` chain (`iptables` + `ip6tables`): loopback and DNS *to the pinned
+resolvers* are allowed, then each resolved allow destination (`EGRESS_ALLOW` hosts/IPs/CIDRs and the
+model proxy), and the rest is REJECTed and rate-logged. Allow hostnames are re-resolved each cycle so
+CDN/rotating IPs keep working. Some deliberate choices from the Mythos review:
+
+- **DNS is pinned, not blanket.** Only the resolvers in `/etc/resolv.conf` are allowed on port 53 — an
+  unrestricted `--dport 53` accept would let `curl http://evil:53` walk straight out. Docker's embedded
+  `127.0.0.11` is covered by the loopback accept.
+- **No `ESTABLISHED,RELATED` accept.** In an OUTPUT, destination-based chain every legitimate flow
+  already matches its `-d` rule; a broad established accept would instead keep monitor-era tunnels alive
+  across a flip and survive an allowlist shrink. Omitting it means removing a host cuts its live flows.
+- **Atomic apply.** The chain is rebuilt with a single `iptables-restore --noflush` transaction, so it
+  is never momentarily empty (no fall-through-to-ACCEPT window during a rebuild).
+- **Fail loud.** Any `iptables` failure throws; the sidecar emits `egress.enforce.failed` and does *not*
+  report enforcement, rather than silently leaving the agent open.
+
+**Privilege separation:** only the sidecar holds `CAP_NET_ADMIN`, so the agent — which shares the
+namespace but not the capability — cannot alter or remove the *rules*. **Runtime toggle:** mode + allow
+come from `EGRESS_MODE`/`EGRESS_ALLOW`, overridable without a restart by a JSON policy file
+(`/logs/egress-policy.json`, `{mode, allow}`) the runner writes per engagement; env `EGRESS_MODE=enforce`
+is a **floor** the file cannot lower, and a malformed/unknown-mode file is ignored (`egress.policy_invalid`)
+while the last-good enforcement holds — a torn read never tears the chain down. Denials surface as an
+`egress.denied` running count (the REJECT rule's packet counter); the kernel `LOG` lines only appear if
+`nf_log_all_netns=1`, so don't rely on them.
+
+**Threat model — what enforce does *not* do.** Enforce is **defense-in-depth egress control, not a hard
+containment boundary against an agent actively trying to escape.** Two structural gaps remain (tracked
+as follow-ups), which is why structural isolation + nothing-to-steal stays the real boundary:
+
+- **The agent holds `CAP_NET_RAW`** (for `nmap`/`ping`). Raw/`AF_PACKET` sockets transmit *below*
+  netfilter, so a determined agent can craft packets that bypass the filter, and could sniff/spoof the
+  sidecar's DNS on loopback to poison the allowlist. Closing this means dropping `NET_RAW` in enforce
+  (losing raw-socket scans) or enforcing outside the agent's namespace.
+- **Namespace lifecycle.** The rules live in the agent's shared network namespace. If the agent
+  restarts (including by OOM-ing itself) it gets a fresh namespace with no chain until the sidecar
+  re-syncs, and there is a short install window at first start. True containment needs the enforcement
+  point *outside* the agent's namespace — a gateway container the agent routes through, or the host
+  `DOCKER-USER` chain.
 
 ## How the layers stack
 
@@ -110,12 +138,19 @@ You never *lose* protection by staying in Monitor; Enforce only adds the network
   unit-tested `docker/egress-filter.mjs` (see `server/src/egress-filter.test.ts`). The sidecar installs
   the deny-by-default chain in `enforce` and tears it down in `monitor`, driven by env or the runtime
   policy file. The agent image ships `iptables`; the sidecar gains `CAP_NET_ADMIN` in compose.
-- **Follow-up (infra):**
-  - **Per-destination denial logging:** denials are currently a running count (packet counter) plus
-    `iptables` LOG lines in the kernel log; wiring NFLOG → the JSONL would name each blocked destination.
+- **Follow-up (infra) — from the Mythos review of PR #43:**
+  - **Enforce outside the namespace** (gateway container / host `DOCKER-USER`), and/or drop `NET_RAW`
+    in enforce — the real fix for the two threat-model gaps above (#4, #6).
+  - **IPv6 hardening** (#8): when `ip6tables` is missing the sidecar logs `egress.enforce.v6_unavailable`
+    and proceeds on IPv4 — if the namespace has a v6 route this is a real bypass, so enforce should refuse
+    or disable v6 (`sysctl`). When v6 *is* enforced, add explicit NDP (ICMPv6 133–136) accepts.
+  - **Don't trust DNS answers into private space** (#9): drop resolved IPs in link-local / loopback /
+    RFC1918 / `169.254.169.254` unless an explicit literal covers them (blocks target-DNS SSRF to
+    metadata/host).
+  - **Resolution robustness** (#11): cache last-known-good IPs across a transient `SERVFAIL` so a DNS
+    blip doesn't cut the target/proxy for a cycle; honour `/etc/hosts`.
+  - **Teardown from kernel state** (#12) and **stricter `parseAllow`** via `net.isIP` (#13).
+  - **Per-destination denial logging** via NFLOG → the JSONL (today: a running count).
   - **Runner-side wiring:** a UI control that writes `/logs/egress-policy.json` (mode + the engagement's
     scope and "also allow" host) so operators flip Enforce per engagement without editing `.env`.
-  - **IPv6:** enforced when the namespace has `ip6tables`; if it doesn't, the sidecar logs
-    `egress.enforce.v6_unavailable` and proceeds on IPv4 (a theoretical v6 bypass only if the target has
-    a reachable AAAA — uncommon in the default bridge).
   - The compose-layer env scrub for Docker mode (secrets out of the agent container's environment).

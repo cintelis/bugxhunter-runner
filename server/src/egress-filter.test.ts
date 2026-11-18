@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 // The enforce-mode egress logic lives with the sidecar (plain ESM, shipped in the
 // agent image), but it is pure, so we unit-test it from the server workspace.
 import {
-  egressMode, parseAllow, readPolicy, ipInCidr, ipAllowed, buildChainRules, EGRESS_CHAIN,
+  egressMode, parseAllow, readPolicy, ipInCidr, ipAllowed, buildChainRules, renderRestore, EGRESS_CHAIN,
 } from "../../docker/egress-filter.mjs";
 
 describe("egressMode", () => {
@@ -52,10 +52,24 @@ describe("readPolicy — env default with a file override (the runtime toggle)",
     expect(p.mode).toBe("enforce");
     expect(p.allow.hosts).toEqual(["env.example"]);
   });
-  it("a malformed file falls back to the env (fails safe, not open)", () => {
+  it("env=enforce is a FLOOR: a file cannot lower it to monitor", () => {
+    const p = readPolicy({ EGRESS_MODE: "enforce", EGRESS_ALLOW: "env.example" },
+      JSON.stringify({ mode: "monitor", allow: ["x.example"] }));
+    expect(p.mode).toBe("enforce");                 // file could not downgrade
+    expect(p.allow.hosts).toEqual(["x.example"]);   // but its allow list still applied
+    expect(p.fileInvalid).toBe(false);
+  });
+  it("a malformed file is flagged invalid and the env is used (fails safe, not open)", () => {
     const p = readPolicy({ EGRESS_MODE: "enforce", EGRESS_ALLOW: "env.example" }, "{ not json");
     expect(p.mode).toBe("enforce");
     expect(p.allow.hosts).toEqual(["env.example"]);
+    expect(p.fileInvalid).toBe(true);
+  });
+  it("an unknown mode string is flagged invalid, not silently treated as monitor", () => {
+    const p = readPolicy({ EGRESS_MODE: "enforce", EGRESS_ALLOW: "env.example" },
+      JSON.stringify({ mode: "enforced" }));
+    expect(p.fileInvalid).toBe(true);
+    expect(p.mode).toBe("enforce");                 // held at the env floor
   });
 });
 
@@ -76,25 +90,43 @@ describe("ipInCidr / ipAllowed", () => {
 });
 
 describe("buildChainRules — the deny-by-default ruleset", () => {
-  it("allows lo / established / DNS, then each destination, then LOG + REJECT last", () => {
-    const rules = buildChainRules(["203.0.113.5", "198.51.100.0/24"], "inet");
+  it("allows lo, then PINNED DNS, then each destination, then LOG + REJECT last", () => {
+    const rules = buildChainRules(["203.0.113.5", "198.51.100.0/24"], "inet", ["9.9.9.9"]);
     expect(rules[0]).toEqual(["-A", EGRESS_CHAIN, "-o", "lo", "-j", "ACCEPT"]);
-    expect(rules).toContainEqual(["-A", EGRESS_CHAIN, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"]);
+    // DNS is pinned to the resolver, NOT opened to every host on port 53.
+    expect(rules).toContainEqual(["-A", EGRESS_CHAIN, "-d", "9.9.9.9", "-p", "udp", "--dport", "53", "-j", "ACCEPT"]);
+    expect(rules).toContainEqual(["-A", EGRESS_CHAIN, "-d", "9.9.9.9", "-p", "tcp", "--dport", "53", "-j", "ACCEPT"]);
+    // No blanket port-53 accept (the bypass #1).
+    expect(rules).not.toContainEqual(["-A", EGRESS_CHAIN, "-p", "udp", "--dport", "53", "-j", "ACCEPT"]);
+    // No blanket ESTABLISHED accept (#7).
+    expect(rules.some((r) => r.includes("ESTABLISHED,RELATED"))).toBe(false);
     expect(rules).toContainEqual(["-A", EGRESS_CHAIN, "-d", "203.0.113.5", "-j", "ACCEPT"]);
     expect(rules).toContainEqual(["-A", EGRESS_CHAIN, "-d", "198.51.100.0/24", "-j", "ACCEPT"]);
-    // The REJECT is the final rule — anything not accepted above is blocked.
     expect(rules.at(-1)).toEqual(["-A", EGRESS_CHAIN, "-j", "REJECT", "--reject-with", "icmp-admin-prohibited"]);
-    // A LOG rule sits immediately before the REJECT.
     expect(rules.at(-2)?.includes("LOG")).toBe(true);
+    // The LOG prefix is space-free so iptables-restore needs no quoting.
+    expect(rules.at(-2)?.at(-1)).toBe("bxh-egress-deny:");
   });
   it("uses the IPv6 reject target for the inet6 family", () => {
     const rules = buildChainRules([], "inet6");
     expect(rules.at(-1)).toEqual(["-A", EGRESS_CHAIN, "-j", "REJECT", "--reject-with", "icmp6-adm-prohibited"]);
   });
-  it("with no destinations still blocks everything except infra (lo/established/DNS)", () => {
-    const rules = buildChainRules([], "inet");
+  it("with no destinations and no resolvers, only loopback is allowed before REJECT", () => {
+    const rules = buildChainRules([], "inet", []);
     const accepts = rules.filter((r) => r.includes("ACCEPT"));
-    expect(accepts).toHaveLength(4); // lo, established, udp/53, tcp/53 — no host allows
+    expect(accepts).toEqual([["-A", EGRESS_CHAIN, "-o", "lo", "-j", "ACCEPT"]]);
     expect(rules.at(-1)?.includes("REJECT")).toBe(true);
+  });
+});
+
+describe("renderRestore — atomic apply document", () => {
+  it("wraps the chain in a flush-and-repopulate transaction", () => {
+    const text = renderRestore(buildChainRules(["203.0.113.5"], "inet", []));
+    const lines = text.trim().split("\n");
+    expect(lines[0]).toBe("*filter");
+    expect(lines[1]).toBe(`:${EGRESS_CHAIN} - [0:0]`);   // create-or-flush atomically
+    expect(lines).toContain(`-A ${EGRESS_CHAIN} -d 203.0.113.5 -j ACCEPT`);
+    expect(lines.at(-1)).toBe("COMMIT");
+    expect(text).not.toContain('"');                      // no quoting hazards
   });
 });

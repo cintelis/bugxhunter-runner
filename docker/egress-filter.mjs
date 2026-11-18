@@ -15,9 +15,17 @@
  *     else is REJECTed and rate-logged.
  */
 
-/** Normalise the mode string. Anything that isn't exactly "enforce" is monitor. */
+/** Recognise an explicit mode, or null for a non-empty value we don't know. */
+export function recognizedMode(raw) {
+  const v = String(raw ?? "").trim().toLowerCase();
+  if (v === "enforce") return "enforce";
+  if (v === "monitor" || v === "") return "monitor";
+  return null;
+}
+
+/** Normalise the mode string. Unknown / empty → monitor (fail-safe default). */
 export function egressMode(raw) {
-  return String(raw ?? "").trim().toLowerCase() === "enforce" ? "enforce" : "monitor";
+  return recognizedMode(raw) ?? "monitor";
 }
 
 /** True for a string that looks like an IPv6 literal or IPv6 CIDR. */
@@ -85,24 +93,37 @@ function dedupeLiterals(xs) {
 }
 
 /** Decide mode + allow list from the sidecar's env and an optional policy file.
- *  A valid policy file (JSON {mode?, allow?}) overrides the env for the keys it
- *  sets; a missing or malformed file falls back to the env entirely. This is the
- *  runtime toggle: the runner writes the file, the sidecar re-reads it each cycle. */
+ *  A valid policy file (JSON {mode?, allow?}) is the runtime toggle: the runner
+ *  writes it, the sidecar re-reads it each cycle. Two safety rules:
+ *   - env EGRESS_MODE=enforce is a FLOOR — the file can raise to enforce but
+ *     never lower to monitor (so a stray/hostile file can't disable containment);
+ *   - a malformed file, or an unknown `mode`, is reported via `fileInvalid` and
+ *     its contents are ignored (the caller holds its last-good state rather than
+ *     tearing enforcement down on a torn read). */
 export function readPolicy(env, fileText) {
-  let mode = egressMode(env.EGRESS_MODE);
+  const envMode = egressMode(env.EGRESS_MODE);
+  let mode = envMode;
   let allowRaw = env.EGRESS_ALLOW ?? "";
-  if (fileText) {
-    try {
-      const j = JSON.parse(fileText);
-      if (j && typeof j === "object" && !Array.isArray(j)) {
-        if (j.mode !== undefined) mode = egressMode(j.mode);
-        if (j.allow !== undefined) allowRaw = Array.isArray(j.allow) ? j.allow.join(",") : String(j.allow);
+  let fileInvalid = false;
+
+  if (fileText != null && String(fileText).trim() !== "") {
+    let j;
+    try { j = JSON.parse(fileText); } catch { j = undefined; }
+    if (!j || typeof j !== "object" || Array.isArray(j)) {
+      fileInvalid = true;
+    } else {
+      if (j.mode !== undefined) {
+        const fm = recognizedMode(j.mode);
+        if (fm === null) fileInvalid = true;
+        else mode = fm;
       }
-    } catch {
-      /* malformed policy file: ignore it and use the env defaults */
+      if (j.allow !== undefined) allowRaw = Array.isArray(j.allow) ? j.allow.join(",") : String(j.allow);
     }
   }
-  return { mode, allow: parseAllow(allowRaw) };
+
+  if (envMode === "enforce") mode = "enforce";            // env floor
+  if (fileInvalid) { mode = envMode; allowRaw = env.EGRESS_ALLOW ?? ""; } // ignore the bad file
+  return { mode, allow: parseAllow(allowRaw), fileInvalid };
 }
 
 /* ───────── IPv4 helpers (used to tag monitor-mode connect logs) ───────── */
@@ -139,24 +160,45 @@ const CHAIN = "BXH_EGRESS";
 
 /**
  * Build the ordered list of rules for one address family's BXH_EGRESS chain.
- * `acceptAddrs` are the resolved destinations to allow (IPs/CIDRs of that
- * family). Returns arrays of `iptables`/`ip6tables` arguments, in order.
+ * Returns arrays of `iptables`/`ip6tables` arguments, in order.
  *
- * Shape: allow loopback, established/related and DNS; allow each destination;
- * then rate-log and REJECT the rest (fail-closed relative to the allow list).
+ *   `acceptAddrs` — resolved destinations to allow (IPs/CIDRs of this family),
+ *                   reachable on any port (pentest targets need every port).
+ *   `dnsAddrs`    — resolver IPs of this family to allow on port 53 only. DNS is
+ *                   NOT opened to every host (that would be a trivial bypass:
+ *                   `curl http://evil:53`); only the configured resolvers.
+ *
+ * Shape: allow loopback, then DNS to the pinned resolvers, then each
+ * destination, then rate-log and REJECT the rest. There is deliberately NO
+ * blanket ESTABLISHED,RELATED accept — in an OUTPUT, destination-based chain a
+ * legitimate flow already matches its `-d` rule, whereas a broad ESTABLISHED
+ * accept would keep monitor-era tunnels alive across a flip and survive an
+ * allowlist shrink. Dropping it means removing a host cuts its live flows too.
  */
-export function buildChainRules(acceptAddrs, family = "inet") {
+export function buildChainRules(acceptAddrs, family = "inet", dnsAddrs = []) {
   const reject = family === "inet6" ? "icmp6-adm-prohibited" : "icmp-admin-prohibited";
-  const rules = [
-    ["-A", CHAIN, "-o", "lo", "-j", "ACCEPT"],
-    ["-A", CHAIN, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"],
-    ["-A", CHAIN, "-p", "udp", "--dport", "53", "-j", "ACCEPT"],
-    ["-A", CHAIN, "-p", "tcp", "--dport", "53", "-j", "ACCEPT"],
-  ];
+  const rules = [["-A", CHAIN, "-o", "lo", "-j", "ACCEPT"]];
+  for (const ns of dnsAddrs) {
+    rules.push(["-A", CHAIN, "-d", ns, "-p", "udp", "--dport", "53", "-j", "ACCEPT"]);
+    rules.push(["-A", CHAIN, "-d", ns, "-p", "tcp", "--dport", "53", "-j", "ACCEPT"]);
+  }
   for (const addr of acceptAddrs) rules.push(["-A", CHAIN, "-d", addr, "-j", "ACCEPT"]);
-  rules.push(["-A", CHAIN, "-m", "limit", "--limit", "6/min", "-j", "LOG", "--log-prefix", "bxh-egress-deny "]);
+  // Space-free prefix so the rule survives `iptables-restore` without quoting.
+  rules.push(["-A", CHAIN, "-m", "limit", "--limit", "6/min", "-j", "LOG", "--log-prefix", "bxh-egress-deny:"]);
   rules.push(["-A", CHAIN, "-j", "REJECT", "--reject-with", reject]);
   return rules;
+}
+
+/**
+ * Render a chain's rules as an `iptables-restore --noflush` document. The
+ * `:BXH_EGRESS - [0:0]` line creates-or-flushes the chain and the whole block
+ * is applied as ONE kernel transaction, so the chain is never momentarily empty
+ * (no fall-through-to-ACCEPT window during a rebuild). Rules for other chains
+ * are untouched (--noflush); the OUTPUT jump is managed separately.
+ */
+export function renderRestore(rules) {
+  const body = rules.map((r) => r.join(" ")).join("\n");
+  return `*filter\n:${CHAIN} - [0:0]\n${body}\nCOMMIT\n`;
 }
 
 export const EGRESS_CHAIN = CHAIN;
