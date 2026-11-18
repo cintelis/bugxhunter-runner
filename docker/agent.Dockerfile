@@ -8,11 +8,13 @@ FROM node:22-bookworm-slim
 # Tools the agent commonly reaches for. Add your own (nmap, semgrep, …) here.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      git ca-certificates curl ripgrep jq less procps python3 python3-pip python3-venv tcpdump \
+      git ca-certificates curl ripgrep jq less procps python3 python3-pip python3-venv tcpdump iptables \
  && rm -rf /var/lib/apt/lists/*
 
-# Passive egress logger (runs in a sidecar sharing the agent's network namespace).
+# Egress sidecar (runs in a container that shares the agent's network namespace):
+# passive logging always, plus opt-in deny-by-default enforcement via iptables.
 COPY docker/egress-logger.mjs /usr/local/lib/egress-logger.mjs
+COPY docker/egress-filter.mjs /usr/local/lib/egress-filter.mjs
 
 ARG OPENCODE_VERSION=1.18.34
 # opencode-ai's postinstall hard-links the CPU-matched binary into bin/ and

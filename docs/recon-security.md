@@ -61,8 +61,19 @@ tooling/payloads and following in-scope redirects. So egress has two modes:
   For engagements in shared / prod-adjacent environments, or customers who require hard containment.
 
 The toggle belongs **per-engagement** (block mode is an engagement decision), with a global default.
-The same `egress-logger` sidecar is the enforcement point — a mode flag (`observe` → `enforce`), not
-new infra.
+The same `egress-logger` sidecar is the enforcement point — a mode flag, not new infra.
+
+**Mechanism (implemented).** The sidecar shares the agent's network namespace. In `enforce` it installs
+a deny-by-default `BXH_EGRESS` chain (`iptables` + `ip6tables`): loopback, established flows and DNS are
+allowed, then each resolved allow destination (the in-scope target, `EGRESS_ALLOW` hosts/IPs/CIDRs, and
+the model proxy), and the rest is REJECTed and rate-logged. Allow hostnames are re-resolved each cycle so
+CDN/rotating IPs keep working. **Privilege separation:** only the sidecar holds `CAP_NET_ADMIN`, so the
+agent — which shares the namespace but not the capability — cannot alter or remove the rules; and the
+rules live in the kernel namespace, so they persist (fail-closed) even if the sidecar is restarted.
+**Runtime toggle:** mode + allow come from `EGRESS_MODE`/`EGRESS_ALLOW`, overridable without a restart by
+a JSON policy file (`/logs/egress-policy.json`, `{mode, allow}`) the runner writes per engagement; the
+sidecar re-reads it each cycle and reconciles (installing or tearing down the chain). Denials surface in
+the egress log as an `egress.denied` running count (from the REJECT rule's packet counter).
 
 ## How the layers stack
 
@@ -95,6 +106,16 @@ You never *lose* protection by staying in Monitor; Enforce only adds the network
   a separate container, so there the env must be scrubbed at the compose/container layer — though the
   runner already reaches the LLM only through a key-injecting proxy, so the real provider key never
   enters the agent container.
-- **Follow-up (infra):** the Monitor/Enforce egress toggle + allowlist in the `egress-logger` / agent
-  container, and the compose-layer env scrub for Docker mode. These make the model *enforced* rather
-  than documented — the gate is deliberately not relied on as the boundary.
+- **Egress Monitor/Enforce (implemented, Docker mode):** `docker/egress-logger.mjs` + the pure,
+  unit-tested `docker/egress-filter.mjs` (see `server/src/egress-filter.test.ts`). The sidecar installs
+  the deny-by-default chain in `enforce` and tears it down in `monitor`, driven by env or the runtime
+  policy file. The agent image ships `iptables`; the sidecar gains `CAP_NET_ADMIN` in compose.
+- **Follow-up (infra):**
+  - **Per-destination denial logging:** denials are currently a running count (packet counter) plus
+    `iptables` LOG lines in the kernel log; wiring NFLOG → the JSONL would name each blocked destination.
+  - **Runner-side wiring:** a UI control that writes `/logs/egress-policy.json` (mode + the engagement's
+    scope and "also allow" host) so operators flip Enforce per engagement without editing `.env`.
+  - **IPv6:** enforced when the namespace has `ip6tables`; if it doesn't, the sidecar logs
+    `egress.enforce.v6_unavailable` and proceeds on IPv4 (a theoretical v6 bypass only if the target has
+    a reachable AAAA — uncommon in the default bridge).
+  - The compose-layer env scrub for Docker mode (secrets out of the agent container's environment).
