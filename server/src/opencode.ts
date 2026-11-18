@@ -22,6 +22,7 @@ import { createOpencodeServer, createOpencodeClient } from "@opencode-ai/sdk";
 import type { AgentEvent, AgentModel, MessagePart, StoredMessage } from "../../shared/agent.js";
 import { httpError } from "./errors.js";
 import { anthropicOpencodeProvider, openrouterOpencodeProvider, nvidiaOpencodeProvider, ANTHROPIC_MODELS, OPENROUTER_MODELS, PORT } from "./providers.js";
+import { RECON_AGENTS } from "./recon.js";
 
 export type { AgentEvent, AgentModel, StoredMessage };
 
@@ -71,6 +72,9 @@ async function inlineConfig() {
       build: { model: DEFAULT_MODEL },
       plan: { model: DEFAULT_MODEL },
       vision: VISION_AGENT,
+      // Supervised recon/autopwn: executor (GLM) + triage (Haiku) + verify
+      // (Sonnet) + escalate (Mythos), each on the job it is good at. See recon.ts.
+      ...RECON_AGENTS,
     },
     permission: { edit: "ask", bash: "ask" },
     ...(Object.keys(provider).length ? { provider } : {}),
