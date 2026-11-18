@@ -3,39 +3,24 @@
  * -----------------------------------------------------------------------------
  * Adds ARTEX's one genuine edge — an autonomous recon -> hypothesise -> test ->
  * confirm loop — to BugXHunter, without importing ARTEX's failure modes
- * (runaway frontier-model cost, rate-limit thrash, and reporting a config
- * artifact as a production finding).
+ * (runaway frontier cost, rate-limit thrash, config-artifact-as-finding).
  *
  * Routing follows a roles x profiles x harness design (the general pattern from
  * the public aider / Claude Code / Roo multi-model research, reimplemented here
- * from scratch for pentest roles):
+ * from scratch for pentest roles): ROLES (executor/triage/verify/escalate) are
+ * the fixed jobs; a PROFILE bolts a model into each; a per-role HARNESS tunes
+ * how each runs (budget/rounds/tools/effort). `routeModel` escalates on evidence
+ * and sheds a rate-limited model to a healthy neighbour (per model, since the
+ * 429 we saw named `claude-mythos-5-2` alone). `EnvFidelity` tags every finding
+ * with the environment it was seen in.
  *
- *   - ROLES are the four fixed jobs in a run: executor / triage / verify /
- *     escalate. The orchestrator shifts between them.
- *   - A PROFILE bolts a model into each role. Users pick one, or define their
- *     own in a JSON file (RECON_PROFILES_FILE) — a typo degrades to a built-in,
- *     never a crash.
- *   - A per-role HARNESS tunes HOW a role runs (token budget, round cap, tool
- *     surface, effort), not just which model — the lever that keeps an
- *     autonomous loop from running away (the ARTEX cost blowout).
- *
- * On top of that, two things the coding-oriented routers don't need and ARTEX
- * lacked:
- *   - `routeModel` sheds a rate-limited model down a tier (per model, since the
- *     429 we saw named `claude-mythos-5-2` alone) instead of thrashing.
- *   - `EnvFidelity` tags every finding with the environment it was seen in, so a
- *     bug that hinges on a non-prod setting is flagged "config-dependent", not
- *     shipped as a clean Medium.
- *
- * Nothing here runs blind: the agents still ride OpenCode's `permission: ask`
- * model, and `classifyCommand` lets the UI auto-allow read-only recon while
- * always pausing on anything that changes state.
- *
- * Scaffolding: the roles, profiles and router are wired and type-checked; the
- * driver loop that walks them (and reads the harness) and the UI are the next
- * slice. Prompts are concise inline here and should later be built from the
- * standards catalogue in `web/src/intel` so findings cite the same WSTG / OWASP
- * ids everywhere.
+ * SECURITY NOTE — the approval gate. `classifyCommand` is the security boundary
+ * of this feature, so it does NOT regex a denylist over a raw string (that is
+ * fail-open: `curl -sX DELETE`, `curl ...|sh`, `echo x > ~/.bashrc` all slip a
+ * substring allowlist). It parses: reject shell control operators / substitution
+ * / redirection, split the pipeline, and for each stage allow ONLY a known-safe
+ * binary with validated args — fetchers must use GET/HEAD and target exactly the
+ * in-scope host. Anything unrecognised asks. Extra asks are the safe direction.
  */
 
 import { readFileSync } from "node:fs";
@@ -48,11 +33,7 @@ const ROLES: readonly ReconRole[] = ["executor", "triage", "verify", "escalate"]
 /** Reasoning effort a role is driven at. */
 export type ReconEffort = "low" | "medium" | "high";
 
-/**
- * How a role runs, beyond which model it is. Every field is optional and an
- * absent field means today's default. The driver loop reads these when it
- * invokes a role; the OpenCode agent config only carries model + tools.
- */
+/** How a role runs, beyond which model it is. Absent field = today's default. */
 export interface ReconHarness {
   /** Uncached input tokens one delegation may spend before it stops (the cost cap). */
   budgetTokens?: number;
@@ -71,40 +52,30 @@ export interface ReconProfile {
 }
 
 /**
- * Built-in profiles, cheap -> capable. Every model id is `provider/model` the
- * way OpenCode addresses it; `scx/*` is open-weight, `anthropic/*` is Claude.
- * The default spends open-weight GLM on the grind and Claude only where judgment
- * pays. `recon-open` keeps a key-less, SCX-only install fully working.
+ * Built-in profiles, cheap -> capable. Each model id is `provider/model`;
+ * `scx/*` is open-weight, `anthropic/*` is Claude. The default spends GLM on the
+ * grind and Claude only where judgment pays; `recon-open` works key-less.
  */
 export const BUILTIN_PROFILES: Record<string, ReconProfile> = {
-  // All open-weight. Nothing leaves SCX; no Anthropic key needed.
   "recon-open": {
     models: { executor: "scx/GLM-5.3", triage: "scx/GLM-5.3-Flash", verify: "scx/GLM-5.3", escalate: "scx/GLM-5.3" },
     harness: {
       executor: { tools: "core", maxRounds: 80, budgetTokens: 3_000_000 },
-      triage: { tools: "core" },
-      verify: { tools: "core" },
-      escalate: { tools: "core" },
+      triage: { tools: "core" }, verify: { tools: "core" }, escalate: { tools: "core" },
     },
   },
-  // Default. GLM grinds; Haiku triages; Sonnet verifies; Mythos escalates rarely.
   "recon-balanced": {
     models: { executor: "scx/GLM-5.3", triage: "anthropic/claude-haiku-5-5", verify: "anthropic/claude-sonnet-5-5", escalate: "anthropic/claude-mythos-5-2" },
     harness: {
       executor: { tools: "core", maxRounds: 60, budgetTokens: 2_000_000, effort: "medium" },
-      triage: { tools: "core" },
-      verify: { tools: "core", effort: "high" },
-      escalate: { tools: "core", effort: "high" },
+      triage: { tools: "core" }, verify: { tools: "core", effort: "high" }, escalate: { tools: "core", effort: "high" },
     },
   },
-  // For hard targets: a Claude executor too, Opus verifying.
   "recon-quality": {
     models: { executor: "anthropic/claude-sonnet-5-5", triage: "anthropic/claude-haiku-5-5", verify: "anthropic/claude-opus-5-5", escalate: "anthropic/claude-mythos-5-2" },
     harness: {
       executor: { tools: "core", maxRounds: 50, budgetTokens: 2_000_000, effort: "high" },
-      triage: { tools: "core" },
-      verify: { tools: "core", effort: "high" },
-      escalate: { tools: "core", effort: "high" },
+      triage: { tools: "core" }, verify: { tools: "core", effort: "high" }, escalate: { tools: "core", effort: "high" },
     },
   },
 };
@@ -127,9 +98,8 @@ export function parseReconHarness(raw: unknown): ReconHarness | undefined {
 export function parseProfile(def: unknown): ReconProfile | null {
   if (!def || typeof def !== "object") return null;
   const d = def as Record<string, unknown>;
-  const rawModels = d.models;
-  if (!rawModels || typeof rawModels !== "object") return null;
-  const m = rawModels as Record<string, unknown>;
+  if (!d.models || typeof d.models !== "object") return null;
+  const m = d.models as Record<string, unknown>;
   const models = {} as Record<ReconRole, string>;
   for (const role of ROLES) {
     if (typeof m[role] !== "string" || !m[role]) return null;
@@ -152,8 +122,8 @@ export function loadProfiles(): Record<string, ReconProfile> {
   if (!file) return merged;
   try {
     const parsed = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
-    for (const [name, def] of Object.entries(parsed)) {
-      const p = parseProfile(def);
+    for (const name of Object.keys(parsed)) {
+      const p = parseProfile(parsed[name]);
       if (p) merged[name] = p;
     }
   } catch {
@@ -168,19 +138,19 @@ export function activeProfileName(): string {
 }
 
 export function activeProfile(): ReconProfile {
-  return loadProfiles()[activeProfileName()] ?? BUILTIN_PROFILES[DEFAULT_PROFILE];
+  const profiles = loadProfiles();
+  const name = activeProfileName();
+  // Object.hasOwn so RECON_PROFILE=constructor (a prototype key) can't resolve to junk.
+  return Object.hasOwn(profiles, name) ? profiles[name] : BUILTIN_PROFILES[DEFAULT_PROFILE];
 }
 
 export function profileNames(): string[] {
   return Object.keys(loadProfiles());
 }
 
-/** Per-role env override, highest precedence (RECON_EXECUTOR_MODEL, …). */
 const ROLE_ENV: Record<ReconRole, string> = {
-  executor: "RECON_EXECUTOR_MODEL",
-  triage: "RECON_TRIAGE_MODEL",
-  verify: "RECON_VERIFY_MODEL",
-  escalate: "RECON_ESCALATE_MODEL",
+  executor: "RECON_EXECUTOR_MODEL", triage: "RECON_TRIAGE_MODEL",
+  verify: "RECON_VERIFY_MODEL", escalate: "RECON_ESCALATE_MODEL",
 };
 
 /** The model for a role: env override > active profile. */
@@ -193,54 +163,24 @@ export function harnessFor(role: ReconRole): ReconHarness {
   return activeProfile().harness?.[role] ?? {};
 }
 
-/** How many failed attempts on one intent before the executor earns a stronger model. */
-const ESCALATE_AFTER = Number(process.env.RECON_ESCALATE_AFTER ?? 2);
+/** Stuck attempts before the executor earns a stronger model. Validated: a blank
+ *  or non-integer env value falls back to 2 (a blank would otherwise be 0 and
+ *  escalate every turn). */
+const ESCALATE_AFTER = (() => {
+  const n = Number(process.env.RECON_ESCALATE_AFTER);
+  return Number.isInteger(n) && n >= 1 ? n : 2;
+})();
 
 /** Signals the router reads. All optional — absence means "no reason to deviate". */
 export interface RouteSignals {
   /** Failed attempts on the current intent so far. */
   attempts?: number;
-  /** The executor's own read on how severe the thing it is chasing looks. */
+  /** Severity of the CURRENT candidate (not accumulated — escalation is one-shot). */
   severityHint?: "low" | "medium" | "high" | "critical";
-  /**
-   * Models (or whole providers) at or near their rate limit. Anthropic's limits
-   * are PER MODEL (the 429 we saw named `claude-mythos-5-2` alone), so key this
-   * by the full model id to shed just that model, or by a bare provider id to
-   * shed everything on a provider that is down. Both are checked.
-   */
+  /** Models (full id) or whole providers at/near their rate limit. Both checked. */
   rateLimited?: Partial<Record<string, boolean>>;
-  /** Token budget left for the run; a near-empty budget avoids the pricey tier. */
+  /** Token budget left; <=0 drops to the cheapest healthy model. */
   budgetRemaining?: number;
-}
-
-/**
- * The intelligent router. DETERMINISTIC on purpose — no model-as-router on the
- * hot path. One place the model choice is made, so escalation and rate-limit
- * policy live here and nowhere else.
- *
- *   - Role is the baseline (from the active profile).
- *   - A stuck executor, or a High/Critical candidate, escalates to the top tier.
- *   - A rate-limited or budget-starved model sheds down a tier BEFORE it 429s.
- */
-export function routeModel(role: ReconRole, s: RouteSignals = {}): string {
-  let model = modelFor(role);
-
-  // Escalate on evidence, not by default (ARTEX's mistake was the opposite:
-  // frontier-by-default, and it never escalated DOWN to a cheap model either).
-  const stuck = (s.attempts ?? 0) >= ESCALATE_AFTER;
-  const grave = s.severityHint === "high" || s.severityHint === "critical";
-  if (role === "executor" && (stuck || grave)) model = modelFor("escalate");
-
-  // Shed load off a capped model, or when the budget is spent, down to the mid
-  // tier (verify). Per-model aware, so a capped Mythos still sheds to a healthy
-  // Sonnet; only if the fallback is ALSO capped do we grind on the executor model.
-  const starved = s.budgetRemaining !== undefined && s.budgetRemaining <= 0;
-  if (capped(model, s) || starved) {
-    const fallback = modelFor("verify");
-    model = capped(fallback, s) ? modelFor("executor") : fallback;
-  }
-
-  return model;
 }
 
 /** True if this model, or its whole provider, is flagged rate-limited. */
@@ -248,6 +188,263 @@ function capped(model: string, s: RouteSignals): boolean {
   const provider = model.split("/")[0];
   return Boolean(s.rateLimited?.[model] || s.rateLimited?.[provider]);
 }
+
+/** Role models cheapest-tier first (profile order), for shedding. */
+function tierOrder(): string[] {
+  return [modelFor("executor"), modelFor("triage"), modelFor("verify"), modelFor("escalate")];
+}
+
+/** The cheapest model with no cap, or undefined if every tier is capped. */
+function cheapestHealthy(s: RouteSignals): string | undefined {
+  for (const m of tierOrder()) if (!capped(m, s)) return m;
+  return undefined;
+}
+
+/** Shed a capped model to a healthy neighbour: cheaper first, then pricier. */
+function shed(model: string, s: RouteSignals): string | undefined {
+  const order = tierOrder();
+  const from = order.indexOf(model);
+  const start = from >= 0 ? from : 0;
+  for (let t = start - 1; t >= 0; t--) if (!capped(order[t], s)) return order[t];
+  for (let t = start + 1; t < order.length; t++) if (!capped(order[t], s)) return order[t];
+  return undefined;
+}
+
+/** Every role model is rate-limited — the driver should back off rather than thrash. */
+export function allCapped(s: RouteSignals): boolean {
+  return tierOrder().every((m) => capped(m, s));
+}
+
+/**
+ * The intelligent router. DETERMINISTIC — no model-as-router on the hot path.
+ *   - Role is the baseline.
+ *   - A stuck executor, or a High/Critical candidate, escalates.
+ *   - Budget spent -> the cheapest healthy model (never the pricey tier).
+ *   - A rate-limited model sheds to a healthy neighbour (cheaper first); if the
+ *     whole lineup is capped, the choice stands and `allCapped` tells the driver.
+ */
+export function routeModel(role: ReconRole, s: RouteSignals = {}): string {
+  let model = modelFor(role);
+
+  const stuck = (s.attempts ?? 0) >= ESCALATE_AFTER;
+  const grave = s.severityHint === "high" || s.severityHint === "critical";
+  if (role === "executor" && (stuck || grave)) model = modelFor("escalate");
+
+  if (s.budgetRemaining !== undefined && s.budgetRemaining <= 0) {
+    return cheapestHealthy(s) ?? modelFor("executor");
+  }
+  if (capped(model, s)) return shed(model, s) ?? model;
+  return model;
+}
+
+/* ───────────────────────── the approval gate ───────────────────────── */
+
+export interface GateContext {
+  /** The single in-scope host; fetchers must target exactly this (bare host, no port). */
+  scopeHost?: string;
+}
+
+/** Bare, read-only binaries safe to run with any args. */
+const READ_SAFE = new Set([
+  "cat", "head", "tail", "grep", "egrep", "fgrep", "rg", "wc", "jq", "yq", "echo", "printf",
+  "tr", "uniq", "cut", "ls", "stat", "file", "dig", "nslookup", "host", "whois", "true", "date",
+  "basename", "dirname", "xxd", "base64", "column", "tee",
+]);
+// NOTE: "tee" would write a file, but we strip redirections before tokenising and
+// tee with no file writes to stdout; a tee'd file path is a bareword we don't allow here.
+const FETCHERS = new Set(["curl", "wget", "http", "https", "httpie"]);
+
+/** curl short flags that change state / write / upload — any one in a cluster asks. */
+const CURL_SHORT_DANGER = new Set(["X", "d", "F", "T", "o", "O", "K", "c"]);
+/** curl short flags that consume the next argument (so it isn't mistaken for a URL). */
+const CURL_SHORT_VALUE = new Set(["H", "A", "b", "e", "u", "m", "x", "y", "Y", "z", "E", "w", "U", "D", "r", "t"]);
+/** Long flags that change state / write / upload — these ask. */
+const LONG_DANGER = new Set([
+  "--request", "--method", "--data", "--data-raw", "--data-binary", "--data-urlencode", "--data-ascii",
+  "--json", "--form", "--form-string", "--upload-file", "--post-file", "--post-data", "--body-file", "--body-data",
+  "--output", "--remote-name", "--output-document", "--config", "--trace", "--trace-ascii", "--dump-header", "--cookie-jar",
+]);
+/** Long flags that consume the next argument. */
+const LONG_VALUE = new Set([
+  "--header", "--user-agent", "--cookie", "--referer", "--url", "--connect-timeout", "--max-time",
+  "--proxy", "--write-out", "--user", "--resolve", "--range", "--retry", "--oauth2-bearer", "--timeout", "--tries",
+]);
+
+/**
+ * Risk tier for one shell command: may the UI auto-allow it, or must a human
+ * approve? Parse-then-allowlist, fail closed. `ctx.scopeHost` makes fetchers
+ * require the in-scope host; without it they ask.
+ */
+export function classifyCommand(command: string, ctx: GateContext = {}): "allow" | "ask" {
+  if (!command || /[\r\n]/.test(command)) return "ask";
+  if (hasControlOperators(command)) return "ask";
+  if (hasFileRedirect(command)) return "ask";
+
+  const stages = command.split("|").map((s) => s.trim()).filter(Boolean);
+  if (!stages.length) return "ask";
+  for (const stage of stages) {
+    // Redirections were validated above; strip them before reading argv.
+    const clean = stage.replace(/\d*>>?\s*\S+/g, " ").replace(/<\s*\S+/g, " ").trim();
+    const argv = tokenize(clean);
+    if (!argv || !argv.length) return "ask";
+    if (argv[0].includes("/") || argv[0].includes("=")) return "ask"; // path or env-prefix
+    if (stageDecision(argv, ctx) === "ask") return "ask";
+  }
+  return "allow";
+}
+
+/** Sequencing, substitution, backgrounding, OR — anything that joins commands. */
+function hasControlOperators(cmd: string): boolean {
+  if (/[;`]/.test(cmd)) return true;
+  if (/\$\(|\$\{|<\(|>\(/.test(cmd)) return true;
+  if (/\|\|/.test(cmd)) return true;
+  if (/<(?!<)/.test(cmd)) return true; // input redirection from a file
+  // any & that isn't fd-duplication (2>&1, >&2) is backgrounding or &&
+  const withoutFd = cmd.replace(/\d*>&\d*/g, "").replace(/&>>?/g, "");
+  return withoutFd.includes("&");
+}
+
+/** Output redirection to a real file (anything but /dev/null or an fd dup). */
+function hasFileRedirect(cmd: string): boolean {
+  const re = /\d*>>?\s*(\S+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(cmd))) {
+    const tgt = m[1];
+    if (tgt === "/dev/null" || /^&\d+$/.test(tgt)) continue;
+    return true;
+  }
+  return false;
+}
+
+/** Split a stage into argv, honouring single/double quotes. null = unbalanced (ask). */
+function tokenize(s: string): string[] | null {
+  const out: string[] = [];
+  let cur = "", q: '"' | "'" | null = null, has = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (q) { if (c === q) q = null; else cur += c; continue; }
+    if (c === '"' || c === "'") { q = c; has = true; continue; }
+    if (c === "\\") { if (i + 1 < s.length) cur += s[++i]; continue; }
+    if (/\s/.test(c)) { if (cur || has) { out.push(cur); cur = ""; has = false; } continue; }
+    cur += c; has = true;
+  }
+  if (q) return null;
+  if (cur || has) out.push(cur);
+  return out;
+}
+
+function stageDecision(argv: string[], ctx: GateContext): "allow" | "ask" {
+  const bin = argv[0].toLowerCase();
+  const args = argv.slice(1);
+  if (bin === "sort") return args.some((a) => a === "-o" || a === "--output") ? "ask" : "allow";
+  // awk/sed/find/xargs can execute or write; too varied to validate — always ask.
+  if (bin === "awk" || bin === "gawk" || bin === "sed" || bin === "find" || bin === "xargs" || bin === "perl") return "ask";
+  if (READ_SAFE.has(bin)) return "allow";
+  if (FETCHERS.has(bin)) return fetchDecision(args, ctx);
+  if (bin === "nmap") return nmapDecision(args, ctx);
+  return "ask";
+}
+
+const GET_OR_HEAD = (v: string) => { const u = v.toUpperCase().replace(/['"]/g, ""); return u === "GET" || u === "HEAD"; };
+
+/** A fetcher is safe only as a GET/HEAD to exactly the in-scope host, no body/upload/file-output. */
+function fetchDecision(args: string[], ctx: GateContext): "allow" | "ask" {
+  if (!ctx.scopeHost) return "ask";
+  let target = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--") { // everything after is operands
+      for (let j = i + 1; j < args.length; j++) { if (!matchTarget(args[j], ctx)) return "ask"; target = true; }
+      break;
+    }
+    if (a.startsWith("--")) {
+      const eq = a.indexOf("=");
+      const flag = eq >= 0 ? a.slice(0, eq) : a;
+      const val = eq >= 0 ? a.slice(eq + 1) : args[i + 1];
+      if ((flag === "--request" || flag === "--method")) { if (!GET_OR_HEAD(val ?? "")) return "ask"; if (eq < 0) i++; continue; }
+      if (LONG_DANGER.has(flag)) return "ask";
+      if (LONG_VALUE.has(flag) && eq < 0) i++;
+      continue;
+    }
+    if (a.startsWith("-") && a.length > 1) {
+      const letters = a.slice(1);
+      for (const ch of letters) {
+        if (ch === "X") { // method flag — only GET/HEAD, and only if it's the cluster's tail
+          if (letters.endsWith("X") && GET_OR_HEAD(args[i + 1] ?? "")) { i++; continue; }
+          return "ask";
+        }
+        if (CURL_SHORT_DANGER.has(ch)) return "ask";
+      }
+      if (CURL_SHORT_VALUE.has(letters[letters.length - 1])) i++; // flag consumes the next arg
+      continue;
+    }
+    // bareword: a target URL
+    if (!matchTarget(a, ctx)) return "ask";
+    target = true;
+  }
+  return target ? "allow" : "ask";
+}
+
+/** nmap is safe without NSE/file-output, against exactly the in-scope host. */
+function nmapDecision(args: string[], ctx: GateContext): "allow" | "ask" {
+  if (!ctx.scopeHost) return "ask";
+  let target = false;
+  for (const a of args) {
+    if (a.startsWith("-")) {
+      if (/^--script/.test(a)) return "ask";       // NSE can exploit
+      if (/^-o[NXGSA]/.test(a)) return "ask";       // writes a scan file
+      continue;
+    }
+    if (a !== ctx.scopeHost && urlHost(a) !== ctx.scopeHost) return "ask";
+    target = true;
+  }
+  return target ? "allow" : "ask";
+}
+
+/** Host of an http(s) URL, lowercased and portless, or null if not such a URL. */
+function urlHost(arg: string): string | null {
+  const m = /^https?:\/\/([^/:\s]+)/i.exec(arg);
+  return m ? m[1].toLowerCase() : null;
+}
+
+/** True if `arg` is an http(s) URL whose host equals the in-scope host. */
+function matchTarget(arg: string, ctx: GateContext): boolean {
+  const h = urlHost(arg);
+  return h !== null && h === ctx.scopeHost;
+}
+
+/** The in-scope host (lowercased, portless) from a scope string or URL. */
+export function hostOf(scope: string): string | undefined {
+  const s = scope.trim().replace(/^[a-z]+:\/\//i, "");
+  const host = s.split(/[/:\s]/)[0].toLowerCase();
+  return host || undefined;
+}
+
+/* ───────────────────────── findings ───────────────────────── */
+
+/**
+ * How well the tested environment matches production. Declared by the operator
+ * before a run; every finding is tagged with it so a config-dependent bug is
+ * never shipped as a clean one — the single most important fix over ARTEX.
+ */
+export interface EnvFidelity {
+  kind: "local" | "staging" | "production";
+  divergences: string;
+  nonProdSettings?: string[];
+}
+
+/** One recon finding, tagged with the environment it was seen in. */
+export interface ReconFinding {
+  title: string;
+  severity: "low" | "medium" | "high" | "critical";
+  standardId?: string;
+  repro: string;
+  verdict: "real" | "config-dependent" | "rejected";
+  prodCaveat?: string;
+  env: EnvFidelity["kind"];
+}
+
+/* ───────────────────────── OpenCode subagents ───────────────────────── */
 
 /** Read-only tool posture for the reviewer roles. */
 const READ_ONLY_TOOLS = { bash: false, edit: false, write: false, task: false } as const;
@@ -258,16 +455,16 @@ function executorTools(): Record<string, boolean> {
   return { bash: true, read: true, task: true, edit: full, write: full };
 }
 
-/** One recon subagent definition in OpenCode's inline-config shape. */
 function subagent(model: string, description: string, prompt: string, tools: Record<string, boolean>) {
   return { model, mode: "subagent" as const, description, prompt, tools };
 }
 
 /**
- * The recon subagents, one per role, each bolted to the active profile's model
- * for that role. The driver loop invokes them by role and applies the harness
- * (budget/rounds/effort); when the router escalates, it routes the step to the
- * escalate agent instead of recon.
+ * The recon subagents, one per role, bolted to the active profile's model.
+ * NOTE: these are resolved at import, so they reflect the profile/env at server
+ * start; `routeModel` re-resolves live for escalation/shedding. If a profile is
+ * changed at runtime, restart to re-register. Models not available to the key
+ * only fail when a role is actually invoked, not at config load.
  */
 export const RECON_AGENTS = {
   recon: subagent(
@@ -295,78 +492,3 @@ export const RECON_AGENTS = {
     READ_ONLY_TOOLS,
   ),
 };
-
-/**
- * How well the tested environment matches production. Declared by the operator
- * before a run (or fingerprinted); every finding is tagged with it so a
- * config-dependent bug is never shipped as a clean one. This is the single
- * most important fix over ARTEX, which reported a "delete any run" Medium that
- * only existed because the local instance ran without its production
- * ownership-enforcement flag.
- */
-export interface EnvFidelity {
-  /** Where the target runs: a local dev instance, a staging/qa env, or production. */
-  kind: "local" | "staging" | "production";
-  /** Human note on how it diverges from prod (env flags, seed data, auth gates). */
-  divergences: string;
-  /** Config keys known to differ from production, by name (e.g. "QUANTUM_SHARED"). */
-  nonProdSettings?: string[];
-}
-
-/** One recon finding, tagged with the environment it was seen in. */
-export interface ReconFinding {
-  title: string;
-  severity: "low" | "medium" | "high" | "critical";
-  /** The OWASP/API/WSTG id it maps to. */
-  standardId?: string;
-  /** The request/command and response that reproduce it. */
-  repro: string;
-  verdict: "real" | "config-dependent" | "rejected";
-  /** Set when verdict is config-dependent: what to re-test against production. */
-  prodCaveat?: string;
-  /** The environment this was found in. */
-  env: EnvFidelity["kind"];
-}
-
-/**
- * Risk tier for one shell command: may the UI auto-allow it, or must a human
- * approve? Read-only recon flows without a click; anything that could change
- * state, exfiltrate, or escape scope always asks. The middle path between
- * ARTEX's "approve everything" (unusably slow) and "approve nothing" (unsafe).
- * Conservative by construction: unknown shapes ask.
- */
-export function classifyCommand(command: string): "allow" | "ask" {
-  // Work on the original string: `-X`/`-F` (mutating) vs `-x`/`-f` (benign) only
-  // differ by case, so lower-casing would lose that. Keyword matches use /i.
-  const c = command;
-
-  // State-changing, outbound, or destructive: always ask. Checked first, so a
-  // read verb buried in a mutating command can never win.
-  const MUTATING: RegExp[] = [
-    /(?:^|\s)-X\s*(?:POST|PUT|PATCH|DELETE)\b/i, // curl -X POST/PUT/PATCH/DELETE
-    /--request[=\s]+(?:POST|PUT|PATCH|DELETE)\b/i,
-    /(?:^|\s)-d(?:[=\s']|$)|--data(?:-raw|-binary|-urlencode)?\b/, // sending a body
-    /(?:^|\s)-F\b|--form\b/, // multipart form upload (note: case-sensitive -F)
-    /\b(?:rm|mv|dd|mkfs|truncate|shred)\b/i, // destructive filesystem ops
-    /\b(?:chmod|chown|kill|pkill|shutdown|reboot)\b/i,
-    /\b(?:nc|ncat|netcat)\b/i, // raw sockets / possible reverse shell
-    /\b(?:ssh|scp|sftp)\b/i, // moving off-box
-  ];
-  if (MUTATING.some((re) => re.test(c))) return "ask";
-
-  // Read-only recon we trust to flow without a click. (Any mutating curl has
-  // already returned "ask" above, so a bare curl here is a GET/HEAD.)
-  const READ_ONLY: RegExp[] = [
-    /(?:^|\s)curl\b/i,
-    /(?:^|\s)(?:wget|http|https)\b/i,
-    /(?:^|\s)nmap\b/i,
-    /(?:^|\s)(?:dig|nslookup|host|whois)\b/i,
-    /(?:^|\s)(?:cat|head|tail|less|grep|rg|awk)\b/i,
-    /(?:^|\s)(?:ls|find|stat|file|wc)\b/i,
-    /(?:^|\s)(?:echo|printf|jq|tr|sort|uniq|cut)\b/i,
-  ];
-  if (READ_ONLY.some((re) => re.test(c))) return "allow";
-
-  // Anything we do not recognise: ask. Fail closed.
-  return "ask";
-}

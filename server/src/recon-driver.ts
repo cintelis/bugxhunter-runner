@@ -19,12 +19,25 @@
  */
 
 import {
-  routeModel, harnessFor, classifyCommand,
-  type ReconFinding, type EnvFidelity, type ReconHarness, type RouteSignals,
+  routeModel, harnessFor, classifyCommand, allCapped, hostOf,
+  type ReconFinding, type EnvFidelity, type ReconHarness, type RouteSignals, type GateContext,
 } from "./recon.js";
 
 type Severity = ReconFinding["severity"];
 const SEVERITY_RANK: Record<Severity, number> = { low: 0, medium: 1, high: 2, critical: 3 };
+const worstSeverity = (fs: readonly ReconFinding[]): Severity | undefined => {
+  let best: Severity | undefined;
+  for (const f of fs) if (f.verdict !== "rejected" && (!best || SEVERITY_RANK[f.severity] > SEVERITY_RANK[best])) best = f.severity;
+  return best;
+};
+
+/** Hard default caps so a run is NEVER unbounded, even with an empty harness. */
+const DEFAULT_RECON_HARNESS: Required<Pick<ReconHarness, "maxRounds" | "budgetTokens">> = {
+  maxRounds: 80,
+  budgetTokens: 3_000_000,
+};
+/** Stuck turns (beyond the escalation point) before the loop gives up. */
+const MAX_STUCK = 4;
 
 /** A pending tool permission, reduced to what the gate needs. */
 export interface ReconPermission {
@@ -39,9 +52,10 @@ export interface ReconPermission {
  * approve? Shell commands defer to `classifyCommand`; file-mutating and
  * network-reaching tools always ask; plain reads flow; the unknown fails closed.
  */
-export function reconGateDecision(p: ReconPermission): "allow" | "ask" {
-  const tool = p.tool.toLowerCase();
-  if (tool === "bash" || tool === "shell") return p.command ? classifyCommand(p.command) : "ask";
+export function reconGateDecision(p: ReconPermission, ctx: GateContext = {}): "allow" | "ask" {
+  const tool = (p.tool ?? "").toLowerCase();
+  if (!tool) return "ask"; // guard: a permission with no tool fails closed
+  if (tool === "bash" || tool === "shell") return p.command ? classifyCommand(p.command, ctx) : "ask";
   if (tool === "read" || tool === "grep" || tool === "glob" || tool === "list" || tool === "ls") return "allow";
   // edit/write/patch/multiedit (mutate files), webfetch/fetch (reach out): always ask.
   return "ask";
@@ -57,14 +71,15 @@ const get = (o: unknown, k: string): unknown => (o && typeof o === "object" ? (o
  */
 export function extractReconCommand(raw: unknown): string | undefined {
   const toolInput = get(get(raw, "tool"), "input");
+  // Only fields known to be the EXACT executed command. The `pattern` (a glob)
+  // and a bare `input` string are deliberately NOT used: feeding the gate a
+  // string other than what runs is a bypass (H1). Unknown shape -> undefined -> ask.
   return (
     str(get(raw, "command")) ??
     str(get(get(raw, "metadata"), "command")) ??
     str(get(get(raw, "input"), "command")) ??
     str(get(get(raw, "args"), "command")) ??
-    str(get(toolInput, "command")) ??
-    str(get(raw, "pattern")) ??
-    str(get(raw, "input"))
+    str(get(toolInput, "command"))
   );
 }
 
@@ -102,14 +117,11 @@ export class ReconRun {
     return best;
   }
 
-  /** Signals for the router this round. */
-  signals(extra: Pick<RouteSignals, "rateLimited"> = {}): RouteSignals {
-    return {
-      attempts: this.attempts,
-      budgetRemaining: this.budgetRemaining(),
-      ...(this.highestSeverity() ? { severityHint: this.highestSeverity() } : {}),
-      ...extra,
-    };
+  /** Signals for the router this round. severityHint is passed in per-turn by the
+   *  driver (the CURRENT candidate's severity) — NOT accumulated, so one High
+   *  finding does not pin every later turn to the frontier model (H2). */
+  signals(extra: Pick<RouteSignals, "rateLimited" | "severityHint"> = {}): RouteSignals {
+    return { attempts: this.attempts, budgetRemaining: this.budgetRemaining(), ...extra };
   }
 }
 
@@ -152,7 +164,7 @@ export interface ReconRunResult {
   findings: ReconFinding[];
   rounds: number;
   tokens: number;
-  stopped: "done" | "idle" | "budget" | "rounds";
+  stopped: "done" | "idle" | "budget" | "rounds" | "stuck" | "rate-limited" | "error";
 }
 
 /** Build the executor's seed prompt: scope fence + env-fidelity gate + objective. */
@@ -178,23 +190,41 @@ export const RECON_CONTINUE =
  * budget / rounds. The harness for the executor role supplies the caps.
  */
 export async function driveRecon(opts: ReconDriverOptions): Promise<ReconRunResult> {
-  const run = new ReconRun(opts.harness ?? harnessFor("executor"));
+  // MERGE (not replace) the harness over the profile and the hard defaults, so an
+  // override like { maxRounds: 3 } can never drop the token cap, and an empty
+  // harness still has caps — the loop is never unbounded (H3).
+  const harness: ReconHarness = { ...DEFAULT_RECON_HARNESS, ...harnessFor("executor"), ...opts.harness };
+  const run = new ReconRun(harness);
+  const scopeHost = hostOf(opts.scope);
+  const gate = (p: ReconPermission) => reconGateDecision(p, { scopeHost });
   let prompt = buildReconKickoff(opts);
+  // One-shot: the worst severity found LAST turn informs THIS turn's routing, then clears.
+  let severityHint: Severity | undefined;
 
   for (;;) {
-    const model = routeModel("executor", run.signals({ rateLimited: opts.rateLimited?.() }));
-    const res = await opts.runner.runTurn({ prompt, model, gate: reconGateDecision });
+    const signals = run.signals({ rateLimited: opts.rateLimited?.(), severityHint });
+    // Every model is rate-limited — back off rather than thrash (H4).
+    if (allCapped(signals)) return finish(run, "rate-limited");
+
+    const model = routeModel("executor", signals);
+    let res: ReconTurnResult;
+    try {
+      res = await opts.runner.runTurn({ prompt, model, gate });
+    } catch {
+      return finish(run, "error"); // keep the findings gathered so far (M2)
+    }
 
     run.recordRound();
     run.recordUsage(res.tokensUsed);
     run.addFindings(res.findings);
+    severityHint = worstSeverity(res.findings);
     if (res.stuck) run.recordStuck(); else run.resetAttempts();
 
     if (run.outOfBudget()) return finish(run, "budget");
     if (run.outOfRounds()) return finish(run, "rounds");
+    if (run.attempts >= MAX_STUCK) return finish(run, "stuck"); // persistently stuck, even escalated (H3)
     if (res.done) return finish(run, "done");
-    // Nothing advanced and the executor isn't even stuck (so escalation wouldn't
-    // help) — the surface is spent. Stop rather than spin.
+    // Nothing advanced and not stuck (escalation wouldn't help) — the surface is spent.
     if (!res.madeProgress && !res.stuck) return finish(run, "idle");
 
     prompt = RECON_CONTINUE;
