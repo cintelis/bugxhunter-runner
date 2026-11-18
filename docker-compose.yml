@@ -6,7 +6,9 @@
 #
 # Isolation model:
 #   - `agent` has direct internet so scan tools run at full speed (nmap, ping
-#     and raw DNS work too via NET_RAW). Outbound traffic is logged, not gated.
+#     and raw DNS work too via NET_RAW). Outbound traffic is logged by default;
+#     set EGRESS_MODE=enforce to also deny-by-default to an allowlist (the
+#     in-scope target + EGRESS_ALLOW), enforced by the egress-logger sidecar.
 #   - `agent` holds NO SCX key: model calls go to runner's /scx/v1 proxy, which
 #     injects the key, so the key never enters the sandbox. Same for the GitHub
 #     sign-in: `runner` clones into /workspace, the agent gets a credential-free copy.
@@ -14,8 +16,8 @@
 #   - Both run as non-root with no-new-privileges; the agent drops all caps
 #     except NET_RAW, and bash/edit actions are approved in the UI.
 #
-# ⚠ The agent has unrestricted outbound. Only point it at targets you are
-#   authorised to test, and run this on a trusted machine/VM.
+# ⚠ In the default monitor mode the agent has unrestricted outbound. Only point
+#   it at targets you are authorised to test, and run this on a trusted machine/VM.
 
 name: bugxhunter
 
@@ -114,23 +116,40 @@ services:
     cpus: 1
     restart: unless-stopped
 
-  # Passive egress logger: shares the agent's network namespace and sniffs its
-  # outbound traffic (tcpdump), recording distinct destinations + DNS lookups to
-  # /logs/egress-<date>.jsonl. Log-only — it never blocks traffic and
-  # is not in the data path, so scans keep full speed.
+  # Egress sidecar: shares the agent's network namespace. Always sniffs the
+  # agent's outbound traffic (tcpdump) and records distinct destinations + DNS
+  # lookups to /logs/egress-<date>.jsonl. In EGRESS_MODE=enforce it also installs
+  # a deny-by-default iptables chain (allow the in-scope target + EGRESS_ALLOW
+  # hosts + infra; REJECT the rest). Default EGRESS_MODE=monitor is log-only, in
+  # the data path for nothing, so scans keep full speed. The runner can flip the
+  # mode per engagement at runtime by writing /logs/egress-policy.json.
+  # Only this sidecar holds NET_ADMIN, so the agent can't touch the rules.
   egress-logger:
     image: ghcr.io/cintelis/bugxhunter-agent:${BXH_VERSION:-latest}${BXH_AGENT_FLAVOR:-}
     command: ["node", "/usr/local/lib/egress-logger.mjs"]
-    network_mode: "service:agent"        # see the agent's connections
-    user: root                           # needs CAP_NET_RAW effective (agent image defaults to non-root)
+    network_mode: "service:agent"        # see (and, in enforce mode, filter) the agent's connections
+    user: root                           # needs CAP_NET_RAW/NET_ADMIN effective (agent image defaults to non-root)
     environment:
       OPEN_RUNNER_LOG_DIR: /logs
+      # monitor (default, log-only) or enforce (deny-by-default allowlist).
+      EGRESS_MODE: ${EGRESS_MODE:-monitor}
+      # Comma list of allowed destinations under enforce (hosts / IPs / CIDRs):
+      # put the in-scope target(s) here, plus any out-of-band collaborator host.
+      # The model proxy (runner) is always allowed. NB: automatic per-engagement
+      # injection of the target by the runner is a follow-up — for now list it here.
+      EGRESS_ALLOW: ${EGRESS_ALLOW:-}
+      # Upstream resolver IP(s) to allow on port 53 under enforce. On a compose
+      # network resolv.conf lists only Docker's embedded 127.0.0.11, which forwards
+      # upstream from inside the agent's namespace — set this to the real resolver
+      # (e.g. 1.1.1.1) so DNS keeps working, or give the agent an explicit `dns:`.
+      EGRESS_DNS: ${EGRESS_DNS:-}
     volumes:
       - logs:/logs
     cap_drop: [ALL]
     # NET_RAW: capture; SETUID/SETGID: tcpdump drops to its own user;
-    # DAC_OVERRIDE: write into /logs (owned by the runner's user).
-    cap_add: [NET_RAW, SETUID, SETGID, DAC_OVERRIDE]
+    # DAC_OVERRIDE: write into /logs (owned by the runner's user);
+    # NET_ADMIN: manage the BXH_EGRESS chain (used only in enforce mode).
+    cap_add: [NET_RAW, SETUID, SETGID, DAC_OVERRIDE, NET_ADMIN]
     security_opt: ["no-new-privileges:true"]
     depends_on: [agent]
     restart: unless-stopped
