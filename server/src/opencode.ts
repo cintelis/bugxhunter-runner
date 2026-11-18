@@ -22,7 +22,7 @@ import { createOpencodeServer, createOpencodeClient } from "@opencode-ai/sdk";
 import type { AgentEvent, AgentModel, MessagePart, StoredMessage } from "../../shared/agent.js";
 import { httpError } from "./errors.js";
 import { anthropicOpencodeProvider, openrouterOpencodeProvider, nvidiaOpencodeProvider, ANTHROPIC_MODELS, OPENROUTER_MODELS, PORT } from "./providers.js";
-import { RECON_AGENTS } from "./recon.js";
+import { RECON_AGENTS, withScrubbedEnv } from "./recon.js";
 
 export type { AgentEvent, AgentModel, StoredMessage };
 
@@ -164,7 +164,13 @@ function getServer() {
   if (!server) {
     server = stopStaleServer()
       .then(inlineConfig)
-      .then((config) => createOpencodeServer({ hostname: "127.0.0.1", port: AGENT_PORT, timeout: 15000, config: config as any }))
+      // Spawn with the operator's secrets stripped from the agent's env: the SDK
+      // snapshots process.env synchronously, so withScrubbedEnv hides them across
+      // exactly that spawn, then restores them for the runner. A prompt-injected
+      // executor (fed adversarial target output) then has nothing to exfiltrate.
+      // Local mode only; in Docker the agent is a separate container whose env is
+      // scrubbed at the compose/container layer (see docs/recon-security.md).
+      .then((config) => withScrubbedEnv(() => createOpencodeServer({ hostname: "127.0.0.1", port: AGENT_PORT, timeout: 15000, config: config as any })))
       .then((s) => {
         closeServer = () => {
           try { s.close(); } catch { /* already gone */ }

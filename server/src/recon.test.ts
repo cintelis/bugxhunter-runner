@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import {
-  routeModel, classifyCommand, commandHazard, effectiveCommands, scrubEnv, modelFor, harnessFor, allCapped, hostOf,
+  routeModel, classifyCommand, commandHazard, effectiveCommands, scrubEnv, withScrubbedEnv, modelFor, harnessFor, allCapped, hostOf,
   activeProfile, activeProfileName, profileNames, parseProfile, parseReconHarness,
   DEFAULT_PROFILE, BUILTIN_PROFILES, type GateContext,
 } from "./recon.js";
@@ -188,5 +188,23 @@ describe("scrubEnv — env hygiene", () => {
     expect(e.SOME_TOKEN).toBeUndefined();
     expect(e.PATH).toBe("/usr/bin");
     expect(e.LANG).toBe("en");
+  });
+});
+
+describe("withScrubbedEnv — scoped hygiene across the spawn", () => {
+  afterEach(() => { delete process.env.TEST_TOKEN; delete process.env.TEST_PLAIN; });
+  it("hides secrets from the callback but restores process.env afterwards", () => {
+    process.env.TEST_TOKEN = "s";
+    process.env.TEST_PLAIN = "p";
+    let seenSecret: string | undefined, seenPlain: string | undefined;
+    const ret = withScrubbedEnv(() => {
+      seenSecret = process.env.TEST_TOKEN;   // the spawn's env snapshot happens here
+      seenPlain = process.env.TEST_PLAIN;
+      return 42;
+    });
+    expect(ret).toBe(42);
+    expect(seenSecret).toBeUndefined();        // secret hidden from the child
+    expect(seenPlain).toBe("p");               // non-secret passes through
+    expect(process.env.TEST_TOKEN).toBe("s");  // runner's env restored
   });
 });
