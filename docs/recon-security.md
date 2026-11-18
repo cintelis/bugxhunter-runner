@@ -88,6 +88,13 @@ You never *lose* protection by staying in Monitor; Enforce only adds the network
 
 - **Implemented:** the gate (supervision + deny floor), `scrubEnv`, the router/driver with hard caps,
   env-fidelity tagging. Regression tests cover both reviews' bypass tables.
-- **Follow-up (infra):** wiring `scrubEnv` into the executor subprocess spawn, and the Monitor/Enforce
-  egress toggle + allowlist in the `egress-logger` / agent container. These are the controls that make
-  the model *enforced* rather than documented — the gate is deliberately not relied on as the boundary.
+- **Env hygiene wired (local mode):** the OpenCode agent is spawned inside `withScrubbedEnv`
+  (`server/src/opencode.ts`, `getServer`), so the agent and its shell inherit an env with the
+  operator's secrets removed. The SDK snapshots `process.env` synchronously at spawn, so the scrub
+  window is exactly that spawn and the runner keeps its own secrets. **Docker mode** runs the agent as
+  a separate container, so there the env must be scrubbed at the compose/container layer — though the
+  runner already reaches the LLM only through a key-injecting proxy, so the real provider key never
+  enters the agent container.
+- **Follow-up (infra):** the Monitor/Enforce egress toggle + allowlist in the `egress-logger` / agent
+  container, and the compose-layer env scrub for Docker mode. These make the model *enforced* rather
+  than documented — the gate is deliberately not relied on as the boundary.

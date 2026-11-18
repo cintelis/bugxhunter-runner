@@ -464,6 +464,27 @@ export function scrubEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEn
   return out;
 }
 
+/**
+ * Run `fn` with the operator's secrets temporarily removed from `process.env`,
+ * then restore it. The OpenCode SDK spawns the agent with a synchronous
+ * `{...process.env}` snapshot, so wrapping that spawn in this helper gives the
+ * agent (and its shell) a scrubbed env while the runner keeps its own secrets.
+ * The scrub window is exactly the synchronous body of `fn` — no async gap.
+ */
+export function withScrubbedEnv<T>(fn: () => T): T {
+  const kept = scrubEnv(process.env);
+  const removed: Record<string, string> = {};
+  for (const k of Object.keys(process.env)) {
+    const v = process.env[k];
+    if (!(k in kept) && v !== undefined) { removed[k] = v; delete process.env[k]; }
+  }
+  try {
+    return fn();
+  } finally {
+    for (const [k, v] of Object.entries(removed)) process.env[k] = v;
+  }
+}
+
 /* ═══════════════════════ findings ═══════════════════════ */
 
 /**
