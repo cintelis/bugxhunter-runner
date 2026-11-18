@@ -28,6 +28,10 @@ describe("parseAllow", () => {
     expect(a.hosts).toEqual(["good.example"]);          // de-duped, junk removed
     expect(a.literals).toEqual([]);                      // 999.x.x.x is not a valid octet
   });
+  it("drops a /0 default route (would allow everything)", () => {
+    const a = parseAllow("0.0.0.0/0, ::/0, 203.0.113.0/24");
+    expect(a.literals).toEqual([{ addr: "203.0.113.0/24", family: "inet" }]);
+  });
   it("tolerates empty / undefined", () => {
     expect(parseAllow(undefined)).toEqual({ hosts: [], literals: [] });
   });
@@ -71,6 +75,16 @@ describe("readPolicy — env default with a file override (the runtime toggle)",
     expect(p.fileInvalid).toBe(true);
     expect(p.mode).toBe("enforce");                 // held at the env floor
   });
+  it("flags an empty-string mode, a null mode, and a typo'd key as invalid", () => {
+    expect(readPolicy({ EGRESS_MODE: "monitor" }, JSON.stringify({ mode: "" })).fileInvalid).toBe(true);
+    expect(readPolicy({ EGRESS_MODE: "monitor" }, JSON.stringify({ mode: null })).fileInvalid).toBe(true);
+    expect(readPolicy({ EGRESS_MODE: "monitor" }, JSON.stringify({ mod: "enforce" })).fileInvalid).toBe(true);
+  });
+  it("a file allow of 0.0.0.0/0 cannot widen the chain to everything", () => {
+    const p = readPolicy({ EGRESS_MODE: "enforce" }, JSON.stringify({ allow: ["0.0.0.0/0", "::/0"] }));
+    expect(p.mode).toBe("enforce");
+    expect(p.allow.literals).toEqual([]);           // the default routes were dropped
+  });
 });
 
 describe("ipInCidr / ipAllowed", () => {
@@ -90,7 +104,7 @@ describe("ipInCidr / ipAllowed", () => {
 });
 
 describe("buildChainRules — the deny-by-default ruleset", () => {
-  it("allows lo, then PINNED DNS, then each destination, then LOG + REJECT last", () => {
+  it("allows lo, then PINNED DNS, then each destination, then REJECT last", () => {
     const rules = buildChainRules(["203.0.113.5", "198.51.100.0/24"], "inet", ["9.9.9.9"]);
     expect(rules[0]).toEqual(["-A", EGRESS_CHAIN, "-o", "lo", "-j", "ACCEPT"]);
     // DNS is pinned to the resolver, NOT opened to every host on port 53.
@@ -102,10 +116,9 @@ describe("buildChainRules — the deny-by-default ruleset", () => {
     expect(rules.some((r) => r.includes("ESTABLISHED,RELATED"))).toBe(false);
     expect(rules).toContainEqual(["-A", EGRESS_CHAIN, "-d", "203.0.113.5", "-j", "ACCEPT"]);
     expect(rules).toContainEqual(["-A", EGRESS_CHAIN, "-d", "198.51.100.0/24", "-j", "ACCEPT"]);
+    // REJECT is last; no LOG rule (it would fail the restore on a kernel without the target).
     expect(rules.at(-1)).toEqual(["-A", EGRESS_CHAIN, "-j", "REJECT", "--reject-with", "icmp-admin-prohibited"]);
-    expect(rules.at(-2)?.includes("LOG")).toBe(true);
-    // The LOG prefix is space-free so iptables-restore needs no quoting.
-    expect(rules.at(-2)?.at(-1)).toBe("bxh-egress-deny:");
+    expect(rules.some((r) => r.includes("LOG"))).toBe(false);
   });
   it("uses the IPv6 reject target for the inet6 family", () => {
     const rules = buildChainRules([], "inet6");

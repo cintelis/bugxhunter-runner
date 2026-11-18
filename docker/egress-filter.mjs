@@ -53,16 +53,18 @@ export function parseAllow(raw) {
     if (!t) continue;
     t = t.replace(/^[a-z][a-z0-9+.-]*:\/\//, ""); // strip scheme if a URL was pasted
 
-    // IPv4 CIDR (keep the /prefix; iptables -d understands it).
+    // IPv4 CIDR (keep the /prefix; iptables -d understands it). A /0 default
+    // route is dropped — an allow entry that matches everything would defeat the
+    // whole chain (and is the shape a stray/hostile policy file would use).
     if (/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/.test(t)) {
       const [ip, bits] = t.split("/");
-      if (validV4(ip) && Number(bits) <= 32) literals.push({ addr: t, family: "inet" });
+      if (validV4(ip) && Number(bits) >= 1 && Number(bits) <= 32) literals.push({ addr: t, family: "inet" });
       continue;
     }
     // IPv6 literal or CIDR (contains a colon). iptables -d handles the CIDR.
     if (isV6(t) && /^[0-9a-f:]+(\/\d{1,3})?$/.test(t)) {
       const bits = t.includes("/") ? Number(t.split("/")[1]) : 128;
-      if (bits <= 128) literals.push({ addr: t, family: "inet6" });
+      if (bits >= 1 && bits <= 128) literals.push({ addr: t, family: "inet6" }); // drop ::/0
       continue;
     }
 
@@ -112,12 +114,20 @@ export function readPolicy(env, fileText) {
     if (!j || typeof j !== "object" || Array.isArray(j)) {
       fileInvalid = true;
     } else {
+      // Only {mode, allow} are permitted — an unknown key (e.g. a typo'd "mod")
+      // is treated as invalid rather than silently falling back to the env.
+      if (Object.keys(j).some((k) => k !== "mode" && k !== "allow")) fileInvalid = true;
       if (j.mode !== undefined) {
-        const fm = recognizedMode(j.mode);
-        if (fm === null) fileInvalid = true;
-        else mode = fm;
+        // File mode must be an explicit "enforce"/"monitor" string — "", null and
+        // typos are invalid, not silently "monitor".
+        if (j.mode === "enforce" || j.mode === "monitor") mode = j.mode;
+        else fileInvalid = true;
       }
-      if (j.allow !== undefined) allowRaw = Array.isArray(j.allow) ? j.allow.join(",") : String(j.allow);
+      if (j.allow !== undefined) {
+        if (Array.isArray(j.allow)) allowRaw = j.allow.join(",");
+        else if (typeof j.allow === "string") allowRaw = j.allow;
+        else fileInvalid = true;
+      }
     }
   }
 
@@ -169,7 +179,7 @@ const CHAIN = "BXH_EGRESS";
  *                   `curl http://evil:53`); only the configured resolvers.
  *
  * Shape: allow loopback, then DNS to the pinned resolvers, then each
- * destination, then rate-log and REJECT the rest. There is deliberately NO
+ * destination, then REJECT the rest. There is deliberately NO
  * blanket ESTABLISHED,RELATED accept — in an OUTPUT, destination-based chain a
  * legitimate flow already matches its `-d` rule, whereas a broad ESTABLISHED
  * accept would keep monitor-era tunnels alive across a flip and survive an
@@ -183,8 +193,9 @@ export function buildChainRules(acceptAddrs, family = "inet", dnsAddrs = []) {
     rules.push(["-A", CHAIN, "-d", ns, "-p", "tcp", "--dport", "53", "-j", "ACCEPT"]);
   }
   for (const addr of acceptAddrs) rules.push(["-A", CHAIN, "-d", addr, "-j", "ACCEPT"]);
-  // Space-free prefix so the rule survives `iptables-restore` without quoting.
-  rules.push(["-A", CHAIN, "-m", "limit", "--limit", "6/min", "-j", "LOG", "--log-prefix", "bxh-egress-deny:"]);
+  // No LOG rule: if the kernel lacks the LOG target the whole restore would fail
+  // and enforcement would never install. Denials are counted from the REJECT
+  // rule's packet counter instead (readDenied).
   rules.push(["-A", CHAIN, "-j", "REJECT", "--reject-with", reject]);
   return rules;
 }

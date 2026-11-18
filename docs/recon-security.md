@@ -69,16 +69,23 @@ resolvers* are allowed, then each resolved allow destination (`EGRESS_ALLOW` hos
 model proxy), and the rest is REJECTed and rate-logged. Allow hostnames are re-resolved each cycle so
 CDN/rotating IPs keep working. Some deliberate choices from the Mythos review:
 
-- **DNS is pinned, not blanket.** Only the resolvers in `/etc/resolv.conf` are allowed on port 53 — an
-  unrestricted `--dport 53` accept would let `curl http://evil:53` walk straight out. Docker's embedded
-  `127.0.0.11` is covered by the loopback accept.
+- **DNS is pinned, not blanket.** Only the resolvers in `/etc/resolv.conf` (plus `EGRESS_DNS`) are
+  allowed on port 53 — an unrestricted `--dport 53` accept would let `curl http://evil:53` walk straight
+  out. Docker's embedded `127.0.0.11` is covered by the loopback accept. **Caveat:** on a compose network
+  resolv.conf lists *only* `127.0.0.11`, which forwards upstream *from inside the agent's namespace*, so
+  those forwarded queries traverse the chain — set `EGRESS_DNS` to the real upstream resolver (or give the
+  agent an explicit `dns:`) or external name resolution fails under enforce. This Docker-runtime behaviour
+  needs a compose integration test to confirm; **treat enforce as experimental** until then.
 - **No `ESTABLISHED,RELATED` accept.** In an OUTPUT, destination-based chain every legitimate flow
   already matches its `-d` rule; a broad established accept would instead keep monitor-era tunnels alive
   across a flip and survive an allowlist shrink. Omitting it means removing a host cuts its live flows.
 - **Atomic apply.** The chain is rebuilt with a single `iptables-restore --noflush` transaction, so it
   is never momentarily empty (no fall-through-to-ACCEPT window during a rebuild).
 - **Fail loud.** Any `iptables` failure throws; the sidecar emits `egress.enforce.failed` and does *not*
-  report enforcement, rather than silently leaving the agent open.
+  report enforcement, rather than silently leaving the agent open. A torn/empty/unreadable policy file, or
+  one with an unknown mode or extra keys, is reported (`egress.policy_invalid`) and ignored while the
+  last-good policy keeps running — a bad read never tears the chain down. The jump is re-verified every
+  cycle (re-contains a namespace that lost the chain), and IPv6 failures are logged and retried.
 
 **Privilege separation:** only the sidecar holds `CAP_NET_ADMIN`, so the agent — which shares the
 namespace but not the capability — cannot alter or remove the *rules*. **Runtime toggle:** mode + allow
@@ -97,11 +104,13 @@ as follow-ups), which is why structural isolation + nothing-to-steal stays the r
   netfilter, so a determined agent can craft packets that bypass the filter, and could sniff/spoof the
   sidecar's DNS on loopback to poison the allowlist. Closing this means dropping `NET_RAW` in enforce
   (losing raw-socket scans) or enforcing outside the agent's namespace.
-- **Namespace lifecycle.** The rules live in the agent's shared network namespace. If the agent
-  restarts (including by OOM-ing itself) it gets a fresh namespace with no chain until the sidecar
-  re-syncs, and there is a short install window at first start. True containment needs the enforcement
-  point *outside* the agent's namespace — a gateway container the agent routes through, or the host
-  `DOCKER-USER` chain.
+- **Namespace lifecycle.** The rules live in the agent's shared network namespace. With
+  `network_mode: service:agent` the sidecar stays attached to the *old, orphaned* namespace if the agent
+  restarts (including by OOM-ing itself); the restarted agent gets a fresh namespace with **no chain and
+  no sniffer** and runs unfiltered until the stack is recreated. There is also a short install window at
+  first start. True containment needs the enforcement point *outside* the agent's namespace — a gateway
+  container the agent routes through, or the host `DOCKER-USER` chain. (The per-cycle jump re-verify only
+  helps while the sidecar is in the *same* namespace as the agent.)
 
 ## How the layers stack
 

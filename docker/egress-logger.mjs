@@ -8,9 +8,9 @@
  *
  *   2. ENFORCE (opt-in). When the mode is "enforce", installs a deny-by-default
  *      `BXH_EGRESS` chain in that shared namespace (iptables + ip6tables):
- *      loopback, established flows and DNS are allowed, plus each allow-listed
- *      destination (the in-scope target and any operator "also allow" host);
- *      everything else is REJECTed and rate-logged. Default is "monitor"
+ *      loopback and DNS (pinned to the configured resolvers) are allowed, plus
+ *      each allow-listed destination (the in-scope target and any operator "also
+ *      allow" host); everything else is REJECTed. Default is "monitor"
  *      (log-only) — you never lose the audit trail by staying there.
  *
  * Privilege separation: only this sidecar holds CAP_NET_ADMIN, so the agent
@@ -23,6 +23,7 @@
  */
 import { spawn } from "node:child_process";
 import dns from "node:dns/promises";
+import net from "node:net";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -36,6 +37,12 @@ const RECONCILE_MS = Math.max(5000, Number(process.env.EGRESS_RECONCILE_MS) || 3
 // Infra the agent must always reach under enforce: the runner (model proxy) and
 // any extra operator-named hosts. Resolved and allowed independent of EGRESS_ALLOW.
 const INFRA_HOSTS = (process.env.EGRESS_INFRA_HOSTS ?? "runner").split(/[\s,]+/).filter(Boolean);
+// Extra upstream resolver IPs to allow on port 53 under enforce. On a compose
+// network /etc/resolv.conf lists only Docker's embedded 127.0.0.11, which
+// forwards upstream from inside this shared namespace — those forwarded queries
+// traverse the chain, so set EGRESS_DNS to the real upstream resolver(s) (or give
+// the agent an explicit `dns:` so they appear in resolv.conf directly).
+const EXTRA_DNS = (process.env.EGRESS_DNS ?? "").split(/[\s,]+/).filter((s) => net.isIP(s));
 // Hosts tagged as infrastructure (not scan targets) in the monitor log.
 const INFRA = new Set(["runner", "127.0.0.1", "::1"]);
 
@@ -114,7 +121,7 @@ function run(bin, args) {
     p.on("exit", (code) => resolve({ code: code ?? -1, out, err }));
   });
 }
-const ipt = (fam, args) => run(fam === "inet6" ? "ip6tables" : "iptables", ["-w", ...args]);
+const ipt = (fam, args) => run(fam === "inet6" ? "ip6tables" : "iptables", ["-w", "5", ...args]);
 
 // Spawn a binary and feed `input` on stdin (used for iptables-restore).
 function runInput(bin, args, input) {
@@ -130,20 +137,24 @@ function runInput(bin, args, input) {
   });
 }
 
-// Nameservers from /etc/resolv.conf, split by family and excluding loopback
-// (Docker's embedded 127.0.0.11 is already covered by the `-o lo` accept).
+// Resolver IPs to allow on port 53: /etc/resolv.conf nameservers + EGRESS_DNS,
+// split by family, validated with net.isIP, excluding loopback (Docker's
+// embedded 127.0.0.11 is already covered by the `-o lo` accept).
 function readResolvers() {
   const v4 = [], v6 = [];
+  const add = (ip) => {
+    const fam = net.isIP(ip);
+    if (fam === 4 && !/^127\./.test(ip)) v4.push(ip);
+    else if (fam === 6 && ip !== "::1") v6.push(ip);
+  };
   let text = "";
   try { text = fs.readFileSync("/etc/resolv.conf", "utf8"); } catch { /* none */ }
   for (const line of text.split("\n")) {
-    const m = line.match(/^\s*nameserver\s+([0-9a-fA-F:.]+)/);
-    if (!m) continue;
-    const ip = m[1];
-    if (/^127\./.test(ip) || ip === "::1") continue; // loopback → lo rule covers it
-    (isV6(ip) ? v6 : v4).push(ip);
+    const m = line.match(/^\s*nameserver\s+(\S+)/);
+    if (m) add(m[1]);
   }
-  return { v4, v6 };
+  for (const ip of EXTRA_DNS) add(ip);
+  return { v4: [...new Set(v4)], v6: [...new Set(v6)] };
 }
 
 async function resolveHost(host) {
@@ -173,7 +184,7 @@ async function resolveAccepts(allow) {
 async function applyFamily(fam, accepts, dnsAddrs) {
   const restoreBin = fam === "inet6" ? "ip6tables-restore" : "iptables-restore";
   const text = renderRestore(buildChainRules(accepts, fam, dnsAddrs));
-  const r = await runInput(restoreBin, ["--noflush"], text);
+  const r = await runInput(restoreBin, ["-w", "5", "--noflush"], text);
   if (r.code === -1) throw new Error(`${fam} tables unavailable: ${r.err}`);        // binary missing
   if (r.code !== 0) throw new Error(`${fam} restore failed: ${r.err.trim()}`);       // bad ruleset / no perms
   // The chain now exists; make sure OUTPUT jumps to it exactly once.
@@ -213,60 +224,81 @@ let appliedSig = "";
 let deniedCumulative = 0;
 let prevDenied = { inet: 0, inet6: 0 };
 let v6Ok = true;
-
-let warnedInvalid = false;
+let lastGoodPolicy = null; // the last policy we successfully reconciled
 
 async function reconcile() {
-  let fileText;
-  try { fileText = await fsp.readFile(POLICY_FILE, "utf8"); } catch { /* no policy file */ }
-  const { mode, allow, fileInvalid } = readPolicy(process.env, fileText);
+  // Classify the policy file read: a genuinely absent file (ENOENT) is normal
+  // (mode comes from env); a read error (EIO/EACCES/EISDIR) or an empty/truncated
+  // file is a PROBLEM — don't treat it as "no file" and tear enforcement down.
+  let fileText, fileProblem = false;
+  try { fileText = await fsp.readFile(POLICY_FILE, "utf8"); }
+  catch (e) { if (e.code !== "ENOENT") fileProblem = true; fileText = undefined; }
+  if (fileText !== undefined && fileText.trim() === "") { fileProblem = true; fileText = undefined; }
 
-  // A malformed / unknown policy file while we're enforcing: hold the last-good
-  // state rather than tear enforcement down on a torn read. (readPolicy has
-  // already ignored the file's contents; this guards the mode transition too.)
-  if (fileInvalid) {
-    if (!warnedInvalid) { write({ event: "egress.policy_invalid", file: POLICY_FILE }); warnedInvalid = true; }
-    if (appliedMode === "enforce") return;
+  const parsed = readPolicy(process.env, fileText);
+  const invalid = parsed.fileInvalid || fileProblem;
+
+  // On any invalid/problem read, hold the last-good policy (so a torn read never
+  // tears the chain down) and keep running the full cycle with it — re-resolving,
+  // tracking resolvers and counting denials — rather than freezing.
+  let effective;
+  if (invalid) {
+    write({ event: "egress.policy_invalid", file: POLICY_FILE });
+    effective = lastGoodPolicy ?? { mode: parsed.mode, allow: parsed.allow };
   } else {
-    warnedInvalid = false;
+    effective = { mode: parsed.mode, allow: parsed.allow };
   }
-  currentAllow = allow;
+  currentAllow = effective.allow;
 
-  if (mode === "monitor") {
-    if (appliedMode === "enforce") {
-      await teardownFamily("inet");
-      if (v6Ok) await teardownFamily("inet6");
-      write({ event: "egress.mode", mode: "monitor" });
-    }
-    appliedMode = "monitor";
-    appliedSig = "";
+  if (effective.mode === "monitor") {
+    // Tear down BOTH families from kernel state (idempotent), so a stale chain
+    // from an earlier enforce run can't survive — even across a sidecar restart.
+    const wasEnforce = appliedMode === "enforce";
+    await teardownFamily("inet");
+    await teardownFamily("inet6");
+    if (wasEnforce) write({ event: "egress.mode", mode: "monitor" });
+    appliedMode = "monitor"; appliedSig = ""; v6Ok = true;
+    lastGoodPolicy = effective;
     return;
   }
 
   // enforce
-  const accepts = await resolveAccepts(allow);
-  const dns = readResolvers();
-  const sig = JSON.stringify({ accepts, dns });
-  if (sig !== appliedSig || appliedMode !== "enforce") {
+  const accepts = await resolveAccepts(effective.allow);
+  const resolvers = readResolvers();
+  const sig = JSON.stringify({ accepts, resolvers });
+  const fresh = sig !== appliedSig || appliedMode !== "enforce";
+
+  // IPv4: (re)apply on change, or if the OUTPUT jump has gone missing (e.g. the
+  // agent's namespace was recreated) — verifying every cycle re-contains it.
+  const jumpOk = appliedMode === "enforce" && (await ipt("inet", ["-C", "OUTPUT", "-j", EGRESS_CHAIN])).code === 0;
+  if (fresh || !jumpOk) {
     try {
-      await applyFamily("inet", accepts.v4, dns.v4);
+      await applyFamily("inet", accepts.v4, resolvers.v4);
     } catch (e) {
       // IPv4 enforcement failed: do NOT claim enforce. Leave any existing rules
-      // in place and retry next cycle; surface it so the runner can halt.
+      // in place, surface it (so the runner can halt) and retry next cycle.
       write({ event: "egress.enforce.failed", family: "inet", error: e.message });
       return;
     }
-    v6Ok = await applyFamily("inet6", accepts.v6, dns.v6).then(() => true).catch(() => false);
-    if (!v6Ok) write({ event: "egress.enforce.v6_unavailable" });
+  }
+  // IPv6: (re)apply on change or while it is not yet healthy (retry), logging the
+  // real error instead of silently swallowing it.
+  if (fresh || !v6Ok) {
+    v6Ok = await applyFamily("inet6", accepts.v6, resolvers.v6).then(() => true)
+      .catch((e) => { write({ event: "egress.enforce.v6_error", error: e.message }); return false; });
+  }
+
+  if (fresh) {
     prevDenied = { inet: 0, inet6: 0 };
-    appliedMode = "enforce";
-    appliedSig = sig;
     write({
       event: "egress.enforce.sync", mode: "enforce",
-      allow: { hosts: allow.hosts, literals: allow.literals.map((l) => l.addr), infra: INFRA_HOSTS },
-      accept: { v4: accepts.v4, v6: v6Ok ? accepts.v6 : "unavailable" }, dns,
+      allow: { hosts: effective.allow.hosts, literals: effective.allow.literals.map((l) => l.addr), infra: INFRA_HOSTS },
+      accept: { v4: accepts.v4, v6: v6Ok ? accepts.v6 : "unavailable" }, resolvers,
     });
   }
+  appliedMode = "enforce";
+  appliedSig = sig;
+  lastGoodPolicy = effective;
 
   // Surface denials (packet counters only reset when we rebuild the chain).
   let delta = 0;
