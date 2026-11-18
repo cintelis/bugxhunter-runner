@@ -311,6 +311,12 @@
           "limit": { "context": 1000000, "output": 128000 },
           "attachment": true,
           "modalities": { "input": ["text", "image"], "output": ["text"] }
+        },
+        "claude-mythos-5-2": {
+          "name": "Claude Mythos 5.2",
+          "limit": { "context": 1000000, "output": 128000 },
+          "attachment": true,
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
         }
       }
     }
