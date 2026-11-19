@@ -155,6 +155,55 @@ describe("classifyCommand — BYPASS REGRESSIONS (from the Mythos review)", () =
     ask("curl -L http://quantum-local/x");                    // -L follows redirects off-scope
     ask("curl --url http://evil.example http://quantum-local/"); // extra --url value
   });
+
+  it("round-3: filters take a positive flag allowlist, not 'any flag' (exec / write / file-read flags)", () => {
+    const F = "curl -s http://quantum-local/x | ";
+    ask(F + "rg --pre bash x scripts");                 // --pre runs a command per file
+    ask(F + "rg --pre=bash x");
+    ask(F + "sort -S1b --compress-program sh");         // pipes the (target-controlled) data into a program
+    ask(F + "sort --compress-program=sh");
+    ask(F + "sort -oMakefile");                         // attached -o writes a file
+    ask(F + "sort -uo out");                            // -o hidden in a cluster
+    ask(F + "sort --output=out");
+    ask(F + "jq -n env");                               // dumps the environment
+    ask(F + "jq --rawfile a id_rsa -n");                // reads a local file
+    ask(F + "jq -f prog");
+    ask(F + "jq . notes");                              // a second operand is a file
+    ask(F + "grep -r -i password");                     // recursive: reads the cwd, not stdin
+    ask(F + "grep -f patterns");                        // pattern file
+    ask(F + "grep -e secret notes");                    // with -e, any operand is a file
+    ask(F + "grep secret notes");                       // extension-less file operand
+    ask(F + "head -c 100 notes");
+    ask(F + "tail -f");
+    ask(F + "wc --files0-from=list");
+    ask(F + "uniq in out");                             // uniq's second operand is an OUTPUT file
+    ask(F + "grep -- -r");                              // a bare -- is not on any allowlist
+    ask(F + "grep -m");                                 // value flag with no value
+  });
+
+  it("round-3: the filters people actually use still auto-allow", () => {
+    const allow = (c: string) => expect(classifyCommand(c, S)).toBe("allow");
+    const F = "curl -s http://quantum-local/x | ";
+    allow(F + "grep -i -A2 -B 2 set-cookie");
+    allow(F + "grep -iE -m5 'x-powered-by' | head -n 20");
+    allow(F + "grep -c -e token");
+    allow(F + "grep --color=never -in --max-count=3 csrf");
+    allow(F + "rg -i -o token | sort -u | uniq -c | sort -rn | head -5");
+    allow(F + "cut -d: -f1,2 | tr -d ' ' | wc -l");
+    allow(F + "tr a-z A-Z");
+    allow(F + "tail -n +2 | column -t -s ,");
+    allow(F + "jq -r .version");
+    allow(F + "jq -c .data.items | head -c 400");
+  });
+
+  it("round-3: curl -b without '=' is a cookie FILE; [ ] are glob / curl-range metacharacters", () => {
+    ask("curl -s -b cookiejar http://quantum-local/x");
+    ask("curl -s --cookie cookiejar http://quantum-local/x");
+    ask("curl -s --cookie=cookiejar http://quantum-local/x");
+    expect(classifyCommand("curl -s -b session=abc http://quantum-local/x", S)).toBe("allow");
+    ask("curl -s http://quantum-local/item/[1-1000000]");   // curl expands the range itself
+    ask("curl -s http://quantum-local/x | grep [a-z]id");    // unquoted glob
+  });
 });
 
 describe("commandHazard — the deny floor (wrapper-aware)", () => {

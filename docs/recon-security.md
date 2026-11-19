@@ -25,7 +25,9 @@ positively validates against a tiny allowlist:
   `URL` parser, no userinfo, no redirects (`-L`), flags from a positive allowlist (unknown flag → ask);
 - **`nmap`** to the in-scope host without NSE/file-output/aggressive flags;
 - pure **read filters** (`grep`/`head`/`cut`/`jq`/…) *downstream of a fetch* (reading piped stdin),
-  with no file-path operands.
+  each with its own positive flag allowlist (unknown flag → ask, so `rg --pre`, `sort -o`,
+  `sort --compress-program`, `grep -r`/`-f` and `jq --rawfile` all ask) and no more operands than
+  it needs to read stdin, so none can name a file.
 
 Everything else **asks** and the human reads the real command. A small **deny floor**
 (`commandHazard`, wrapper-aware: it unwraps `sudo`/`env`/`bash -c` first) hard-blocks shapes that
