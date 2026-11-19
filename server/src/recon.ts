@@ -210,8 +210,88 @@ export interface GateContext {
   scopePort?: string;
 }
 
-/** Pure read filters: safe to run on piped stdin with pattern/field operands. */
-const FILTERS = new Set(["grep", "egrep", "fgrep", "rg", "head", "tail", "cut", "sort", "uniq", "jq", "wc", "column", "tr"]);
+/**
+ * One read filter's POSITIVE allowlist. A flag that is not listed asks — the
+ * same rule curl gets — because "read-only" filters have flags that execute
+ * (`rg --pre`, `sort --compress-program`), write (`sort -o`) or read local files
+ * (`grep -f`, `grep -r`, `jq --rawfile`). Operands are capped at what the filter
+ * needs to read stdin (a pattern, a jq program, tr's sets), so no file operand fits.
+ */
+interface FilterSpec {
+  /** Single-letter flags that take no value (may be clustered: -in). */
+  short: string;
+  /** Single-letter flags that take a value, attached (-d:) or as the next arg. */
+  shortVal: string;
+  /** Long flags accepted exactly as written (no value). */
+  long: readonly string[];
+  /** Long flags that take a value (--flag=value or --flag value). */
+  longVal: readonly string[];
+  /** Most positional operands allowed. */
+  operands: number;
+  /** Accept -NUM (head -50, grep -3). */
+  numeric?: boolean;
+  /** Flags that supply the pattern, leaving no room for a positional one. */
+  patternFlags?: readonly string[];
+}
+
+const COLOR = ["--color=never", "--color=always", "--color=auto", "--colour=never", "--colour=always", "--colour=auto"];
+const GREP: FilterSpec = {
+  short: "ivcnowxEFPhHqsab", shortVal: "emABC", numeric: true, operands: 1, patternFlags: ["-e", "--regexp"],
+  long: ["--ignore-case", "--invert-match", "--count", "--line-number", "--only-matching", "--word-regexp", "--line-regexp",
+    "--extended-regexp", "--fixed-strings", "--perl-regexp", "--no-filename", "--quiet", "--silent", "--text", "--byte-offset", ...COLOR],
+  longVal: ["--regexp", "--max-count", "--after-context", "--before-context", "--context"],
+};
+const HEAD: FilterSpec = {
+  short: "qv", shortVal: "nc", numeric: true, operands: 0,
+  long: ["--quiet", "--silent", "--verbose"], longVal: ["--lines", "--bytes"],
+};
+const FILTERS: Record<string, FilterSpec> = {
+  grep: GREP, egrep: GREP, fgrep: GREP,
+  rg: { // no --pre, -f, -g, -z, -L
+    short: "iSsvcnNowxFPqa", shortVal: "emABC", operands: 1, patternFlags: ["-e", "--regexp"],
+    long: ["--ignore-case", "--smart-case", "--case-sensitive", "--invert-match", "--count", "--line-number", "--no-line-number",
+      "--only-matching", "--word-regexp", "--line-regexp", "--fixed-strings", "--pcre2", "--quiet", "--text", ...COLOR],
+    longVal: ["--regexp", "--max-count", "--after-context", "--before-context", "--context"],
+  },
+  head: HEAD,
+  tail: HEAD, // no -f/--follow/--pid
+  cut: {
+    short: "sz", shortVal: "dfcb", operands: 0,
+    long: ["--only-delimited", "--complement", "--zero-terminated"],
+    longVal: ["--delimiter", "--fields", "--characters", "--bytes", "--output-delimiter"],
+  },
+  sort: { // no -o/--output, -T, -S, --compress-program, --files0-from, --random-source, -m
+    short: "bdfghinMRrVus", shortVal: "kt", operands: 0,
+    long: ["--ignore-leading-blanks", "--dictionary-order", "--ignore-case", "--general-numeric-sort", "--human-numeric-sort",
+      "--ignore-nonprinting", "--month-sort", "--numeric-sort", "--random-sort", "--reverse", "--version-sort", "--unique", "--stable"],
+    longVal: ["--key", "--field-separator"],
+  },
+  uniq: {
+    short: "cduiD", shortVal: "fsw", operands: 0,
+    long: ["--count", "--repeated", "--unique", "--ignore-case"],
+    longVal: ["--skip-fields", "--skip-chars", "--check-chars"],
+  },
+  wc: { // no --files0-from
+    short: "lwcmL", shortVal: "", operands: 0,
+    long: ["--lines", "--words", "--bytes", "--chars", "--max-line-length"], longVal: [],
+  },
+  column: {
+    short: "tx", shortVal: "soc", operands: 0,
+    long: ["--table", "--fillrows"], longVal: ["--separator", "--output-separator", "--output-width"],
+  },
+  tr: {
+    short: "dscCt", shortVal: "", operands: 2,
+    long: ["--delete", "--squeeze-repeats", "--complement", "--truncate-set1"], longVal: [],
+  },
+  jq: { // no -f/--from-file, -L, --rawfile, --slurpfile, --arg*, --args
+    short: "rceMSajsnC", shortVal: "", operands: 1,
+    long: ["--raw-output", "--compact-output", "--exit-status", "--monochrome-output", "--sort-keys", "--ascii-output",
+      "--join-output", "--slurp", "--null-input", "--color-output", "--tab"],
+    longVal: ["--indent"],
+  },
+};
+/** jq program words that read the environment, name input files or load modules. */
+const JQ_UNSAFE = /\b(?:env|input_filename|import|include)\b/;
 /** nmap flags we are confident do not exploit or write. */
 const NMAP_SAFE = new Set(["-sv", "-st", "-pn", "-n", "-v", "-vv", "--open", "-6"]);
 /** curl flags that take no value and neither write, reroute, nor change method. */
@@ -237,7 +317,7 @@ export function classifyCommand(command: string, ctx: GateContext = {}): "allow"
   // Shell metacharacters make a string's effect shell-dependent and unpredictable.
   // Reject them all: the allowed subset then runs identically via argv or a shell.
   // (`|` is handled by splitting into stages; `||` leaves an empty stage -> ask.)
-  if (/[\r\n\\$`;&<>(){}*?!~]/.test(command)) return "ask";
+  if (/[\r\n\\$`;&<>(){}[\]*?!~]/.test(command)) return "ask";
   if (command.includes("||")) return "ask";
 
   const stages = command.split("|").map((s) => s.trim()).filter(Boolean);
@@ -273,12 +353,9 @@ function stageAllow(argv: string[], isFirst: boolean, ctx: GateContext): "allow"
   if (bin === "nmap") return isFirst ? nmapAllow(args, ctx) : "ask";
   // Filters auto-allow ONLY downstream of a source (reading piped stdin), never as
   // a first stage (which would read a file) — so file reads are never auto-allowed.
-  if (FILTERS.has(bin)) return isFirst ? "ask" : filterAllow(bin, args);
+  if (Object.hasOwn(FILTERS, bin)) return isFirst ? "ask" : filterAllow(bin, args);
   return "ask";
 }
-
-/** A non-flag operand that looks like a file path. */
-const FILE_OPERAND = /\/|^~|\.(?:html?|json|txt|log|xml|js|ts|csv|conf|env|pem|key|ya?ml|sh|py|ini|cfg|db|sqlite|md)$/i;
 
 /** curl is safe only as a GET/HEAD to exactly the in-scope origin, via a positive
  *  flag allowlist (unknown flag -> ask), no redirects, no file read/write. */
@@ -299,7 +376,8 @@ function curlAllow(args: string[], ctx: GateContext): "allow" | "ask" {
       if (CURL_SAFE_VAL.has(flag)) {
         const v = eq >= 0 ? a.slice(eq + 1) : args[++i];
         if (v === undefined) return "ask";
-        if ((flag === "--header" || flag === "--cookie") && v.startsWith("@")) return "ask"; // @file read
+        if (flag === "--header" && v.startsWith("@")) return "ask"; // @file read
+        if (flag === "--cookie" && !v.includes("=")) return "ask";  // no "=" -> curl reads it as a cookie FILE
         continue;
       }
       return "ask";
@@ -309,7 +387,8 @@ function curlAllow(args: string[], ctx: GateContext): "allow" | "ask" {
       if (CURL_SAFE_VAL.has(a)) {
         const v = args[++i];
         if (v === undefined) return "ask";
-        if ((a === "-H" || a === "-b") && v.startsWith("@")) return "ask";
+        if (a === "-H" && v.startsWith("@")) return "ask";
+        if (a === "-b" && !v.includes("=")) return "ask"; // no "=" -> a cookie FILE
         continue;
       }
       // a cluster of safe no-value single flags, e.g. -sS, -sI
@@ -334,14 +413,39 @@ function okUrl(arg: string, ctx: GateContext): boolean {
   return true;
 }
 
-/** A read filter, on piped stdin, with no file-path operands (no file reads). */
+/** A read filter on piped stdin: every flag on its positive allowlist, and no
+ *  more operands than it needs to read stdin (so none can name a file). */
 function filterAllow(bin: string, args: string[]): "allow" | "ask" {
-  if (bin === "sort" && args.some((a) => a === "-o" || a === "--output" || a.startsWith("--output="))) return "ask";
-  for (const a of args) {
-    if (a.startsWith("-")) continue;
-    if (FILE_OPERAND.test(a)) return "ask"; // a file operand would read a file instead of stdin
+  const spec = FILTERS[bin];
+  let operands = 0, max = spec.operands;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (!a.startsWith("-") || a === "-") {
+      if (bin === "jq" && JQ_UNSAFE.test(a)) return "ask";
+      operands++;
+      continue;
+    }
+    if (a.startsWith("--")) {
+      if (spec.long.includes(a)) continue;
+      const eq = a.indexOf("=");
+      const flag = eq >= 0 ? a.slice(0, eq) : a;
+      if (!spec.longVal.includes(flag)) return "ask"; // unknown flag (and a bare "--")
+      if (eq < 0 && args[++i] === undefined) return "ask";
+      if (spec.patternFlags?.includes(flag)) max = 0;
+      continue;
+    }
+    if (spec.numeric && /^-\d+$/.test(a)) continue;
+    // a cluster of no-value letters, optionally ending in one value-taking letter
+    for (let j = 1; j < a.length; j++) {
+      const c = a[j];
+      if (spec.short.includes(c)) continue;
+      if (!spec.shortVal.includes(c)) return "ask";
+      if (j === a.length - 1 && args[++i] === undefined) return "ask"; // the value is the next arg
+      if (spec.patternFlags?.includes("-" + c)) max = 0;
+      break; // the rest of the cluster (or the next arg) is this flag's value
+    }
   }
-  return "allow";
+  return operands <= max ? "allow" : "ask";
 }
 
 /** nmap is safe without NSE / file output / aggressive scripts, against the in-scope host. */
