@@ -22,7 +22,7 @@ import { createOpencodeServer, createOpencodeClient } from "@opencode-ai/sdk";
 import type { AgentEvent, AgentModel, MessagePart, StoredMessage } from "../../shared/agent.js";
 import { httpError } from "./errors.js";
 import { anthropicOpencodeProvider, openrouterOpencodeProvider, nvidiaOpencodeProvider, ANTHROPIC_MODELS, OPENROUTER_MODELS, PORT } from "./providers.js";
-import { RECON_AGENTS, withScrubbedEnv } from "./recon.js";
+import { reconAgents, setAnthropicAvailable, tierOrder, withScrubbedEnv } from "./recon.js";
 
 export type { AgentEvent, AgentModel, StoredMessage };
 
@@ -65,6 +65,21 @@ async function inlineConfig() {
   const openrouter = await openrouterOpencodeProvider(`http://127.0.0.1:${PORT}/openrouter/v1`);
   const nvidia = await nvidiaOpencodeProvider(`http://127.0.0.1:${PORT}/nvidia/v1`);
   const anthropic = await anthropicOpencodeProvider(`http://127.0.0.1:${PORT}/anthropic/v1`);
+  // Recon: without an Anthropic key the default profile falls back to the
+  // open-weight one; with a key, every Claude model a recon role names is
+  // registered (the picker still shows only ANTHROPIC_MODELS, see listAgentModels).
+  setAnthropicAvailable(Boolean(anthropic));
+  if (anthropic) {
+    const models = anthropic.models as Record<string, unknown>;
+    for (const id of tierOrder()) {
+      const m = parseModelId(id);
+      if (m?.providerID !== "anthropic" || Object.hasOwn(models, m.modelID)) continue;
+      models[m.modelID] = {
+        name: m.modelID, limit: { context: 1_000_000, output: 128_000 },
+        attachment: true, modalities: { input: ["text", "image"], output: ["text"] },
+      };
+    }
+  }
   const provider = { ...(openrouter ? { openrouter } : {}), ...(nvidia ? { nvidia } : {}), ...(anthropic ? { anthropic } : {}) };
   return {
     model: DEFAULT_MODEL,
@@ -72,9 +87,9 @@ async function inlineConfig() {
       build: { model: DEFAULT_MODEL },
       plan: { model: DEFAULT_MODEL },
       vision: VISION_AGENT,
-      // Supervised recon/autopwn: executor (GLM) + triage (Haiku) + verify
-      // (Sonnet) + escalate (Mythos), each on the job it is good at. See recon.ts.
-      ...RECON_AGENTS,
+      // Supervised recon: executor + triage + verify + escalate, each on the
+      // model the active profile gives it. See recon.ts and recon-run.ts.
+      ...reconAgents(),
     },
     permission: { edit: "ask", bash: "ask" },
     ...(Object.keys(provider).length ? { provider } : {}),

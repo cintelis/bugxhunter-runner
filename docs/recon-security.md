@@ -138,6 +138,17 @@ You never *lose* protection by staying in Monitor; Enforce only adds the network
 
 - **Implemented:** the gate (supervision + deny floor), `scrubEnv`, the router/driver with hard caps,
   env-fidelity tagging. Regression tests cover both reviews' bypass tables.
+- **Wired in (`server/src/recon-run.ts`):** `POST /api/agent/recon` starts a run on a session; the runner
+  subscribes to OpenCode's events and answers each `permission.asked` of that session and its subagents
+  from the gate (allow → `once`, deny → `reject`, ask → left pending for the person). The command it
+  judges is the request's `metadata.command`, else the `command` input of the tool call the request
+  names; never the glob in `patterns`. A reply of `always` is downgraded to `once` while a run is going,
+  so OpenCode keeps asking and the gate sees every command.
+- **Agent permissions, not `tools`:** the recon agents are configured with permission rules. OpenCode
+  turns `tools: { bash: true }` into a trailing `bash: allow` rule that outranks the global `bash: ask`,
+  which would run the executor's shell with no approval at all. The executor is `bash: ask`; every recon
+  agent is `webfetch: deny` and `websearch: deny`. A test pins this, and that `docker/opencode.json`
+  carries the same agents.
 - **Env hygiene wired (local mode):** the OpenCode agent is spawned inside `withScrubbedEnv`
   (`server/src/opencode.ts`, `getServer`), so the agent and its shell inherit an env with the
   operator's secrets removed. The SDK snapshots `process.env` synchronously at spawn, so the scrub

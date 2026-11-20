@@ -12,7 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { SCXError, type ChatParams } from "./scx.js";
 import {
-  PROVIDERS, PROXY_TOKEN, PORT, OPENROUTER_MODELS, apiKey, clients, clientFor, isRetiredStatus, keySource, listModels,
+  PROVIDERS, PROXY_TOKEN, PORT, OPENROUTER_MODELS, apiKey, clients, clientFor, configured, isRetiredStatus, keySource, listModels,
   proxyPaths, proxyTokenOk, upstreamHeaders,
 } from "./providers.js";
 import { KnowledgeBase, buildContextBlock } from "./rag.js";
@@ -33,6 +33,10 @@ import { VERSION } from "./version.js";
 import { apiLimiter, fileLimiter, staticLimiter } from "./ratelimit.js";
 import { createWorkspace, deleteWorkspace, listFiles, listWorkspaces, saveUpload, WORKSPACES_ROOT } from "./workspaces.js";
 import * as github from "./github.js";
+import { parseReconHarness, setAnthropicAvailable } from "./recon.js";
+import {
+  EXECUTOR_AGENT, inRunningRecon, parseEnvFidelity, reconState, startRecon, stopRecon, type ReconBackend,
+} from "./recon-run.js";
 
 // Keys, the proxy token and the provider clients live in providers.ts, which
 // also scrubs every secret from the environment before OpenCode is spawned.
@@ -742,14 +746,97 @@ app.post("/api/agent/permission", async (req, res) => {
     }
     const directory = await resolveDirectory(dir);
     const client = await getClient(directory);
+    // During a recon run every approval is for one command: "always" would make
+    // OpenCode stop asking for that command pattern, and the gate would never
+    // see it again.
+    const reply = response === "always" && inRunningRecon(sessionID) ? "once" : response;
     unwrap(
       await client.postSessionIdPermissionsPermissionId({
         path: { id: sessionID, permissionID },
         query: { directory },
-        body: { response },
+        body: { response: reply },
       }),
     );
     res.json({ ok: true });
+  } catch (e) {
+    sendError(res, e);
+  }
+});
+
+// --- Supervised recon (recon-run.ts) ---------------------------------------------
+
+/** The recon runner's view of OpenCode for one project folder. */
+async function reconBackend(directory: string): Promise<ReconBackend> {
+  const client = await getClient(directory);
+  return {
+    async events() {
+      const sub = await client.event.subscribe({ query: { directory } });
+      return { stream: sub.stream, close: () => { void sub.stream.return?.(undefined); } };
+    },
+    async prompt({ sessionID, agent, model, text }) {
+      unwrap(await client.session.promptAsync({
+        path: { id: sessionID }, query: { directory },
+        body: { agent, model: parseModelId(model), parts: [{ type: "text", text }] },
+      }));
+    },
+    async replyPermission(sessionID, permissionID, response) {
+      unwrap(await client.postSessionIdPermissionsPermissionId({ path: { id: sessionID, permissionID }, query: { directory }, body: { response } }));
+    },
+    async abort(sessionID) {
+      await client.session.abort({ path: { id: sessionID }, query: { directory } });
+    },
+  };
+}
+
+/**
+ * Start a supervised recon run on a session: the driver loop prompts the
+ * `recon` agent round after round, answers the approvals the gate clears and
+ * leaves the rest for the person. Needs the operator's statement that they are
+ * authorised to test the scope.
+ */
+app.post("/api/agent/recon", async (req, res) => {
+  try {
+    const b = (req.body ?? {}) as {
+      sessionID?: string; directory?: string; scope?: string; objective?: string; env?: unknown;
+      authorised?: boolean; maxRounds?: number; budgetTokens?: number;
+    };
+    if (!b.sessionID) return res.status(400).json({ error: { message: "sessionID required" } });
+    if (b.authorised !== true) return res.status(400).json({ error: { message: "Confirm that you are authorised to test this target." } });
+    const directory = await resolveDirectory(b.directory);
+    // The agents come from the agent's own config: an image or server from
+    // before recon was wired in doesn't have them.
+    const agents = await oc<{ name?: string }[]>(`/agent${query({ directory })}`).catch(() => []);
+    if (!agents.some((a) => a?.name === EXECUTOR_AGENT)) {
+      return res.status(409).json({ error: { message: REMOTE_URL
+        ? "The agent container has no recon agent. Rebuild or pull the agent image for this version."
+        : "OpenCode has no recon agent. Restart BugXHunter." } });
+    }
+    setAnthropicAvailable(configured("anthropic"));
+    const state = await startRecon({
+      sessionID: b.sessionID,
+      scope: String(b.scope ?? ""),
+      objective: String(b.objective ?? ""),
+      env: parseEnvFidelity(b.env),
+      harness: parseReconHarness({ maxRounds: b.maxRounds, budgetTokens: b.budgetTokens }),
+      backend: await reconBackend(directory),
+      log: (event, data) => audit(event, { directory, ...data }),
+    });
+    res.json({ recon: state });
+  } catch (e) {
+    sendError(res, e);
+  }
+});
+
+app.get("/api/agent/recon", (req, res) => {
+  res.json({ recon: reconState(String(req.query.sessionID || "")) });
+});
+
+app.post("/api/agent/recon/stop", async (req, res) => {
+  try {
+    const sessionID = String(req.body?.sessionID || "");
+    const state = await stopRecon(sessionID);
+    if (state) audit("recon.stop", { session: sessionID });
+    res.json({ recon: state });
   } catch (e) {
     sendError(res, e);
   }

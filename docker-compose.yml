@@ -43,6 +43,14 @@ services:
       # (ANTHROPIC_API_KEY) or here; ANTHROPIC_MODELS lists the ids the agent's picker shows.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_MODELS: ${ANTHROPIC_MODELS:-}
+      # Supervised recon: the model profile (recon-open | recon-balanced | recon-quality;
+      # default recon-balanced with an Anthropic key, recon-open without) and optional
+      # per-role models. The agent gets the same per-role values (below).
+      RECON_PROFILE: ${RECON_PROFILE:-}
+      RECON_EXECUTOR_MODEL: ${RECON_EXECUTOR_MODEL:-}
+      RECON_TRIAGE_MODEL: ${RECON_TRIAGE_MODEL:-}
+      RECON_VERIFY_MODEL: ${RECON_VERIFY_MODEL:-}
+      RECON_ESCALATE_MODEL: ${RECON_ESCALATE_MODEL:-}
       OPEN_RUNNER_VAULT_FILE: /data/vault.json
       OPEN_RUNNER_VAULT_IDLE_MINUTES: ${OPEN_RUNNER_VAULT_IDLE_MINUTES:-120}
       OPEN_RUNNER_SECRET: ${OPEN_RUNNER_SECRET:-}
@@ -79,6 +87,11 @@ services:
       SCX_PROXY_TOKEN: ${SCX_PROXY_TOKEN:?run docker/setup.ps1 first}
       OPENCODE_ENABLE_EXA: "1"           # turns on OpenCode's websearch tool (Exa)
       OPENROUTER_MODELS: ${OPENROUTER_MODELS:-}   # same list as runner: becomes an OpenCode provider via runner's proxy
+      # Recon subagents run on open-weight models unless a role is set here (see docker/agent-entrypoint.sh).
+      RECON_EXECUTOR_MODEL: ${RECON_EXECUTOR_MODEL:-}
+      RECON_TRIAGE_MODEL: ${RECON_TRIAGE_MODEL:-}
+      RECON_VERIFY_MODEL: ${RECON_VERIFY_MODEL:-}
+      RECON_ESCALATE_MODEL: ${RECON_ESCALATE_MODEL:-}
     networks: [net]
     volumes:
       - workspace:/workspace

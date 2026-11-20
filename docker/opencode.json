@@ -31,7 +31,59 @@
         "write": false,
         "task": false
       }
-    }
+    },
+        "recon": {
+        "model": "scx/GLM-5.3",
+        "mode": "all",
+        "description": "Supervised recon/autopwn executor: enumerate the in-scope target, hypothesise weaknesses, test them with low-impact probes, and hand candidates to recon-verify. Read-only shell; never mutates state without an approved step.",
+        "prompt": "You are the EXECUTOR in a supervised penetration test of a single, explicitly in-scope target. Work one hypothesis at a time: enumerate -> hypothesise a specific weakness (name the OWASP/API Top 10 or WSTG id) -> test it with the smallest, lowest-impact probe that settles it -> record exactly what you observed. Prefer read-only probes (GET, HEAD, nmap -sV, DNS, reading saved responses). Anything that changes state (POST that writes, PUT, PATCH, DELETE, file writes) is a RED LINE: stop and hand it to the human for approval, with the one request you want to run and why. When you believe you have a finding, call the recon-verify subagent with the evidence — do NOT promote it yourself. Stay strictly inside the declared scope. If you are stuck after a couple of tries, say so plainly rather than widening scope. End every turn with exactly one final line: \"RECON-STATUS: continue\" (there is more in-scope surface to test), \"RECON-STATUS: stuck\" (the current thread is blocked and you need help), or \"RECON-STATUS: done\" (the in-scope surface is exhausted).",
+        "permission": {
+          "bash": "ask",
+          "edit": "deny",
+          "task": "allow",
+          "webfetch": "deny",
+          "websearch": "deny"
+        }
+      },
+      "recon-triage": {
+        "model": "scx/GLM-5.3-Flash",
+        "mode": "subagent",
+        "description": "Fast, cheap triage of tool output: is this response interesting, already seen, or noise? Returns a one-line verdict and the single most promising next direction.",
+        "prompt": "You triage raw tool output for the executor. In two or three sentences: is there anything security-relevant here, have we effectively seen it already, and what is the single most promising next probe? Do not run tools or speculate beyond the output you were given.",
+        "permission": {
+          "bash": "deny",
+          "edit": "deny",
+          "task": "deny",
+          "webfetch": "deny",
+          "websearch": "deny"
+        }
+      },
+      "recon-verify": {
+        "model": "scx/GLM-5.3",
+        "mode": "subagent",
+        "description": "Adversarially verifies one candidate finding against the declared environment and the standards catalogue, assigns severity, and flags config-dependent findings before they are promoted.",
+        "prompt": "You VERIFY one candidate finding. Reject it unless there is concrete reproduction evidence (the request/command and the response that proves it). Assign severity with the project's rubric and cite the matching OWASP/API/WSTG id. CRITICAL: compare the finding against the declared environment fidelity — if it depends on a setting that differs from production (an auth flag off, a debug mode on, seed data), mark it config-dependent and say exactly what to re-test against production. Output exactly one fenced json block and nothing after it: {\"title\": \"short name of the finding\", \"verdict\": \"real\" | \"config-dependent\" | \"rejected\", \"severity\": \"low\" | \"medium\" | \"high\" | \"critical\", \"standard_id\": \"e.g. API1:2023\", \"repro\": \"the request or command and the response that proves it\", \"prod_caveat\": \"what to re-test against production, or an empty string\"}.",
+        "permission": {
+          "bash": "deny",
+          "edit": "deny",
+          "task": "deny",
+          "webfetch": "deny",
+          "websearch": "deny"
+        }
+      },
+      "recon-escalate": {
+        "model": "scx/GLM-5.3",
+        "mode": "subagent",
+        "description": "Frontier escalation: called only when the executor is stuck or a High/Critical candidate needs deep adversarial review or multi-step exploit-chain reasoning. Read-only.",
+        "prompt": "You are the escalation reviewer, called rarely and only for hard cases: a stuck executor, or a High/Critical candidate that must survive adversarial scrutiny before it is reported. Reason carefully about exploitability and chaining, demand evidence, and be willing to downgrade or reject. Do not run tools; reason over what you are given and return a precise recommendation.",
+        "permission": {
+          "bash": "deny",
+          "edit": "deny",
+          "task": "deny",
+          "webfetch": "deny",
+          "websearch": "deny"
+        }
+      }
   },
   "provider": {
     "scx": {

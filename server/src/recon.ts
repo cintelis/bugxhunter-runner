@@ -11,7 +11,7 @@
  * a rate-limited model to a healthy neighbour. `EnvFidelity` tags every finding
  * with the environment it was seen in.
  *
- * SECURITY — the approval gate. `classifyCommand` is the security boundary. Two
+ * SECURITY — the approval gate (supervision, not the boundary: see docs/recon-security.md). Two
  * Mythos reviews showed that trying to CLASSIFY arbitrary shell is fail-open:
  * the shell re-parses the string (chaining, substitution, redirection, globbing,
  * $VAR expansion), so predicting what it will run is a losing game. So the gate
@@ -120,8 +120,20 @@ export function loadProfiles(): Record<string, ReconProfile> {
   return merged;
 }
 
+/** The profile used when RECON_PROFILE is unset and no Anthropic key is configured. */
+export const OPEN_PROFILE = "recon-open";
+
+let anthropicAvailable = true;
+/**
+ * Tell the router whether Claude can be called at all. Without an Anthropic key
+ * the default profile (which puts triage/verify/escalate on Claude) cannot run,
+ * so the default becomes the open-weight profile. An explicit RECON_PROFILE or a
+ * per-role RECON_*_MODEL still wins: the operator asked for it.
+ */
+export function setAnthropicAvailable(available: boolean): void { anthropicAvailable = available; }
+
 export function activeProfileName(): string {
-  return (process.env.RECON_PROFILE || "").trim() || DEFAULT_PROFILE;
+  return (process.env.RECON_PROFILE || "").trim() || (anthropicAvailable ? DEFAULT_PROFILE : OPEN_PROFILE);
 }
 
 export function activeProfile(): ReconProfile {
@@ -167,7 +179,8 @@ function capped(model: string, s: RouteSignals): boolean {
   return Boolean(s.rateLimited?.[model] || s.rateLimited?.[provider]);
 }
 
-function tierOrder(): string[] {
+/** The four role models, cheapest role first (executor, triage, verify, escalate). */
+export function tierOrder(): string[] {
   return [modelFor("executor"), modelFor("triage"), modelFor("verify"), modelFor("escalate")];
 }
 
@@ -613,47 +626,62 @@ export interface ReconFinding {
 
 /* ═══════════════════════ OpenCode subagents ═══════════════════════ */
 
-/** Read-only tool posture for the reviewer roles — webfetch off too, since they
- *  read untrusted target output (don't let them reach back out). */
-const READ_ONLY_TOOLS = { bash: false, edit: false, write: false, task: false, webfetch: false } as const;
-
-function executorTools(): Record<string, boolean> {
-  const full = harnessFor("executor").tools === "full";
-  return { bash: true, read: true, task: true, edit: full, write: full, webfetch: false };
-}
-
-function subagent(model: string, description: string, prompt: string, tools: Record<string, boolean>) {
-  return { model, mode: "subagent" as const, description, prompt, tools };
-}
+type Rule = "allow" | "ask" | "deny";
 
 /**
- * The recon subagents, resolved at import (profile/env at server start);
- * `routeModel` re-resolves live for escalation/shedding. Restart to re-register
- * after a profile change.
+ * Permission rules, not the older `tools` map: OpenCode turns `tools: { bash: true }`
+ * into a trailing `bash: allow` rule that outranks the global `bash: ask`, so the
+ * executor's shell would run with no approval and the gate would never be asked.
+ *
+ * Reviewer roles are read-only, and nothing in a recon run may reach out through
+ * webfetch or websearch: they read untrusted target output.
  */
-export const RECON_AGENTS = {
+const READ_ONLY: Record<string, Rule> = { bash: "deny", edit: "deny", task: "deny", webfetch: "deny", websearch: "deny" };
+
+/** The executor: every shell command asks (the gate answers), file edits only in a "full" harness. */
+function executorPermission(): Record<string, Rule> {
+  const full = harnessFor("executor").tools === "full";
+  return { bash: "ask", edit: full ? "ask" : "deny", task: "allow", webfetch: "deny", websearch: "deny" };
+}
+
+function subagent(model: string, description: string, prompt: string, permission: Record<string, Rule>, mode: "subagent" | "all" = "subagent") {
+  return { model, mode, description, prompt, permission };
+}
+
+/** The line the executor ends every turn with; the driver reads it (parseTurnStatus). */
+export const STATUS_LINE = "RECON-STATUS";
+const STATUS_RULE = `End every turn with exactly one final line: "${STATUS_LINE}: continue" (there is more in-scope surface to test), "${STATUS_LINE}: stuck" (the current thread is blocked and you need help), or "${STATUS_LINE}: done" (the in-scope surface is exhausted).`;
+
+/**
+ * The recon agents for OpenCode's config, resolved when called (the profile and
+ * env at that moment); `routeModel` re-resolves live for escalation/shedding.
+ * Restart to re-register after a profile change. The executor is mode "all": the
+ * driver prompts it directly, and it stays callable as a subagent.
+ */
+export const reconAgents = () => ({
   recon: subagent(
     modelFor("executor"),
     "Supervised recon/autopwn executor: enumerate the in-scope target, hypothesise weaknesses, test them with low-impact probes, and hand candidates to recon-verify. Read-only shell; never mutates state without an approved step.",
-    "You are the EXECUTOR in a supervised penetration test of a single, explicitly in-scope target. Work one hypothesis at a time: enumerate -> hypothesise a specific weakness (name the OWASP/API Top 10 or WSTG id) -> test it with the smallest, lowest-impact probe that settles it -> record exactly what you observed. Prefer read-only probes (GET, HEAD, nmap -sV, DNS, reading saved responses). Anything that changes state (POST that writes, PUT, PATCH, DELETE, file writes) is a RED LINE: stop and hand it to the human for approval, with the one request you want to run and why. When you believe you have a finding, call the recon-verify subagent with the evidence — do NOT promote it yourself. Stay strictly inside the declared scope. If you are stuck after a couple of tries, say so plainly rather than widening scope.",
-    executorTools(),
+    "You are the EXECUTOR in a supervised penetration test of a single, explicitly in-scope target. Work one hypothesis at a time: enumerate -> hypothesise a specific weakness (name the OWASP/API Top 10 or WSTG id) -> test it with the smallest, lowest-impact probe that settles it -> record exactly what you observed. Prefer read-only probes (GET, HEAD, nmap -sV, DNS, reading saved responses). Anything that changes state (POST that writes, PUT, PATCH, DELETE, file writes) is a RED LINE: stop and hand it to the human for approval, with the one request you want to run and why. When you believe you have a finding, call the recon-verify subagent with the evidence — do NOT promote it yourself. Stay strictly inside the declared scope. If you are stuck after a couple of tries, say so plainly rather than widening scope. " + STATUS_RULE,
+    executorPermission(),
+    "all",
   ),
   "recon-triage": subagent(
     modelFor("triage"),
     "Fast, cheap triage of tool output: is this response interesting, already seen, or noise? Returns a one-line verdict and the single most promising next direction.",
     "You triage raw tool output for the executor. In two or three sentences: is there anything security-relevant here, have we effectively seen it already, and what is the single most promising next probe? Do not run tools or speculate beyond the output you were given.",
-    READ_ONLY_TOOLS,
+    READ_ONLY,
   ),
   "recon-verify": subagent(
     modelFor("verify"),
     "Adversarially verifies one candidate finding against the declared environment and the standards catalogue, assigns severity, and flags config-dependent findings before they are promoted.",
-    "You VERIFY one candidate finding. Reject it unless there is concrete reproduction evidence (the request/command and the response that proves it). Assign severity with the project's rubric and cite the matching OWASP/API/WSTG id. CRITICAL: compare the finding against the declared environment fidelity — if it depends on a setting that differs from production (an auth flag off, a debug mode on, seed data), mark it config-dependent and say exactly what to re-test against production. Output: {verdict: real|config-dependent|rejected, severity, standard_id, repro, prod_caveat}.",
-    READ_ONLY_TOOLS,
+    "You VERIFY one candidate finding. Reject it unless there is concrete reproduction evidence (the request/command and the response that proves it). Assign severity with the project's rubric and cite the matching OWASP/API/WSTG id. CRITICAL: compare the finding against the declared environment fidelity — if it depends on a setting that differs from production (an auth flag off, a debug mode on, seed data), mark it config-dependent and say exactly what to re-test against production. Output exactly one fenced json block and nothing after it: {\"title\": \"short name of the finding\", \"verdict\": \"real\" | \"config-dependent\" | \"rejected\", \"severity\": \"low\" | \"medium\" | \"high\" | \"critical\", \"standard_id\": \"e.g. API1:2023\", \"repro\": \"the request or command and the response that proves it\", \"prod_caveat\": \"what to re-test against production, or an empty string\"}.",
+    READ_ONLY,
   ),
   "recon-escalate": subagent(
     modelFor("escalate"),
     "Frontier escalation: called only when the executor is stuck or a High/Critical candidate needs deep adversarial review or multi-step exploit-chain reasoning. Read-only.",
     "You are the escalation reviewer, called rarely and only for hard cases: a stuck executor, or a High/Critical candidate that must survive adversarial scrutiny before it is reported. Reason carefully about exploitability and chaining, demand evidence, and be willing to downgrade or reject. Do not run tools; reason over what you are given and return a precise recommendation.",
-    READ_ONLY_TOOLS,
+    READ_ONLY,
   ),
-};
+});

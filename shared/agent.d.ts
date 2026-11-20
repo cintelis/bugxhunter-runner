@@ -173,6 +173,52 @@ export interface AgentStatus {
   models: AgentModel[];
 }
 
+// --- Supervised recon (server/src/recon-run.ts) --------------------------------
+
+/** How the tested instance relates to production; every finding is tagged with `kind`. */
+export interface ReconEnv {
+  kind: "local" | "staging" | "production";
+  /** How it differs from production, in the operator's words. */
+  divergences: string;
+  nonProdSettings?: string[];
+}
+
+/** A finding the verifier confirmed, or marked as depending on a non-production setting. */
+export interface ReconFinding {
+  title: string;
+  severity: "low" | "medium" | "high" | "critical";
+  standardId?: string;
+  repro: string;
+  verdict: "real" | "config-dependent" | "rejected";
+  prodCaveat?: string;
+  env: ReconEnv["kind"];
+}
+
+/** GET /api/agent/recon: one supervised recon run on a session. */
+export interface ReconState {
+  sessionID: string;
+  scope: string;
+  objective: string;
+  env: ReconEnv;
+  /** The model profile in use (recon-open, recon-balanced, …). */
+  profile: string;
+  status: "running" | "finished";
+  /** Why it ended: the surface is done, nothing new (idle), a cap, stuck, rate limits, an error, or stopped by the user. */
+  stopped?: "done" | "idle" | "budget" | "rounds" | "stuck" | "rate-limited" | "error" | "aborted";
+  rounds: number;
+  maxRounds: number;
+  tokens: number;
+  budgetTokens: number;
+  /** The executor's model this round (it changes on escalation). */
+  model?: string;
+  /** Approvals the gate answered itself (allowed, denied) and left for the person (asked). */
+  gate: { allowed: number; asked: number; denied: number };
+  findings: ReconFinding[];
+  error?: string;
+  startedAt: number;
+  finishedAt?: number;
+}
+
 /** A folder under the workspace root (shared/agent.d.ts; server/src/workspaces.ts). */
 export interface Workspace {
   /** Its path under the root: `demo`, or `owner/repo` for a GitHub clone. */

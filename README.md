@@ -307,6 +307,42 @@ before scanning and to scan only hosts you name.
 To fence the agent to a specific lab/target range, add firewall rules on the Docker host or the VM
 you run this in — Docker's bridge NAT doesn't restrict outbound on its own.
 
+## Supervised recon
+
+The Runner's **recon** button starts a supervised test of one target. You give the target (one
+host or URL), an objective, the environment (local, staging or production) and how it differs
+from production, and confirm you are authorised to test it. The runner then drives the session
+round after round:
+
+1. **Route.** Each round the executor runs on the model its profile gives it. After two stuck
+   rounds, or a High or Critical finding, the next round runs on the escalation model; a model
+   that answers "rate limited" is routed around for a minute.
+2. **Probe, under the gate.** Every shell command the executor (or a subagent) wants to run raises
+   an approval. The gate answers the ones it can prove safe: a `curl` GET or HEAD to exactly the
+   in-scope origin, an `nmap` version scan of the in-scope host, piped into read filters with
+   allow-listed flags. A handful of shapes that would wreck or hijack the agent's own machine are
+   rejected. Everything else waits for you, as an approval card. "Always allow" is off during a
+   run, and the recon agents cannot use webfetch or websearch.
+3. **Verify.** The executor hands each candidate to the `recon-verify` subagent, which rejects it
+   without reproduction evidence and marks it *config-dependent* when it relies on a setting that
+   differs from production. Only its verdicts become findings.
+4. **Stop.** The run ends when the executor reports the surface exhausted, a round finds nothing
+   new, the round or token cap is reached, it stays stuck after escalating, every model is
+   rate-limited, a round fails, or you press stop.
+
+A strip above the composer shows the round, tokens, model and how many approvals the gate
+answered; the findings appear in the transcript. Gate decisions and the run's start and end go to
+the audit log (`recon.gate`, `recon.started`, `recon.finished`). A run lives in the runner's
+memory: restarting the runner ends it (the session and its transcript stay).
+
+**Models.** `RECON_PROFILE` picks a profile: `recon-open` (SCX models only), `recon-balanced`
+(GLM executor, Claude for triage, verification and escalation) or `recon-quality`. With no
+Anthropic key the default is `recon-open`, otherwise `recon-balanced`. `RECON_EXECUTOR_MODEL`,
+`RECON_TRIAGE_MODEL`, `RECON_VERIFY_MODEL` and `RECON_ESCALATE_MODEL` (`provider/model`) override
+one role. In Docker the subagents are defined in `docker/opencode.json` on SCX models; the
+per-role variables in `.env` reach both containers, so set them there to put a role on Claude.
+The security model is in [docs/recon-security.md](docs/recon-security.md).
+
 ## Through Sigilant (governed runs)
 
 The runner can run under [Sigilant](https://sigilant.io), Cintelis's agent governance platform: it is a
@@ -349,6 +385,9 @@ nobody is there to unlock.
 | `OPEN_RUNNER_PLAYGROUND_DIR` | `playground/` beside the vault | Saved Playground chats and canvases, sealed with the vault key |
 | `OPEN_RUNNER_WORKSPACE` | `/workspace` (local: `~/bugxhunter/repos`) | Remote mode: projects must live under this folder. Both modes: where GitHub clones land |
 | `SCX_PROXY_TOKEN` | unset | Enables the `/scx/v1` key proxy for the sandboxed agent |
+| `RECON_PROFILE` | `recon-balanced` (`recon-open` without an Anthropic key) | Model profile for [supervised recon](#supervised-recon); `RECON_PROFILES_FILE` adds your own (JSON) |
+| `RECON_EXECUTOR_MODEL`, `RECON_TRIAGE_MODEL`, `RECON_VERIFY_MODEL`, `RECON_ESCALATE_MODEL` | from the profile | One recon role's model, as `provider/model` |
+| `RECON_ESCALATE_AFTER` | `2` | Stuck rounds before the executor moves to the escalation model |
 
 Releases are on the [releases page](https://github.com/cintelis/bugxhunter-runner/releases).
 See [SECURITY.md](SECURITY.md) to verify one by hand, or to report a vulnerability.
@@ -449,6 +488,7 @@ publisher** on npmjs.com set to this repository and `release.yml`, once; no npm 
 |---|---|
 | `server/src/opencode.ts` | Starts/stops the OpenCode server, one SDK client per project folder, event mapping |
 | `server/src/index.ts` | Express: `/api/agent/*` (OpenCode) and `/api/chat`, `/api/models`, `/api/kb` (SCX) |
+| `server/src/recon.ts`, `recon-driver.ts`, `recon-run.ts` | Supervised recon: the model router and approval gate, the driver loop, and the OpenCode side of a turn (`web/src/ReconPanel.tsx` is its UI) |
 | `server/src/scx.ts`, `rag.ts` | SCX client and in-memory knowledge base (Playground) |
 | `server/src/providers.ts`, `anthropic.ts`, `nvidia-health.ts` | Anthropic / NVIDIA / OpenRouter providers (Claude via the official SDK); hides NVIDIA models whose endpoints are retired |
 | `server/src/playground-store.ts` | Saved Playground sessions, sealed with the vault key |
