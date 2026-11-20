@@ -19,7 +19,7 @@
  */
 
 import {
-  routeModel, harnessFor, classifyCommand, commandHazard, allCapped, originOf, escalateAfter,
+  routeModel, harnessFor, classifyCommand, commandHazard, allCapped, originOf, escalateAfter, STATUS_LINE,
   type ReconFinding, type EnvFidelity, type ReconHarness, type RouteSignals, type GateContext,
 } from "./recon.js";
 
@@ -42,7 +42,7 @@ const posInt = (v: unknown, d: number): number => (typeof v === "number" && Numb
 
 /** Merge harness overrides over the profile and hard defaults WITHOUT letting an
  *  undefined/NaN/Infinity override erase a cap — the loop is never unbounded. */
-function resolveHarness(override?: ReconHarness): ReconHarness {
+export function resolveHarness(override?: ReconHarness): ReconHarness {
   const merged = { ...DEFAULT_RECON_HARNESS, ...harnessFor("executor"), ...override };
   return {
     ...merged,
@@ -189,6 +189,8 @@ export interface ReconRunResult {
   stopped: "done" | "idle" | "budget" | "rounds" | "stuck" | "rate-limited" | "error";
 }
 
+const STATUS_REMINDER = `End your turn with one final line: "${STATUS_LINE}: continue", "${STATUS_LINE}: stuck" or "${STATUS_LINE}: done".`;
+
 /** Build the executor's seed prompt: scope fence + env-fidelity gate + objective. */
 export function buildReconKickoff(opts: Pick<ReconDriverOptions, "objective" | "scope" | "env">): string {
   const { objective, scope, env } = opts;
@@ -198,12 +200,75 @@ export function buildReconKickoff(opts: Pick<ReconDriverOptions, "objective" | "
     `ENVIRONMENT FIDELITY: this is a ${env.kind} instance. ${env.divergences}${nonProd} Tag every finding with this environment; if a finding depends on a setting that differs from production, mark it config-dependent and say what to re-test against production — never report it as a clean production bug.`,
     `OBJECTIVE: ${objective}`,
     `Work one hypothesis at a time with the smallest low-impact probe. Read-only probes run freely; anything that changes state pauses for human approval. When you have a candidate, hand it to the recon-verify subagent — do not promote it yourself.`,
+    STATUS_REMINDER,
   ].join("\n\n");
 }
 
 /** Prompt that nudges the executor forward after a turn goes idle with work left. */
 export const RECON_CONTINUE =
-  "Continue: take the next untested hypothesis within scope. If the in-scope surface is genuinely exhausted, stop and say so rather than widening scope. Hand any new candidate to recon-verify.";
+  "Continue: take the next untested hypothesis within scope. If the in-scope surface is genuinely exhausted, stop and say so rather than widening scope. Hand any new candidate to recon-verify. " + STATUS_REMINDER;
+
+/* ─────────────── reading a turn back (pure; the session runner calls these) ─────────────── */
+
+/**
+ * What the executor said about its own turn, from its final `RECON-STATUS:` line
+ * (the last one wins). Without the line, a turn that completed at least one tool
+ * call is taken to have made progress, and one that did nothing is idle.
+ */
+export function parseTurnStatus(text: string, toolsCompleted: number): Pick<ReconTurnResult, "madeProgress" | "stuck" | "done"> {
+  const all = [...text.matchAll(new RegExp(`${STATUS_LINE}:\\s*\\**\\s*(continue|stuck|done)\\b`, "gi"))];
+  const status = all.length ? all[all.length - 1][1].toLowerCase() : undefined;
+  if (status === "done") return { madeProgress: true, done: true };
+  if (status === "stuck") return { madeProgress: false, stuck: true };
+  if (status === "continue") return { madeProgress: true };
+  return { madeProgress: toolsCompleted > 0 };
+}
+
+const VERDICTS: readonly ReconFinding["verdict"][] = ["real", "config-dependent", "rejected"];
+const SEVERITIES: readonly Severity[] = ["low", "medium", "high", "critical"];
+const clipText = (v: unknown, n: number): string | undefined => {
+  const s = str(v)?.trim();
+  return s ? (s.length > n ? s.slice(0, n) + "…" : s) : undefined;
+};
+
+/** Every top-level `{…}` span in `text` (string-aware brace matching). */
+function jsonObjects(text: string): string[] {
+  const out: string[] = [];
+  let depth = 0, start = -1, inStr = false, esc = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) { if (esc) esc = false; else if (c === "\\") esc = true; else if (c === '"') inStr = false; continue; }
+    if (c === '"') { if (depth) inStr = true; continue; }
+    if (c === "{") { if (depth++ === 0) start = i; }
+    else if (c === "}" && depth && --depth === 0) out.push(text.slice(start, i + 1));
+  }
+  return out;
+}
+
+/**
+ * The verifier's verdicts, parsed from its reply (the JSON block its prompt asks
+ * for). Anything that is not valid JSON with a known verdict AND severity is
+ * dropped: an unparseable verdict is never promoted to a finding. The text is
+ * model output about an adversarial target, so it is clipped and stays data.
+ */
+export function parseVerifierFindings(text: string, env: EnvFidelity["kind"]): ReconFinding[] {
+  const out: ReconFinding[] = [];
+  for (const raw of jsonObjects(text ?? "")) {
+    let o: unknown;
+    try { o = JSON.parse(raw); } catch { continue; }
+    const verdict = VERDICTS.find((v) => v === String(get(o, "verdict")).toLowerCase());
+    const severity = SEVERITIES.find((s) => s === String(get(o, "severity")).toLowerCase());
+    const repro = clipText(get(o, "repro"), 4000);
+    if (!verdict || !severity || !repro) continue;
+    out.push({
+      title: clipText(get(o, "title"), 200) ?? repro.slice(0, 80),
+      severity, verdict, repro, env,
+      standardId: clipText(get(o, "standard_id") ?? get(o, "standardId"), 60),
+      prodCaveat: clipText(get(o, "prod_caveat") ?? get(o, "prodCaveat"), 1000),
+    });
+  }
+  return out;
+}
 
 /**
  * Drive one supervised recon run to completion. Pure control flow over the

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   agentCreateSession, agentPrompt, agentReplyPermission, agentAbort, agentDiff, openAgentEvents, agentAnswerQuestion,
-  agentLoadSession, agentCommands, agentRunCommand, agentCompact, agentPending,
+  agentLoadSession, agentCommands, agentRunCommand, agentCompact, agentPending, reconStart, reconGet, reconStop,
   type AgentEvent, type AgentStatus, type FileDiff, type Todo, type SlashCommand, type FileUpload, type StoredMessage,
 } from "./agentApi";
-import type { FilePart, MessagePart, PermissionRequest, ToolPart } from "../../shared/agent";
+import type { FilePart, MessagePart, PermissionRequest, ReconState, ToolPart } from "../../shared/agent";
+import { ReconDialog, ReconFindings, ReconStrip, type ReconRequest } from "./ReconPanel";
 import { Markdown } from "./Markdown";
 import { FlagText } from "./FlagText";
 import { setFileRoots } from "./filelinks";
@@ -87,6 +88,11 @@ export function AgentPanel({
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [draft, setDraft] = useState<string | null>(null);
   const [atBottom, setAtBottom] = useState(true);
+  // Supervised recon: the server drives the session round after round, so an
+  // `idle` between rounds is not the end of the turn (see reconActive).
+  const [recon, setRecon] = useState<ReconState | null>(null);
+  const [showRecon, setShowRecon] = useState(false);
+  const reconActive = useRef(false);
 
   // Type-ahead queue: prompts entered while a turn is running, sent on idle.
   const [queued, setQueued] = useState<{ id: number; text: string; files: FileUpload[] }[]>([]);
@@ -201,11 +207,11 @@ export function AgentPanel({
         // restart): stop it spinning.
         setMessages((prev) => prev.map(interruptRunning));
         onSessionsChanged();
-        endTurnRef.current();
+        if (!reconActive.current) endTurnRef.current(); // a recon run ends when the server says so
         break;
       case "error":
         setError(e.message);
-        endTurnRef.current();
+        if (!reconActive.current) endTurnRef.current();
         break;
     }
   }, [upsert, onSessionsChanged]);
@@ -222,6 +228,8 @@ export function AgentPanel({
     setError(null);
     setNotice(null);
     setBusy(false);
+    setRecon(null);
+    reconActive.current = false;
     queueRef.current = [];
     syncQueue();
     turnActive.current = false;
@@ -296,12 +304,54 @@ export function AgentPanel({
         setSessionID(id);
         onActiveSession(id);
         attachStream(id);
+        reconGet(id).then(adoptRecon).catch(() => {}); // a run may still be going on this session
         requestAnimationFrame(() => scrollToBottom(false));
       })
       .catch((e) => setError(String((e as Error).message ?? e)))
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resume?.n]);
+
+  // --- supervised recon ------------------------------------------------------
+  /** Show a run's state; while it is running the session is busy and prompts queue behind it. */
+  function adoptRecon(r: ReconState | null) {
+    setRecon(r);
+    if (r?.status === "running") {
+      reconActive.current = true;
+      turnActive.current = true;
+      setBusy(true);
+    }
+  }
+
+  async function startRecon(req: ReconRequest) {
+    setError(null);
+    setNotice(null);
+    const sid = await ensureSession();
+    const r = await reconStart({ sessionID: sid, directory, ...req, authorised: true });
+    const id = `local-${localSeq.current++}`;
+    const shown = `Supervised recon of ${req.scope} (${req.env.kind})\n${req.objective}`;
+    setMessages((prev) => [...prev, { id, role: "user", parts: [{ type: "text", id, text: shown }] }]);
+    adoptRecon(r);
+    scrollToBottom();
+  }
+
+  // Poll the run while it is going; when it finishes, the turn ends.
+  const reconRunning = recon?.status === "running";
+  useEffect(() => {
+    if (!reconRunning || !sessionID) return;
+    const timer = setInterval(() => {
+      reconGet(sessionID).then((r) => {
+        if (!r) return;
+        setRecon(r);
+        if (r.status !== "running") {
+          reconActive.current = false;
+          endTurnRef.current();
+          onSessionsChanged();
+        }
+      }).catch(() => {});
+    }, 2500);
+    return () => clearInterval(timer);
+  }, [reconRunning, sessionID, onSessionsChanged]);
 
   // --- sending: prompts, slash commands ------------------------------------
   const syncQueue = () => setQueued([...queueRef.current]);
@@ -459,6 +509,11 @@ export function AgentPanel({
     // Stop halts the current turn and clears anything queued behind it.
     queueRef.current = [];
     syncQueue();
+    if (reconActive.current && sessionID) {
+      // The server aborts the turn and ends the run; the poll picks up the result.
+      await reconStop(sessionID).catch(() => {});
+      return;
+    }
     turnActive.current = false;
     setBusy(false);
     if (sessionID) await agentAbort(sessionID, directory).catch(() => {});
@@ -486,6 +541,8 @@ export function AgentPanel({
           <span className="dot" />{busy ? (waiting ? "waiting for you" : "running") : sessionID ? "idle" : "ready"}
         </span>
         {turnTokens > 0 && <span className="token-pill">{formatTokens(turnTokens)} tokens</span>}
+        <button className="btn ghost sm" onClick={() => setShowRecon(true)} disabled={busy || !status?.ready}
+          title="Supervised recon: test one target round after round, approving anything that is not a read-only request">recon</button>
         <button className="btn ghost sm" onClick={viewDiff} disabled={!sessionID}>changes</button>
         <button className="btn ghost sm" onClick={newSession} disabled={busy}>new_session</button>
       </TerminalBar>
@@ -510,6 +567,8 @@ export function AgentPanel({
 
           {messages.map((m) => <AgentRow key={m.id} msg={m} />)}
 
+          {recon && <ReconFindings recon={recon} />}
+
           {perms.map((p) => (
             <div className="perm-card" key={p.permissionID}>
               <div className="perm-title">Approval needed{p.subagent && <span className="perm-sub">subagent · {p.subagent}</span>}</div>
@@ -519,7 +578,8 @@ export function AgentPanel({
               </div>
               <div className="perm-actions">
                 <button className="btn primary sm" onClick={() => reply(p, "once")}>Approve</button>
-                <button className="btn sm" onClick={() => reply(p, "always")}>Always allow</button>
+                {/* In a recon run every approval is for one command, so the gate sees the next one too. */}
+                {!reconRunning && <button className="btn sm" onClick={() => reply(p, "always")}>Always allow</button>}
                 <button className="btn sm danger-outline" onClick={() => reply(p, "reject")}>Reject</button>
               </div>
             </div>
@@ -553,6 +613,7 @@ export function AgentPanel({
       </div>
 
       <div className="composer">
+        {recon && <ReconStrip recon={recon} onStop={stop} onDismiss={() => setRecon(null)} />}
         <TodoPanel todos={todos} />
         <Composer
           agent={agent}
@@ -570,6 +631,7 @@ export function AgentPanel({
       </div>
 
       {diff !== null && <DiffModal diff={diff} onClose={() => setDiff(null)} />}
+      {showRecon && <ReconDialog onStart={startRecon} onClose={() => setShowRecon(false)} />}
     </main>
   );
 }

@@ -7,7 +7,7 @@
 
 import type {
   AgentEvent, AgentModel, AgentQuestion, AgentStatus, FileDiff, PendingRequests, SessionSummary, SlashCommand,
-  StoredMessage, Todo, Tokens, ProjectEntry, ProjectListing, UploadResult, Workspace, WorkspaceList,
+  StoredMessage, Todo, Tokens, ProjectEntry, ProjectListing, UploadResult, Workspace, WorkspaceList, ReconEnv, ReconState,
 } from "../../shared/agent";
 export type { AgentEvent, AgentModel, AgentQuestion, AgentStatus, FileDiff, PendingRequests, SessionSummary, SlashCommand, StoredMessage, Todo, Tokens, ProjectEntry, ProjectListing, UploadResult, Workspace, WorkspaceList };
 
@@ -199,6 +199,28 @@ async function readAgentEvents(
       }
     }
   }
+}
+
+// --- supervised recon -------------------------------------------------------------
+
+/** Start a supervised recon run on a session (server/src/recon-run.ts). */
+export async function reconStart(body: {
+  sessionID: string; directory: string; scope: string; objective: string; env: ReconEnv; authorised: true;
+}): Promise<ReconState> {
+  const r = await fetch("/api/agent/recon", { method: "POST", headers: json(), body: JSON.stringify(body) });
+  if (!r.ok) throw new Error((await errMsg(r)) || `Could not start recon (${r.status})`);
+  return (await r.json()).recon;
+}
+
+/** The recon run on a session, if there is one (running or finished). */
+export async function reconGet(sessionID: string): Promise<ReconState | null> {
+  const r = await fetch(`/api/agent/recon?sessionID=${encodeURIComponent(sessionID)}`);
+  return r.ok ? (await r.json()).recon : null;
+}
+
+export async function reconStop(sessionID: string): Promise<ReconState | null> {
+  const r = await fetch("/api/agent/recon/stop", { method: "POST", headers: json(), body: JSON.stringify({ sessionID }) });
+  return r.ok ? (await r.json()).recon : null;
 }
 
 const json = () => ({ "Content-Type": "application/json" });
