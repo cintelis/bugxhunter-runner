@@ -697,12 +697,12 @@ export function Canvas({ config, models, onExit }: Props) {
             onChange={(e) => setDescription(e.target.value)}
             onPaste={att.onPaste}
             rows={2}
-            placeholder="Attach an architecture diagram, or describe the system (components, data stores, flows)…"
+            placeholder="Attach an architecture diagram or a .md / .txt description, or describe the system (components, data stores, flows)…"
           />
           <div className="composer-bar">
             <input ref={fileRef} type="file" accept={ATTACH_ACCEPT} multiple hidden
               onChange={(e) => { if (e.target.files) void att.addImages(e.target.files); e.target.value = ""; }} />
-            <button className="icon-btn attach-btn" onClick={() => fileRef.current?.click()} disabled={building} title="Attach a diagram (or paste / drop it)" aria-label="Attach a diagram">
+            <button className="icon-btn attach-btn" onClick={() => fileRef.current?.click()} disabled={building} title="Attach a diagram or a Markdown / text file (or paste / drop it)" aria-label="Attach a diagram or text file">
               <PaperclipIcon />
             </button>
             <select className="canvas-builder" value={builderId} onChange={(e) => setBuilder(e.target.value)} disabled={building} aria-label="Model that builds the threat model">

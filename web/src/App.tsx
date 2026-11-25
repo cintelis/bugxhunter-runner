@@ -199,7 +199,7 @@ export default function App() {
     const id = chatIdRef.current ?? newSessionId();
     chatIdRef.current = id;
     setChatId(id);
-    const title = (first.content?.trim() || (first.docs?.length ? `Diagram review: ${first.docs[0].name}` : first.images?.length ? "Image review" : "Chat")).replace(/\s+/g, " ").slice(0, 80);
+    const title = (first.content?.trim() || (first.docs?.length ? `${first.docs[0].kind === "text" ? "File" : "Diagram"} review: ${first.docs[0].name}` : first.images?.length ? "Image review" : "Chat")).replace(/\s+/g, " ").slice(0, 80);
     saveSession("chat", id, title, { v: 1, model: config.model, system: config.system, messages })
       .then(() => {
         setSaveStatus({ ok: true, text: "Saved, encrypted with your vault" });

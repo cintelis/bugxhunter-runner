@@ -16,6 +16,20 @@ describe("withDocs", () => {
   });
 });
 
+describe("withDocs and text files", () => {
+  const notes = { name: 'design "v2".md', text: "# Login\n- tokens never expire\n", kind: "text" as const };
+  it("sends a Markdown or text file in full, in a named block", () => {
+    const t = withDocs("Threat-model this", [notes])!;
+    expect(t.startsWith('Threat-model this\n\nAttached file "design "v2".md", in full:')).toBe(true);
+    expect(t).toContain("<file name=\"design 'v2'.md\">\n# Login\n- tokens never expire\n</file>");
+    expect(t).not.toContain("<diagram");
+  });
+  it("asks for a document review when only text files are attached, a diagram review otherwise", () => {
+    expect(withDocs("", [notes])!.startsWith("Review this document for security issues.")).toBe(true);
+    expect(withDocs(null, [notes, doc])!.startsWith("Review this diagram for security issues.")).toBe(true);
+  });
+});
+
 describe("userContent", () => {
   it("puts outlines in the text part next to images", () => {
     const c = userContent("Look", [{ name: "a.png", url: "data:image/png;base64,AA" }], [doc]) as { type: string; text?: string }[];

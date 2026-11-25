@@ -73,7 +73,7 @@ export function Compare({ config, models, onExit }: Props) {
       images.length ? `${images.length} image${images.length > 1 ? "s" : ""}` : "",
       ...att.docs.map((d) => d.name),
     ].filter(Boolean);
-    setLastPrompt((prompt.trim() || (att.docs.length ? "Review this diagram for security issues." : "Describe this image.")) + (extras.length ? `  [+${extras.join(", ")}]` : ""));
+    setLastPrompt((prompt.trim() || (att.docs.length ? (att.docs.every((d) => d.kind === "text") ? "Review this document for security issues." : "Review this diagram for security issues.") : "Describe this image.")) + (extras.length ? `  [+${extras.join(", ")}]` : ""));
     aborts.current = cols.map(() => new AbortController());
 
     cols.forEach((c, i) => {

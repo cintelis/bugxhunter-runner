@@ -22,8 +22,10 @@ export interface ChatImage {
 /** A draw.io diagram attached to a Playground user turn, sent as a text outline (see wire.ts). */
 export interface ChatDoc {
   name: string;
-  /** The outline the render service made from the file. */
+  /** The outline the render service made from the file; for a text file, its contents. */
   text: string;
+  /** `text`: a Markdown or plain-text file, sent as it is. Absent: a draw.io diagram's outline. */
+  kind?: "text";
   pages?: string[];
 }
 
