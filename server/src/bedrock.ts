@@ -21,6 +21,10 @@
  *    every other provider's key. providers.ts reads it from the vault, a key
  *    file or the environment, and it wins over AWS credentials when both exist.
  *
+ * AWS credentials are not vault items, so providers.ts gates them on the vault
+ * instead: once a vault exists nothing is signed while it is sealed, and
+ * sealing it drops the credentials held in memory here.
+ *
  * Everything read from the environment here is removed from it, for the reason
  * given in providers.ts: the OpenCode server is spawned with a copy of our
  * environment, and the agent's shell inherits that.
@@ -117,19 +121,35 @@ const REFRESH_BEFORE_MS = 5 * 60_000;
 /** Credentials without an expiry (a profile's static keys) are re-read this often, so a rotated file is noticed. */
 const REREAD_MS = 5 * 60_000;
 
-/** Cache a credential source: one lookup for concurrent callers, and a fresh one near expiry. */
-export function cached(source: CredentialSource, now: () => number = Date.now): CredentialSource {
+/**
+ * Cache a credential source: one lookup for concurrent callers, and a fresh one near expiry.
+ * `forget()` drops what is held, and the result of a lookup still in flight.
+ */
+export function cached(source: CredentialSource, now: () => number = Date.now): CredentialSource & { forget(): void } {
   let held: { value: AwsCredentials; until: number } | undefined;
   let pending: Promise<AwsCredentials> | undefined;
-  return async () => {
+  let generation = 0;
+  const get = async () => {
     if (held && now() < held.until) return held.value;
-    pending ??= source().then((value) => {
-      const expires = value.expiration?.getTime();
-      held = { value, until: expires ? expires - REFRESH_BEFORE_MS : now() + REREAD_MS };
+    if (pending) return pending;
+    const mine = generation;
+    const lookup: Promise<AwsCredentials> = source().then((value) => {
+      if (mine === generation) {
+        const expires = value.expiration?.getTime();
+        held = { value, until: expires ? expires - REFRESH_BEFORE_MS : now() + REREAD_MS };
+      }
       return value;
-    }).finally(() => { pending = undefined; });
-    return pending;
+    }).finally(() => { if (pending === lookup) pending = undefined; });
+    pending = lookup;
+    return lookup;
   };
+  return Object.assign(get, {
+    forget() {
+      generation += 1;
+      held = undefined;
+      pending = undefined;
+    },
+  });
 }
 
 export interface OutboundRequest {
@@ -166,6 +186,9 @@ const oneLine = (e: unknown) => String((e as Error)?.message ?? e).replace(/\s+/
 
 export const settings = readSettings();
 const source = settings.credentials ? cached(settings.credentials) : undefined;
+
+/** Drop the AWS credentials held in memory (the vault was locked). The next call loads them afresh. */
+export const forget = () => source?.forget();
 
 /** Whether AWS credentials are set up for Bedrock (they may still fail to load: an SSO session can lapse). */
 export const awsConfigured = () => settings.mode !== "none";

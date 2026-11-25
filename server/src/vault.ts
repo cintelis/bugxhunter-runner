@@ -236,10 +236,18 @@ export function unseal(dekB64: string) {
   audit("vault.unsealed", {});
 }
 
+const sealListeners: (() => void)[] = [];
+
+/** Run `listener` whenever the vault is sealed: for secrets held outside it that a lock must drop too. */
+export function onSealed(listener: () => void) {
+  sealListeners.push(listener);
+}
+
 export function sealVault(reason: "user" | "idle" = "user") {
   const was = dek !== null;
   if (dek) dek.fill(0);
   dek = null;
+  for (const listener of sealListeners) listener();
   if (was) audit("vault.sealed", { reason });
 }
 

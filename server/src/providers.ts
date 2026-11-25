@@ -198,9 +198,21 @@ export function apiKey(id: ProviderId): string {
  * covers the method, URL, body and `headers`, so they must be the ones sent).
  */
 export async function authHeaders(id: ProviderId, request: bedrock.OutboundRequest): Promise<Record<string, string>> {
-  if (id === "bedrock" && keySource(id) === "aws") return bedrock.sign(request);
+  if (id === "bedrock" && keySource(id) === "aws") {
+    // AWS credentials live outside the vault, but a locked vault must mean no model calls at
+    // all: once a vault exists, nothing is signed while it is sealed. A signed call counts as
+    // activity, like reading a key does. A runner with no vault (unattended) signs freely.
+    if (vault.isInitialised()) {
+      if (!vault.isUnsealed()) throw httpError(503, "The vault is sealed (locked). Unlock it in the sidebar.");
+      vault.touch();
+    }
+    return bedrock.sign(request);
+  }
   return { Authorization: `Bearer ${apiKey(id)}` };
 }
+
+// Locking the vault also drops the AWS credentials held in memory.
+vault.onSealed(bedrock.forget);
 
 export const clients: Record<Exclude<ProviderId, "anthropic">, SCXClient> = {
   scx: new SCXClient({ apiKey: () => apiKey("scx"), baseUrl: PROVIDERS.scx.baseUrl }),

@@ -105,6 +105,36 @@ describe("the credential cache", () => {
     expect((await source()).accessKeyId).toBe("K2");
   });
 
+  it("forgets on request, and loads afresh on the next call", async () => {
+    let calls = 0;
+    const source = cached(async () => {
+      calls += 1;
+      return { accessKeyId: `K${calls}`, secretAccessKey: "s", expiration: new Date(Date.now() + 60 * 60_000) };
+    });
+    expect((await source()).accessKeyId).toBe("K1");
+    source.forget();
+    expect(calls).toBe(1); // forgetting loads nothing
+    expect((await source()).accessKeyId).toBe("K2");
+    expect((await source()).accessKeyId).toBe("K2");
+  });
+
+  it("does not keep the result of a lookup that was in flight when it forgot", async () => {
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const source = cached(async () => {
+      calls += 1;
+      const n = calls;
+      if (n === 1) await gate;
+      return { accessKeyId: `K${n}`, secretAccessKey: "s", expiration: new Date(Date.now() + 60 * 60_000) };
+    });
+    const first = source();
+    source.forget(); // the vault was locked while STS was still answering
+    release();
+    expect((await first).accessKeyId).toBe("K1"); // the caller already waiting gets its answer
+    expect((await source()).accessKeyId).toBe("K2"); // but it was not kept
+  });
+
   it("re-reads credentials that have no expiry, and does not keep a failure", async () => {
     let now = 0, calls = 0, fail = true;
     const source = cached(async () => {

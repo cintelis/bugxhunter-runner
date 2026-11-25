@@ -251,6 +251,11 @@ local mode either.
 
 Things to know:
 
+- **Locking the vault stops Bedrock too.** AWS credentials are not vault items, so once a vault
+  exists the runner refuses to sign while it is sealed (model calls answer 503) and drops the
+  credentials it holds in memory. The first call after an unlock loads them afresh from the
+  profile or role. This is a gate in the runner, not encryption: a mounted `~/.aws` stays readable
+  to the runner's container, so give it a profile that can do no more than invoke the model.
 - **GLM 5.3 has no single-region form.** It is called through a cross-region inference profile:
   `global.zai.glm-5.3` from most regions (inference may then run in any commercial AWS region), or
   `us.zai.glm-5.3` from US regions only. Prompts, code and tool output go where the profile sends
