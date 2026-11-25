@@ -12,9 +12,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { SCXError, type ChatParams } from "./scx.js";
 import {
-  PROVIDERS, PROXY_TOKEN, PORT, OPENROUTER_MODELS, apiKey, clients, clientFor, configured, isRetiredStatus, keySource, listModels,
-  proxyPaths, proxyTokenOk, upstreamHeaders,
+  PROVIDERS, PROXY_TOKEN, PORT, OPENROUTER_MODELS, clients, clientFor, configured, isRetiredStatus, keySource, listModels,
+  proxyHeaders, proxyPaths, proxyTokenOk,
 } from "./providers.js";
+import { settings as bedrockSettings } from "./bedrock.js";
 import { KnowledgeBase, buildContextBlock } from "./rag.js";
 import {
   getClient, serverUrl, resolveDirectory, projectFile, listAgentModels, toUiEvent, toUiMessages, parseModelId, oc, query, httpError,
@@ -73,10 +74,12 @@ for (const p of Object.values(PROVIDERS)) {
       for await (const c of req) chunks.push(c as Buffer);
       const ctrl = new AbortController();
       res.on("close", () => ctrl.abort());
-      const upstream = await fetch(p.baseUrl + sub + (req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""), {
+      const url = p.baseUrl + sub + (req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "");
+      const body = req.method === "GET" || req.method === "HEAD" ? undefined : Buffer.concat(chunks);
+      const upstream = await fetch(url, {
         method: req.method,
-        headers: upstreamHeaders(p, req.headers, apiKey(p.id)),
-        body: req.method === "GET" || req.method === "HEAD" ? undefined : Buffer.concat(chunks),
+        headers: await proxyHeaders(p, req.headers, { method: req.method, url, body }),
+        body,
         signal: ctrl.signal,
       });
       res.status(upstream.status);
@@ -971,10 +974,11 @@ const server = app.listen(PORT, process.env.HOST ?? "127.0.0.1", () => {
       vault: "vault",
       file: "a key file (not in the clear in the environment)",
       env: ".env — consider moving it into the vault",
+      aws: `AWS credentials (${bedrockSettings.describe}), region ${bedrockSettings.region}`,
       "opencode-auth": "OpenCode's auth.json — consider moving it into the vault",
       none: p.id === "scx" ? "none yet — set up the vault in the sidebar" : "not configured (optional)",
     }[src];
-    console.log(`  ${p.name} key: ${where}`);
+    console.log(`  ${p.name} ${src === "aws" ? "sign-in" : "key"}: ${where}`);
   }
   if (vault.isInitialised()) console.log(`  vault: ${vault.VAULT_FILE} (${vault.isUnsealed() ? "unsealed" : "sealed — unlock it in the UI"})`);
   if (OPENROUTER_MODELS.length) console.log(`  OpenRouter models for the agent: ${OPENROUTER_MODELS.join(", ")}`);

@@ -43,6 +43,21 @@ services:
       # (ANTHROPIC_API_KEY) or here; ANTHROPIC_MODELS lists the ids the agent's picker shows.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_MODELS: ${ANTHROPIC_MODELS:-}
+      # Optional: models on Amazon Bedrock, called directly (GLM 5.3 by default). Sign in
+      # with ONE of these (see "Amazon Bedrock" in the README):
+      #  - an AWS profile: mount your ~/.aws read-only (the volume below) and name the
+      #    profile in BEDROCK_AWS_PROFILE. For an IAM Identity Center (SSO) profile,
+      #    `aws sso login` on the host renews it; nothing long-lived is stored.
+      #  - an OIDC role: AWS_ROLE_ARN plus AWS_WEB_IDENTITY_TOKEN_FILE (mount the token file).
+      #  - a Bedrock API key: in the vault as AWS_BEARER_TOKEN_BEDROCK (keys dialog), or here.
+      # BEDROCK_MODELS lists the ids the agent may use (set it to show them in the Runner).
+      BEDROCK_REGION: ${BEDROCK_REGION:-}
+      BEDROCK_MODELS: ${BEDROCK_MODELS:-}
+      BEDROCK_AWS_PROFILE: ${BEDROCK_AWS_PROFILE:-}
+      BEDROCK_AUTH: ${BEDROCK_AUTH:-}
+      AWS_ROLE_ARN: ${AWS_ROLE_ARN:-}
+      AWS_WEB_IDENTITY_TOKEN_FILE: ${AWS_WEB_IDENTITY_TOKEN_FILE:-}
+      AWS_BEARER_TOKEN_BEDROCK: ${AWS_BEARER_TOKEN_BEDROCK:-}
       # Supervised recon: the model profile (recon-open | recon-balanced | recon-quality;
       # default recon-balanced with an Anthropic key, recon-open without) and optional
       # per-role models. The agent gets the same per-role values (below).
@@ -63,6 +78,9 @@ services:
       - workspace:/workspace               # same volume as the agent: attachments
       - logs:/logs                         # audit + egress logs; NOT mounted in the agent, so it can't edit them
       - runner-data:/data                  # the sealed key vault (ciphertext only; see SECURITY.md)
+      # Amazon Bedrock with an AWS profile (BEDROCK_AWS_PROFILE): uncomment to give the
+      # runner, and only the runner, your AWS config and SSO session, read-only.
+      # - ${HOME}/.aws:/home/node/.aws:ro
     ports:
       - "127.0.0.1:${OPEN_RUNNER_PORT:-8790}:8790"   # localhost only; put TLS in front before exposing
     networks: [net, render]
@@ -87,6 +105,7 @@ services:
       SCX_PROXY_TOKEN: ${SCX_PROXY_TOKEN:?run docker/setup.ps1 first}
       OPENCODE_ENABLE_EXA: "1"           # turns on OpenCode's websearch tool (Exa)
       OPENROUTER_MODELS: ${OPENROUTER_MODELS:-}   # same list as runner: becomes an OpenCode provider via runner's proxy
+      BEDROCK_MODELS: ${BEDROCK_MODELS:-}         # same list as runner; the AWS sign-in stays in the runner
       # Recon subagents run on open-weight models unless a role is set here (see docker/agent-entrypoint.sh).
       RECON_EXECUTOR_MODEL: ${RECON_EXECUTOR_MODEL:-}
       RECON_TRIAGE_MODEL: ${RECON_TRIAGE_MODEL:-}

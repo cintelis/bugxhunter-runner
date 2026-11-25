@@ -215,6 +215,70 @@ The agent never holds the key: its calls go to the runner's `/openrouter/v1` pro
 token, exactly like SCX, in both local and Docker modes. Pricing is OpenRouter's; the Playground
 shows each model's per-token rates.
 
+## GLM 5.3 on Amazon Bedrock
+
+The runner can call models on [Amazon Bedrock](https://aws.amazon.com/bedrock/) directly, in your
+own AWS account: GLM 5.3 by default, through Bedrock's OpenAI-compatible endpoint
+(`bedrock-runtime.<region>.amazonaws.com/openai/v1`). The **Playground** lists them under an
+**Amazon Bedrock** heading as `bedrock/<id>`; the **agent** gets them as `bedrock/<id>` too.
+
+Set the region with `BEDROCK_REGION` (else `AWS_REGION`), then sign in one of these ways. The first
+that is set up is used, and a Bedrock API key wins over all of them:
+
+| Sign-in | Set | Use it when |
+|---|---|---|
+| **OIDC role** (web identity) | `AWS_ROLE_ARN` and `AWS_WEB_IDENTITY_TOKEN_FILE` | The runner runs where an identity provider issues it a token: GitHub Actions, Kubernetes (EKS IRSA), another OIDC issuer the role trusts. Nothing long-lived exists: the runner trades the token for role credentials through STS and renews them itself |
+| **AWS profile** | `BEDROCK_AWS_PROFILE` (else `AWS_PROFILE`) | The runner is on your own machine. An IAM Identity Center (SSO) profile gives short-lived credentials that `aws sso login` renews; a profile with `role_arn` narrows them to a role that may only invoke the model |
+| **The compute's role** | nothing on ECS; `BEDROCK_AUTH=aws` on EC2 or with a default profile | The runner is deployed in AWS: a task role, pod identity or instance profile |
+| **Access keys** | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (and `AWS_SESSION_TOKEN`) | Temporary keys pasted for a session. Avoid an IAM user's long-lived keys |
+| **Bedrock API key** | vault item `AWS_BEARER_TOKEN_BEDROCK` (keys dialog), or `AWS_BEARER_TOKEN_BEDROCK_FILE` | You cannot give the runner an AWS identity. Sealed in the vault like the other keys. Short-term keys last 12 hours at most; a long-term key is an IAM user's standing credential, which AWS recommends for exploration only |
+
+**Which to choose:** a role the runner is given beats anything it has to hold. Deployed in AWS, use
+the compute's role; in CI or Kubernetes, the OIDC role; on your own machine, an SSO profile. Keep
+the API key and access keys for when none of those is possible.
+
+In Docker the profile needs your AWS config: uncomment the `~/.aws` volume on the `runner` service
+in `docker-compose.yml` (read-only, and only the runner gets it), set `BEDROCK_AWS_PROFILE` and
+`BEDROCK_REGION` in `.env`, and set `BEDROCK_MODELS=global.zai.glm-5.3` so the agent's picker shows
+the model. When the SSO session lapses, model calls answer with a 503 that says so: run
+`aws sso login` on the host and carry on, no restart needed. On Linux the files under `~/.aws` must
+be readable by the container's user (uid 1000).
+
+As with every provider, the agent holds nothing: its calls go to the runner's `/bedrock/v1` proxy
+with the proxy token, and the runner signs them (SigV4) or adds the key. AWS credentials are
+removed from the runner's environment at start-up, so the agent's shell does not inherit them in
+local mode either.
+
+Things to know:
+
+- **GLM 5.3 has no single-region form.** It is called through a cross-region inference profile:
+  `global.zai.glm-5.3` from most regions (inference may then run in any commercial AWS region), or
+  `us.zai.glm-5.3` from US regions only. Prompts, code and tool output go where the profile sends
+  them, so check that against where your engagement's data may be processed.
+- **Access is per account.** AWS offers GLM 5.3 to eligible accounts only; one without it answers
+  `403 … is not available for this account` even though the model is listed.
+- **Other ids.** `BEDROCK_MODELS` takes any model or inference-profile id the endpoint serves,
+  including the ARN of your own application inference profile (which puts the spend under that
+  profile's cost-allocation tags). Ids the runner has no metadata for get conservative limits.
+- **Permissions.** The role needs `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream`
+  on the inference profile and on the model behind it, and nothing else. A starting point:
+
+  ```json
+  {
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+      "Resource": [
+        "arn:aws:bedrock:ap-southeast-2:111122223333:inference-profile/global.zai.glm-5.3",
+        "arn:aws:bedrock:*::foundation-model/zai.glm-5.3"
+      ]
+    }]
+  }
+  ```
+
+  An API key also needs `bedrock:CallWithBearerToken`, which some organisations deny by policy.
+
 ## Claude via the Anthropic API
 
 1. Add your Anthropic key to the vault as `ANTHROPIC_API_KEY` (keys dialog). The **Playground**
@@ -371,6 +435,14 @@ nobody is there to unlock.
 | `ANTHROPIC_API_KEY` | the vault, else unset | Anthropic key in the clear; prefer the vault item of the same name |
 | `ANTHROPIC_MODELS` | `claude-opus-5-5,claude-sonnet-5-5,claude-haiku-5-5` | Claude model ids in the agent's picker (local mode; Docker: `docker/opencode.json`) |
 | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1` | Anthropic endpoint |
+| `BEDROCK_REGION` | `AWS_REGION`, else `us-east-1` | AWS region whose Bedrock endpoint is called |
+| `BEDROCK_MODELS` | `global.zai.glm-5.3` | Comma list of Bedrock model or inference-profile ids (Docker: set it to show them in the agent's picker) |
+| `BEDROCK_AWS_PROFILE` | `AWS_PROFILE`, else unset | AWS profile (SSO, assumed role) the runner signs Bedrock calls with |
+| `AWS_ROLE_ARN`, `AWS_WEB_IDENTITY_TOKEN_FILE` | unset | An OIDC role and the file holding the identity token; `AWS_ROLE_SESSION_NAME` names the session |
+| `BEDROCK_AUTH` | unset | `aws` uses the compute's own role or the default profile (automatic on ECS) |
+| `AWS_BEARER_TOKEN_BEDROCK_FILE` | unset | A file holding a Bedrock API key, as `SCX_API_FILE` |
+| `AWS_BEARER_TOKEN_BEDROCK` | the vault, else unset | Bedrock API key in the clear; prefer the vault item of the same name. Wins over AWS credentials |
+| `BEDROCK_BASE_URL` | the region's `bedrock-runtime` endpoint | Bedrock's OpenAI-compatible endpoint (for a VPC endpoint) |
 | `GITHUB_CLIENT_ID` | the BugXHunter app | A fork's own GitHub App (device flow); `GITHUB_APP_SLUG` names its install page |
 | `OPEN_RUNNER_VAULT_FILE` | `~/.config/bugxhunter/vault.json` | The sealed vault (Docker: `/data/vault.json` on the `runner-data` volume) |
 | `OPEN_RUNNER_VAULT_IDLE_MINUTES` | `120` | Auto-lock after this long without a model call or API write; `0` = never |
@@ -492,6 +564,7 @@ publisher** on npmjs.com set to this repository and `release.yml`, once; no npm 
 | `server/src/recon.ts`, `recon-driver.ts`, `recon-run.ts` | Supervised recon: the model router and approval gate, the driver loop, and the OpenCode side of a turn (`web/src/ReconPanel.tsx` is its UI) |
 | `server/src/scx.ts`, `rag.ts` | SCX client and in-memory knowledge base (Playground) |
 | `server/src/providers.ts`, `anthropic.ts`, `nvidia-health.ts` | Anthropic / NVIDIA / OpenRouter providers (Claude via the official SDK); hides NVIDIA models whose endpoints are retired |
+| `server/src/bedrock.ts` | Amazon Bedrock: which AWS credentials the runner uses (OIDC role, profile, compute role) and the SigV4 signing of each call |
 | `server/src/playground-store.ts` | Saved Playground sessions, sealed with the vault key |
 | `server/src/render.ts`, `docker/render-server.py`, `docker/drawio_outline.py` | The render service (diagrams, `.drawio` outlines) and the runner's client for it |
 | `web/src/Canvas.tsx`, `web/src/canvas/` | The threat-model canvas |
