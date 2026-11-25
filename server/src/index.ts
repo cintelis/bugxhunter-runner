@@ -13,7 +13,7 @@ import path from "node:path";
 import { SCXError, type ChatParams } from "./scx.js";
 import {
   PROVIDERS, PROXY_TOKEN, PORT, OPENROUTER_MODELS, clients, clientFor, configured, isRetiredStatus, keySource, listModels,
-  proxyBody, proxyHeaders, proxyPaths, proxyTokenOk,
+  proxyBody, proxyHeaders, proxyPaths, proxyRefusal, proxyTokenOk,
 } from "./providers.js";
 import { REASONING_EFFORT as bedrockEffort, settings as bedrockSettings } from "./bedrock.js";
 import { KnowledgeBase, buildContextBlock } from "./rag.js";
@@ -75,7 +75,10 @@ for (const p of Object.values(PROVIDERS)) {
       const ctrl = new AbortController();
       res.on("close", () => ctrl.abort());
       const url = p.baseUrl + sub + (req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "");
-      const body = req.method === "GET" || req.method === "HEAD" ? undefined : proxyBody(p, Buffer.concat(chunks));
+      const received = Buffer.concat(chunks);
+      const refusal = req.method === "POST" ? proxyRefusal(p, received) : null;
+      if (refusal) return res.status(403).json({ error: { message: refusal, type: "model_not_offered" } });
+      const body = req.method === "GET" || req.method === "HEAD" ? undefined : proxyBody(p, received);
       const upstream = await fetch(url, {
         method: req.method,
         headers: await proxyHeaders(p, req.headers, { method: req.method, url, body }),

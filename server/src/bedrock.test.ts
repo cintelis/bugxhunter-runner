@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cached, readReasoningEffort, readSettings, signRequest, withReasoningEffort, type AwsCredentials } from "./bedrock.js";
+import { bodyModel, cached, isOpenAiGpt, prepareBody, prepareRequest, readReasoningEffort, readSettings, signRequest, withoutRefusedTools, type AwsCredentials } from "./bedrock.js";
 
 const KEYS = { AWS_ACCESS_KEY_ID: "AKIDEXAMPLE", AWS_SECRET_ACCESS_KEY: "not-a-real-secret" };
 
@@ -102,18 +102,68 @@ describe("the default reasoning effort", () => {
   });
 
   it("is added to an agent's call that names none", () => {
-    const sent = parsed(withReasoningEffort(body({ model: "global.zai.glm-5.3", messages: [], stream: true }), "medium"));
+    const sent = parsed(prepareBody(body({ model: "global.zai.glm-5.3", messages: [], stream: true }), "medium"));
     expect(sent).toEqual({ model: "global.zai.glm-5.3", messages: [], stream: true, reasoning_effort: "medium" });
   });
 
   it("leaves a call alone when it sets its own effort, when there is no default, or when it is not a JSON object", () => {
     const own = body({ model: "m", reasoning_effort: "max" });
-    expect(withReasoningEffort(own, "low")).toBe(own);
+    expect(prepareBody(own, "low")).toBe(own);
     const plain = body({ model: "m" });
-    expect(withReasoningEffort(plain, undefined)).toBe(plain);
+    expect(prepareBody(plain, undefined)).toBe(plain);
     for (const odd of [Buffer.from("not json"), Buffer.from("[1,2]"), Buffer.from("null"), Buffer.alloc(0)]) {
-      expect(withReasoningEffort(odd, "low")).toBe(odd);
+      expect(prepareBody(odd, "low")).toBe(odd);
     }
+  });
+});
+
+describe("requests for OpenAI's GPT models on Bedrock", () => {
+  const astra = "global.openai.gpt-6.2-astra";
+
+  it("tells the hosted GPT models from the rest", () => {
+    for (const id of [astra, "global.openai.gpt-6-astra", "openai.gpt-6.2-sol", "us.openai.gpt-5.5"]) expect(isOpenAiGpt(id), id).toBe(true);
+    for (const id of ["global.zai.glm-5.3", "openai.gpt-oss-120b-1:0", "anthropic.claude-opus-5-5", "myopenai.gpt-x"]) expect(isOpenAiGpt(id), id).toBe(false);
+  });
+
+  it("sends the output limit as max_completion_tokens, and drops what the model refuses", () => {
+    const sent = prepareRequest({
+      model: astra, messages: [], stream: true, max_tokens: 4096, temperature: 0.7, top_p: 1, stop: ["x"],
+      frequency_penalty: 0, presence_penalty: 0, reasoning_effort: "medium", tools: [], response_format: { type: "json_object" },
+    }, undefined);
+    expect(sent).toEqual({
+      model: astra, messages: [], stream: true, max_completion_tokens: 4096,
+      reasoning_effort: "medium", tools: [], response_format: { type: "json_object" },
+    });
+  });
+
+  it("keeps a max_completion_tokens the caller set itself", () => {
+    expect(prepareRequest({ model: astra, max_tokens: 100, max_completion_tokens: 900 }, undefined)).toEqual({ model: astra, max_completion_tokens: 900 });
+  });
+
+  it("leaves other models' requests as they are, the same object", () => {
+    const glm = { model: "global.zai.glm-5.3", max_tokens: 4096, temperature: 0.2, stop: ["x"] };
+    expect(prepareRequest(glm, undefined)).toBe(glm);
+    const fine = { model: astra, max_completion_tokens: 10 };
+    expect(prepareRequest(fine, undefined)).toBe(fine);
+  });
+
+  it("applies the default effort and the GPT rules together, to an agent's raw body too", () => {
+    const body = Buffer.from(JSON.stringify({ model: astra, max_tokens: 8000, temperature: 0 }));
+    expect(JSON.parse(prepareBody(body, "low").toString("utf8"))).toEqual({ model: astra, max_completion_tokens: 8000, reasoning_effort: "low" });
+  });
+
+  it("drops tools from a Playground request to a GPT model, and from no other", () => {
+    const tools = [{ type: "function", function: { name: "f" } }];
+    expect(withoutRefusedTools({ model: astra, messages: [], tools, tool_choice: "auto" })).toEqual({ model: astra, messages: [] });
+    const glm = { model: "global.zai.glm-5.3", tools };
+    expect(withoutRefusedTools(glm)).toBe(glm);
+    const none = { model: astra, messages: [] };
+    expect(withoutRefusedTools(none)).toBe(none);
+  });
+
+  it("reads the model a proxied body names", () => {
+    expect(bodyModel(Buffer.from(JSON.stringify({ model: astra })))).toBe(astra);
+    for (const odd of [Buffer.from("not json"), Buffer.from("[]"), Buffer.alloc(0), Buffer.from("{}")]) expect(bodyModel(odd)).toBeUndefined();
   });
 });
 

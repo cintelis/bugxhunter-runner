@@ -262,6 +262,17 @@ Things to know:
   effort** setting picks `low`, `medium`, `high`, `xhigh` or `max` per chat.
   `BEDROCK_REASONING_EFFORT` sets the runner's default for every Bedrock call that names none,
   the agent's included.
+- **OpenAI's GPT models.** `global.openai.gpt-6.2-astra` and `global.openai.gpt-6-astra` are known
+  to the runner: add one to `BEDROCK_MODELS` to use it. They read images, so the threat-model
+  canvas can build from a screenshot. They take the output limit as `max_completion_tokens` and
+  refuse `stop` and any temperature or top-p but the default, so the runner renames the one and
+  drops the others. **They are for the Playground only**: Bedrock's Chat Completions route
+  refuses function tools for them (its Responses route takes them, which the runner does not
+  speak), so they are left out of the agent's model picker and the Playground sends them no tools.
+  They are not open-weight, and cost far more per token than GLM 5.3.
+- **Only the models you list.** The agent can call a Bedrock model only if it is in
+  `BEDROCK_MODELS`; the proxy answers 403 for any other. The runner's AWS identity can usually
+  invoke more than that, and the agent runs untrusted input.
 - **GLM 5.3 has no single-region form.** It is called through a cross-region inference profile:
   `global.zai.glm-5.3` from most regions (inference may then run in any commercial AWS region), or
   `us.zai.glm-5.3` from US regions only. Prompts, code and tool output go where the profile sends

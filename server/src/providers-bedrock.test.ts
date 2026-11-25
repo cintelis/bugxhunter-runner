@@ -67,6 +67,28 @@ describe("Amazon Bedrock on AWS credentials", () => {
     expect(JSON.stringify(h)).not.toContain(providers.PROXY_TOKEN);
   });
 
+  it("forwards an agent's call only for a model in BEDROCK_MODELS", () => {
+    const call = (model?: unknown) => Buffer.from(JSON.stringify({ ...(model === undefined ? {} : { model }), messages: [] }));
+    expect(providers.proxyRefusal(bedrock, call("global.zai.glm-5.3"))).toBeNull();
+    expect(providers.proxyRefusal(bedrock, call(ARN))).toBeNull();
+    // The runner's AWS identity can invoke these; the runner does not offer them.
+    expect(providers.proxyRefusal(bedrock, call("global.openai.gpt-6.2-astra"))).toMatch(/"global\.openai\.gpt-6\.2-astra" is not offered/);
+    expect(providers.proxyRefusal(bedrock, call("us.zai.glm-5.3"))).toMatch(/not offered/);
+    expect(providers.proxyRefusal(bedrock, call())).toMatch(/\(none named\) is not offered/);
+    expect(providers.proxyRefusal(bedrock, call(["global.zai.glm-5.3"]))).toMatch(/not offered/);
+    expect(providers.proxyRefusal(bedrock, Buffer.from("not json"))).toMatch(/not offered/);
+    // Other providers keep their own rules.
+    expect(providers.proxyRefusal(providers.PROVIDERS.scx, call("anything"))).toBeNull();
+  });
+
+  it("describes a GPT model as reading images, with no sampling settings", () => {
+    expect(providers.bedrockModel("global.openai.gpt-6.2-astra")).toMatchObject({
+      id: "bedrock/global.openai.gpt-6.2-astra", name: "GPT-6.2 Astra (Bedrock)", input_modalities: ["text", "image"],
+      context_length: 1_050_000, max_output_length: 128_000, supported_sampling_parameters: ["max_tokens"],
+      supported_features: ["reasoning", "json_mode"], // no tools: Bedrock's chat route refuses them
+    });
+  });
+
   it("lists its models without asking SCX, when SCX has no key", async () => {
     const asked: string[] = [];
     const realFetch = globalThis.fetch;

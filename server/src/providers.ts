@@ -221,7 +221,7 @@ export const clients: Record<Exclude<ProviderId, "anthropic">, SCXClient> = {
   // Bedrock sends a stream's token usage only when asked, and its reasoning models spend much of a budget unseen.
   bedrock: new SCXClient({
     auth: (request) => authHeaders("bedrock", request), baseUrl: PROVIDERS.bedrock.baseUrl, streamUsage: true,
-    defaults: bedrock.REASONING_EFFORT ? { reasoning_effort: bedrock.REASONING_EFFORT } : {},
+    prepare: (params) => bedrock.prepareRequest(bedrock.withoutRefusedTools(params)),
   }),
 };
 
@@ -413,12 +413,13 @@ export function bedrockModel(id: string): SCXModel {
     id: `${BEDROCK_PREFIX}${id}`,
     name: meta?.name ?? id,
     created: 0,
-    input_modalities: ["text"],
+    input_modalities: meta?.image ? ["text", "image"] : ["text"],
     output_modalities: ["text"],
     context_length: meta?.context ?? null,
     max_output_length: meta?.output ?? null,
     pricing: {},
-    supported_sampling_parameters: ["temperature", "top_p", "max_tokens", "stop"],
+    // The hosted GPT models take sampling settings only at their defaults (bedrock.ts drops them).
+    supported_sampling_parameters: bedrock.isOpenAiGpt(id) ? ["max_tokens"] : ["temperature", "top_p", "max_tokens", "stop"],
     supported_features: meta?.features ?? ["tools"],
     description: meta?.description ?? "Amazon Bedrock model named in BEDROCK_MODELS (metadata not curated).",
     provider: "bedrock",
@@ -527,13 +528,15 @@ export async function nvidiaOpencodeProvider(proxyBaseUrl: string): Promise<Reco
  * no AWS credential and no Bedrock key: the runner signs the upstream call.
  */
 export function bedrockOpencodeProvider(proxyBaseUrl: string): Record<string, unknown> | null {
-  if (!BEDROCK_MODELS.length || !configured("bedrock")) return null;
+  const ids = bedrock.agentModels(); // without the models that cannot call tools on this route
+  if (!ids.length || !configured("bedrock")) return null;
   const models: Record<string, unknown> = {};
-  for (const id of BEDROCK_MODELS) {
+  for (const id of ids) {
     const meta = BEDROCK_CATALOGUE[id];
     models[id] = {
       name: meta?.name ?? id,
       limit: { context: meta?.context ?? BEDROCK_DEFAULT_LIMIT.context, output: meta?.output ?? BEDROCK_DEFAULT_LIMIT.output },
+      ...(meta?.image ? { attachment: true, modalities: { input: ["text", "image"], output: ["text"] } } : {}),
     };
   }
   return {
@@ -627,7 +630,19 @@ export function upstreamHeaders(p: ProviderDef, h: Headers, key?: string): Recor
 
 /** The body the proxy sends upstream: the agent's own, with a provider-wide default added where one is set. */
 export function proxyBody(p: ProviderDef, body: Buffer<ArrayBuffer>): Buffer<ArrayBuffer> {
-  return p.id === "bedrock" ? bedrock.withReasoningEffort(body) : body;
+  return p.id === "bedrock" ? bedrock.prepareBody(body) : body;
+}
+
+/**
+ * Why the proxy will not forward this call, or null when it will. Bedrock is reached with the
+ * runner's AWS identity, which can usually invoke far more than the runner means to offer, so
+ * the agent may name only the models in BEDROCK_MODELS.
+ */
+export function proxyRefusal(p: ProviderDef, body: Buffer<ArrayBuffer>): string | null {
+  if (p.id !== "bedrock") return null;
+  const model = bedrock.bodyModel(body);
+  if (bedrock.allowsModel(model)) return null;
+  return `Model ${typeof model === "string" ? `"${model.slice(0, 120)}"` : "(none named)"} is not offered by this runner. Its Bedrock models are listed in BEDROCK_MODELS.`;
 }
 
 /** Everything the proxy sends upstream for one agent call, authenticated: the key injected, or the call signed. */

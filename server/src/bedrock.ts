@@ -208,9 +208,19 @@ export async function sign(request: OutboundRequest): Promise<Record<string, str
 
 // --- Models -------------------------------------------------------------------
 
-export interface BedrockMeta { name: string; context: number; output: number; features: string[]; description?: string; }
+export interface BedrockMeta {
+  name: string; context: number; output: number; features: string[]; image?: boolean; description?: string;
+  /** Not for the agent: the model cannot call tools on this route, and the agent cannot work without them. */
+  chatOnly?: boolean;
+}
 
 const GLM_53 = { context: 1_000_000, output: 128_000, features: ["tools", "reasoning"] };
+/**
+ * OpenAI's GPT models on Bedrock. Limits as OpenAI publishes them for the same models; they read
+ * images. Bedrock's Chat Completions route refuses function tools for them (its Responses route
+ * takes them, which the runner does not speak), so they are for the Playground, not the agent.
+ */
+const GPT_ASTRA = { context: 1_050_000, output: 128_000, features: ["reasoning", "json_mode"], image: true, chatOnly: true };
 
 /**
  * Bedrock's OpenAI-compatible route has no model list, so the ids are named in
@@ -221,7 +231,59 @@ const GLM_53 = { context: 1_000_000, output: 128_000, features: ["tools", "reaso
 export const BEDROCK_CATALOGUE: Record<string, BedrockMeta> = {
   "global.zai.glm-5.3": { ...GLM_53, name: "GLM 5.3 (Bedrock)", description: "Z.ai GLM 5.3 on Amazon Bedrock, through the global cross-region profile: inference may run in any commercial AWS region." },
   "us.zai.glm-5.3": { ...GLM_53, name: "GLM 5.3 (Bedrock, US)", description: "Z.ai GLM 5.3 on Amazon Bedrock, kept to US regions. Callable from US regions only." },
+  "global.openai.gpt-6.2-astra": { ...GPT_ASTRA, name: "GPT-6.2 Astra (Bedrock)", description: "OpenAI GPT-6.2 Astra on Amazon Bedrock, through the global cross-region profile. Reads images. Not open-weight; sampling settings are fixed." },
+  "global.openai.gpt-6-astra": { ...GPT_ASTRA, name: "GPT-6 Astra (Bedrock)", description: "OpenAI GPT-6 Astra on Amazon Bedrock, through the global cross-region profile. Reads images. Not open-weight; sampling settings are fixed." },
 };
+
+/**
+ * OpenAI's hosted GPT models on Bedrock (not the open-weight gpt-oss ones), by id or by an
+ * inference profile of one. They take the output limit as `max_completion_tokens`, and refuse
+ * `stop` and any `temperature` or `top_p` but the default.
+ */
+export const isOpenAiGpt = (model: string) => /(^|\.)openai\.gpt-(?!oss)/.test(model);
+
+/** Chat parameters the hosted GPT models refuse outright or accept only at their default. */
+const GPT_REFUSED = ["temperature", "top_p", "stop", "frequency_penalty", "presence_penalty"] as const;
+
+/**
+ * A chat-completions request as the Bedrock model named in it accepts it. Returns the same
+ * object when there is nothing to change, so a caller can tell.
+ */
+export function prepareRequest<T extends Record<string, unknown>>(params: T, effort: ReasoningEffort | undefined = REASONING_EFFORT): T {
+  let out: Record<string, unknown> = params;
+  const change = (next: Record<string, unknown>) => { out = next; };
+  if (effort && out.reasoning_effort === undefined) change({ ...out, reasoning_effort: effort });
+  if (typeof out.model === "string" && isOpenAiGpt(out.model)) {
+    if (GPT_REFUSED.some((k) => out[k] !== undefined)) {
+      const kept = { ...out };
+      for (const k of GPT_REFUSED) delete kept[k];
+      change(kept);
+    }
+    if (out.max_tokens !== undefined) {
+      const { max_tokens, ...rest } = out;
+      change({ ...rest, ...(rest.max_completion_tokens === undefined ? { max_completion_tokens: max_tokens } : {}) });
+    }
+  }
+  return out as T;
+}
+
+/**
+ * A Playground request without the tools a hosted GPT model would refuse the whole call over.
+ * The Playground sends whatever tools the chat has configured; the sidebar already shows such a
+ * model as having no tool support. The agent's calls are not touched: there the refusal must show.
+ */
+export function withoutRefusedTools<T extends Record<string, unknown>>(params: T): T {
+  if (typeof params.model !== "string" || !isOpenAiGpt(params.model)) return params;
+  if (params.tools === undefined && params.tool_choice === undefined) return params;
+  const { tools: _tools, tool_choice: _choice, ...rest } = params;
+  return rest as T;
+}
+
+/** The models the agent may be offered: those in BEDROCK_MODELS that can call tools on this route. */
+export const agentModels = () => BEDROCK_MODELS.filter((id) => !(BEDROCK_CATALOGUE[id]?.chatOnly ?? isOpenAiGpt(id)));
+
+/** Whether the proxy may forward a call for this model: only the ids in BEDROCK_MODELS. */
+export const allowsModel = (model: unknown): boolean => typeof model === "string" && BEDROCK_MODELS.includes(model);
 
 /** Model or inference-profile ids the Playground and agent may use (BEDROCK_MODELS, comma list). */
 export const BEDROCK_MODELS = (process.env.BEDROCK_MODELS?.trim() || "global.zai.glm-5.3")
@@ -253,18 +315,28 @@ export function readReasoningEffort(value: string | undefined): ReasoningEffort 
  */
 export const REASONING_EFFORT = readReasoningEffort(process.env.BEDROCK_REASONING_EFFORT);
 
-/**
- * A chat-completions body with the default effort added, unless it sets one already. The agent's
- * calls arrive as raw bytes through the proxy; anything that is not a JSON object is left alone.
- */
-export function withReasoningEffort(body: Buffer<ArrayBuffer>, effort: ReasoningEffort | undefined = REASONING_EFFORT): Buffer<ArrayBuffer> {
-  if (!effort || !body.length) return body;
+/** A chat-completions body as a JSON object, or undefined when it is not one. */
+function bodyObject(body: Buffer<ArrayBuffer>): Record<string, unknown> | undefined {
+  if (!body.length) return undefined;
   try {
     const parsed: unknown = JSON.parse(body.toString("utf8"));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return body;
-    if ((parsed as Record<string, unknown>).reasoning_effort !== undefined) return body;
-    return Buffer.from(JSON.stringify({ ...parsed, reasoning_effort: effort }));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : undefined;
   } catch {
-    return body;
+    return undefined;
   }
 }
+
+/**
+ * An agent's chat-completions body, as it arrives through the proxy, prepared for the model
+ * it names (see prepareRequest). Anything that is not a JSON object, or needs no change, is
+ * passed on byte for byte.
+ */
+export function prepareBody(body: Buffer<ArrayBuffer>, effort: ReasoningEffort | undefined = REASONING_EFFORT): Buffer<ArrayBuffer> {
+  const parsed = bodyObject(body);
+  if (!parsed) return body;
+  const prepared = prepareRequest(parsed, effort);
+  return prepared === parsed ? body : Buffer.from(JSON.stringify(prepared));
+}
+
+/** The model a proxied body names, if it is a JSON object that names one. */
+export const bodyModel = (body: Buffer<ArrayBuffer>): unknown => bodyObject(body)?.model;

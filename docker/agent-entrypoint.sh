@@ -34,7 +34,10 @@ if [ -n "${OPENROUTER_MODELS:-}${BEDROCK_MODELS:-}${RECON_EXECUTOR_MODEL:-}${REC
         models,
       } };
     }
-    const bedrock = (env.BEDROCK_MODELS || "").split(",").map((s) => s.trim()).filter(Boolean);
+    // OpenAI's hosted GPT models are left out: Bedrock's chat route refuses tools for them,
+    // and the agent cannot work without tools. They stay available in the Playground.
+    const bedrock = (env.BEDROCK_MODELS || "").split(",").map((s) => s.trim()).filter(Boolean)
+      .filter((id) => !/(^|\.)openai\.gpt-(?!oss)/.test(id));
     if (bedrock.length) {
       // GLM 5.3 is 1M in, 128K out; anything else gets the conservative default.
       const glm = /^(global|us)\.zai\.glm-5\.3$/;
