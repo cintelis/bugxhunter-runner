@@ -426,14 +426,21 @@ const bedrockModels = (): SCXModel[] => (configured("bedrock") ? BEDROCK_MODELS.
 
 /** Every model the Playground can use: SCX's, plus Anthropic's, NVIDIA's, Bedrock's and OpenRouter's when they are configured. */
 export async function listModels(): Promise<SCXModel[]> {
+  // SCX is asked only when it has a key, like every other provider: a runner may use only
+  // Bedrock or Claude, and then SCX is neither called nor reported as failing.
+  const scxKeyed = configured("scx");
   const [scxResult, anthropic, nvidiaOnly] = await Promise.all([
-    clients.scx.listModels().then((list) => ({ list }), (error: unknown) => ({ error })),
+    scxKeyed
+      ? clients.scx.listModels().then((list) => ({ list }), (error: unknown) => ({ error }))
+      : Promise.resolve({ list: [] as SCXModel[] }),
     anthropicModels(),
     nvidiaModels(),
   ]);
   const nvidia = [...nvidiaOnly, ...bedrockModels()]; // Bedrock sits with NVIDIA in the list: after Claude, before OpenRouter
-  // Without a working SCX key, still offer the other providers' models (a runner may use only
-  // Claude, say); the SCX error stands only when there is nothing else to show.
+  // With no provider set up at all, say how to set up the default one.
+  if (!scxKeyed && !anthropic.length && !nvidia.length && !configured("openrouter")) apiKey("scx");
+  // With an SCX key that does not work, still offer the other providers' models; the SCX
+  // error stands only when there is nothing else to show.
   if ("error" in scxResult) {
     if (!anthropic.length && !nvidia.length && !configured("openrouter")) throw scxResult.error;
     console.error("[scx] model list failed:", oneLineMessage(scxResult.error));

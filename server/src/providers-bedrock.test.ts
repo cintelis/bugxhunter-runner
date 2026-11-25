@@ -67,6 +67,23 @@ describe("Amazon Bedrock on AWS credentials", () => {
     expect(JSON.stringify(h)).not.toContain(providers.PROXY_TOKEN);
   });
 
+  it("lists its models without asking SCX, when SCX has no key", async () => {
+    const asked: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      asked.push(String(input));
+      return new Response(JSON.stringify({ data: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      const models = await providers.listModels();
+      expect(models.map((m) => m.id)).toContain("bedrock/global.zai.glm-5.3");
+      // A provider is asked exactly when it has a key (a developer's machine may hold an SCX one).
+      expect(asked.some((url) => url.startsWith(providers.PROVIDERS.scx.baseUrl))).toBe(providers.configured("scx"));
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   it("still injects a bearer key for the other providers", async () => {
     await expect(providers.authHeaders("openrouter", { method: "POST", url: "https://openrouter.ai/api/v1/chat/completions", headers: {} })).rejects.toThrow(/No OpenRouter key/);
   });
