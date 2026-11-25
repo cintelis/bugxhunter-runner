@@ -256,6 +256,12 @@ Things to know:
   credentials it holds in memory. The first call after an unlock loads them afresh from the
   profile or role. This is a gate in the runner, not encryption: a mounted `~/.aws` stays readable
   to the runner's container, so give it a profile that can do no more than invoke the model.
+- **Reasoning effort.** GLM 5.3 on Bedrock reasons at `max` effort unless told otherwise, and
+  reasoning counts against the output limit: at a 4,096-token limit a request can spend all of it
+  thinking and write nothing (the chat says so when that happens). The Playground's **Reasoning
+  effort** setting picks `low`, `medium`, `high`, `xhigh` or `max` per chat.
+  `BEDROCK_REASONING_EFFORT` sets the runner's default for every Bedrock call that names none,
+  the agent's included.
 - **GLM 5.3 has no single-region form.** It is called through a cross-region inference profile:
   `global.zai.glm-5.3` from most regions (inference may then run in any commercial AWS region), or
   `us.zai.glm-5.3` from US regions only. Prompts, code and tool output go where the profile sends
@@ -442,6 +448,7 @@ nobody is there to unlock.
 | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1` | Anthropic endpoint |
 | `BEDROCK_REGION` | `AWS_REGION`, else `us-east-1` | AWS region whose Bedrock endpoint is called |
 | `BEDROCK_MODELS` | `global.zai.glm-5.3` | Comma list of Bedrock model or inference-profile ids (Docker: set it to show them in the agent's picker) |
+| `BEDROCK_REASONING_EFFORT` | unset (the model's default, `max` for GLM 5.3) | `low`, `medium`, `high`, `xhigh` or `max`: the effort for Bedrock calls that name none, from the Playground and the agent |
 | `BEDROCK_AWS_PROFILE` | `AWS_PROFILE`, else unset | AWS profile (SSO, assumed role) the runner signs Bedrock calls with |
 | `AWS_ROLE_ARN`, `AWS_WEB_IDENTITY_TOKEN_FILE` | unset | An OIDC role and the file holding the identity token; `AWS_ROLE_SESSION_NAME` names the session |
 | `BEDROCK_AUTH` | unset | `aws` uses the compute's own role or the default profile (automatic on ECS) |

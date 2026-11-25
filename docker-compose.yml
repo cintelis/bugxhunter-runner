@@ -53,6 +53,7 @@ services:
       # BEDROCK_MODELS lists the ids the agent may use (set it to show them in the Runner).
       BEDROCK_REGION: ${BEDROCK_REGION:-}
       BEDROCK_MODELS: ${BEDROCK_MODELS:-}
+      BEDROCK_REASONING_EFFORT: ${BEDROCK_REASONING_EFFORT:-}   # low|medium|high|xhigh|max; unset = the model's default
       BEDROCK_AWS_PROFILE: ${BEDROCK_AWS_PROFILE:-}
       BEDROCK_AUTH: ${BEDROCK_AUTH:-}
       AWS_ROLE_ARN: ${AWS_ROLE_ARN:-}

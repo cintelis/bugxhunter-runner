@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchModels, runChat } from "./api";
 import { agentStatus, agentCheckDirectory, type AgentStatus } from "./agentApi";
 import type { BotConfig, ChatDoc, ChatImage, ChatMsg, SCXModel, ToolCall } from "./types";
+import { reasoningEffortFor } from "./types";
 import { stripToolIds, withToolIds } from "./tools";
 import { Sidebar, type Mode } from "./Sidebar";
 import { Chat } from "./Chat";
@@ -285,6 +286,7 @@ export default function App() {
         temperature: config.temperature,
         top_p: config.topP,
         max_tokens: config.maxTokens,
+        reasoning_effort: reasoningEffortFor(config.reasoningEffort, models.find((m) => m.id === config.model)),
         tools: enabledTools,
         response_format: config.jsonMode ? { type: "json_object" } : undefined,
         rag: config.useKnowledge,

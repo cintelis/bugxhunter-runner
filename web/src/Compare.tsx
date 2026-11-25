@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { runChat } from "./api";
 import type { BotConfig, ChatMsg, SCXModel } from "./types";
+import { reasoningEffortFor } from "./types";
 import { Markdown } from "./Markdown";
 import { TerminalBar } from "./Terminal";
 import { PaperclipIcon } from "./icons";
@@ -92,6 +93,7 @@ export function Compare({ config, models, onExit }: Props) {
           temperature: config.temperature,
           top_p: config.topP,
           max_tokens: config.maxTokens,
+          reasoning_effort: reasoningEffortFor(config.reasoningEffort, models.find((m) => m.id === c.model)),
           response_format: config.jsonMode ? { type: "json_object" } : undefined,
           stream: config.stream,
         },

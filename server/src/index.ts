@@ -13,9 +13,9 @@ import path from "node:path";
 import { SCXError, type ChatParams } from "./scx.js";
 import {
   PROVIDERS, PROXY_TOKEN, PORT, OPENROUTER_MODELS, clients, clientFor, configured, isRetiredStatus, keySource, listModels,
-  proxyHeaders, proxyPaths, proxyTokenOk,
+  proxyBody, proxyHeaders, proxyPaths, proxyTokenOk,
 } from "./providers.js";
-import { settings as bedrockSettings } from "./bedrock.js";
+import { REASONING_EFFORT as bedrockEffort, settings as bedrockSettings } from "./bedrock.js";
 import { KnowledgeBase, buildContextBlock } from "./rag.js";
 import {
   getClient, serverUrl, resolveDirectory, projectFile, listAgentModels, toUiEvent, toUiMessages, parseModelId, oc, query, httpError,
@@ -75,7 +75,7 @@ for (const p of Object.values(PROVIDERS)) {
       const ctrl = new AbortController();
       res.on("close", () => ctrl.abort());
       const url = p.baseUrl + sub + (req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "");
-      const body = req.method === "GET" || req.method === "HEAD" ? undefined : Buffer.concat(chunks);
+      const body = req.method === "GET" || req.method === "HEAD" ? undefined : proxyBody(p, Buffer.concat(chunks));
       const upstream = await fetch(url, {
         method: req.method,
         headers: await proxyHeaders(p, req.headers, { method: req.method, url, body }),
@@ -981,6 +981,7 @@ const server = app.listen(PORT, process.env.HOST ?? "127.0.0.1", () => {
     console.log(`  ${p.name} ${src === "aws" ? "sign-in" : "key"}: ${where}`);
   }
   if (vault.isInitialised()) console.log(`  vault: ${vault.VAULT_FILE} (${vault.isUnsealed() ? "unsealed" : "sealed — unlock it in the UI"})`);
+  if (bedrockEffort && keySource("bedrock") !== "none") console.log(`  Amazon Bedrock reasoning effort: ${bedrockEffort} (unless a call sets its own)`);
   if (OPENROUTER_MODELS.length) console.log(`  OpenRouter models for the agent: ${OPENROUTER_MODELS.join(", ")}`);
   console.log(`  agent: ${REMOTE_URL ? `remote OpenCode at ${REMOTE_URL}` : "local OpenCode"}`);
   if (!REMOTE_URL) console.log(`  project roots: ${ALLOWED_ROOTS.length ? ALLOWED_ROOTS.join(", ") : "any folder (set OPEN_RUNNER_ALLOWED_ROOTS to restrict)"}`);

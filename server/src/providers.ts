@@ -219,7 +219,10 @@ export const clients: Record<Exclude<ProviderId, "anthropic">, SCXClient> = {
   openrouter: new SCXClient({ apiKey: () => apiKey("openrouter"), baseUrl: PROVIDERS.openrouter.baseUrl, headers: PROVIDERS.openrouter.headers }),
   nvidia: new SCXClient({ apiKey: () => apiKey("nvidia"), baseUrl: PROVIDERS.nvidia.baseUrl }),
   // Bedrock sends a stream's token usage only when asked, and its reasoning models spend much of a budget unseen.
-  bedrock: new SCXClient({ auth: (request) => authHeaders("bedrock", request), baseUrl: PROVIDERS.bedrock.baseUrl, streamUsage: true }),
+  bedrock: new SCXClient({
+    auth: (request) => authHeaders("bedrock", request), baseUrl: PROVIDERS.bedrock.baseUrl, streamUsage: true,
+    defaults: bedrock.REASONING_EFFORT ? { reasoning_effort: bedrock.REASONING_EFFORT } : {},
+  }),
 };
 
 /** Output limits of the Claude models seen in the last model list, to cap max_tokens. */
@@ -620,6 +623,11 @@ export function upstreamHeaders(p: ProviderDef, h: Headers, key?: string): Recor
     ...(beta ? { "anthropic-beta": beta } : {}),
     ...common,
   };
+}
+
+/** The body the proxy sends upstream: the agent's own, with a provider-wide default added where one is set. */
+export function proxyBody(p: ProviderDef, body: Buffer<ArrayBuffer>): Buffer<ArrayBuffer> {
+  return p.id === "bedrock" ? bedrock.withReasoningEffort(body) : body;
 }
 
 /** Everything the proxy sends upstream for one agent call, authenticated: the key injected, or the call signed. */

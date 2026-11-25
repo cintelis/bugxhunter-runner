@@ -87,6 +87,8 @@ export interface SCXClientOptions {
   headers?: Record<string, string>;
   /** Ask for token usage at the end of a stream (`stream_options.include_usage`), for a provider that sends none unasked. */
   streamUsage?: boolean;
+  /** Chat parameters sent when a request does not set them itself (e.g. a provider-wide `reasoning_effort`). */
+  defaults?: Record<string, unknown>;
 }
 
 export class SCXClient {
@@ -94,6 +96,7 @@ export class SCXClient {
   private readonly key: () => string;
   private readonly auth: SCXClientOptions["auth"];
   private readonly streamUsage: boolean;
+  private readonly defaults: Record<string, unknown>;
   private readonly timeoutMs: number;
   private readonly extraHeaders: Record<string, string>;
 
@@ -102,6 +105,7 @@ export class SCXClient {
     this.key = typeof opts.apiKey === "function" ? opts.apiKey : () => opts.apiKey as string;
     this.auth = opts.auth;
     this.streamUsage = opts.streamUsage ?? false;
+    this.defaults = opts.defaults ?? {};
     this.baseUrl = (opts.baseUrl ?? SCX_DEFAULT_BASE_URL).replace(/\/$/, "");
     this.timeoutMs = opts.timeoutMs ?? 120_000;
     this.extraHeaders = opts.headers ?? {};
@@ -179,7 +183,7 @@ export class SCXClient {
     // can take minutes over, so allow longer than the "started answering" limit for streams.
     const res = await this.request("/chat/completions", {
       method: "POST",
-      json: { ...params, stream: false },
+      json: { ...this.defaults, ...params, stream: false },
       timeoutMs: opts.timeoutMs ?? Math.max(this.timeoutMs, NON_STREAM_TIMEOUT_MS),
     });
     return this.json<ChatCompletion>(res);
@@ -194,7 +198,7 @@ export class SCXClient {
     const res = await this.request("/chat/completions", {
       method: "POST",
       json: {
-        ...params, stream: true,
+        ...this.defaults, ...params, stream: true,
         ...(this.streamUsage && params.stream_options === undefined ? { stream_options: { include_usage: true } } : {}),
       },
     });

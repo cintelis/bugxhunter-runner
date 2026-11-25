@@ -229,3 +229,42 @@ export const BEDROCK_MODELS = (process.env.BEDROCK_MODELS?.trim() || "global.zai
 
 /** Playground ids for Bedrock models: `bedrock/<model or inference-profile id>`. */
 export const BEDROCK_PREFIX = "bedrock/";
+
+// --- Reasoning effort -----------------------------------------------------------
+
+/** The efforts Bedrock's Chat Completions route takes for GLM 5.3 (`none` and `minimal` are refused). */
+export const REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+
+/** BEDROCK_REASONING_EFFORT as an effort, or undefined when it is not set. Throws on anything else. */
+export function readReasoningEffort(value: string | undefined): ReasoningEffort | undefined {
+  const v = value?.trim().toLowerCase();
+  if (!v) return undefined;
+  if (!(REASONING_EFFORTS as readonly string[]).includes(v)) {
+    throw new Error(`BEDROCK_REASONING_EFFORT: "${value}" is not one of ${REASONING_EFFORTS.join(", ")}.`);
+  }
+  return v as ReasoningEffort;
+}
+
+/**
+ * The effort a Bedrock call gets when it names none (BEDROCK_REASONING_EFFORT). Unset, the
+ * model's own default stands, which for GLM 5.3 is `max`: thorough, but reasoning counts
+ * against the output limit, so a short limit can be spent before any answer is written.
+ */
+export const REASONING_EFFORT = readReasoningEffort(process.env.BEDROCK_REASONING_EFFORT);
+
+/**
+ * A chat-completions body with the default effort added, unless it sets one already. The agent's
+ * calls arrive as raw bytes through the proxy; anything that is not a JSON object is left alone.
+ */
+export function withReasoningEffort(body: Buffer<ArrayBuffer>, effort: ReasoningEffort | undefined = REASONING_EFFORT): Buffer<ArrayBuffer> {
+  if (!effort || !body.length) return body;
+  try {
+    const parsed: unknown = JSON.parse(body.toString("utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return body;
+    if ((parsed as Record<string, unknown>).reasoning_effort !== undefined) return body;
+    return Buffer.from(JSON.stringify({ ...parsed, reasoning_effort: effort }));
+  } catch {
+    return body;
+  }
+}

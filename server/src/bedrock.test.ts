@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cached, readSettings, signRequest, type AwsCredentials } from "./bedrock.js";
+import { cached, readReasoningEffort, readSettings, signRequest, withReasoningEffort, type AwsCredentials } from "./bedrock.js";
 
 const KEYS = { AWS_ACCESS_KEY_ID: "AKIDEXAMPLE", AWS_SECRET_ACCESS_KEY: "not-a-real-secret" };
 
@@ -87,6 +87,33 @@ describe("SigV4 signing for Bedrock", () => {
   it("sends the session token of temporary credentials", async () => {
     const h = await signRequest(request, "ap-southeast-2", { ...creds, sessionToken: "session-token" }, at);
     expect(h["x-amz-security-token"]).toBe("session-token");
+  });
+});
+
+describe("the default reasoning effort", () => {
+  const body = (o: unknown) => Buffer.from(JSON.stringify(o));
+  const parsed = (b: Buffer) => JSON.parse(b.toString("utf8"));
+
+  it("reads BEDROCK_REASONING_EFFORT, and refuses a value Bedrock would refuse", () => {
+    expect(readReasoningEffort(undefined)).toBeUndefined();
+    expect(readReasoningEffort("  ")).toBeUndefined();
+    expect(readReasoningEffort(" Medium ")).toBe("medium");
+    for (const bad of ["none", "minimal", "fast", "5"]) expect(() => readReasoningEffort(bad), bad).toThrow(/not one of low, medium, high, xhigh, max/);
+  });
+
+  it("is added to an agent's call that names none", () => {
+    const sent = parsed(withReasoningEffort(body({ model: "global.zai.glm-5.3", messages: [], stream: true }), "medium"));
+    expect(sent).toEqual({ model: "global.zai.glm-5.3", messages: [], stream: true, reasoning_effort: "medium" });
+  });
+
+  it("leaves a call alone when it sets its own effort, when there is no default, or when it is not a JSON object", () => {
+    const own = body({ model: "m", reasoning_effort: "max" });
+    expect(withReasoningEffort(own, "low")).toBe(own);
+    const plain = body({ model: "m" });
+    expect(withReasoningEffort(plain, undefined)).toBe(plain);
+    for (const odd of [Buffer.from("not json"), Buffer.from("[1,2]"), Buffer.from("null"), Buffer.alloc(0)]) {
+      expect(withReasoningEffort(odd, "low")).toBe(odd);
+    }
   });
 });
 

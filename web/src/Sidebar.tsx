@@ -3,7 +3,10 @@ import { Logo } from "./brand";
 import { kbAdd, kbDelete, kbList } from "./api";
 import { agentCheckDirectory, agentSessions, agentDeleteSession, type AgentStatus, type SessionSummary } from "./agentApi";
 import { speechSupported } from "./voice";
-import type { BotConfig, KBDoc, SCXModel, ToolDef } from "./types";
+import type { BotConfig, KBDoc, ReasoningEffort, SCXModel, ToolDef } from "./types";
+import { REASONING_EFFORTS } from "./types";
+
+const EFFORT_LABEL: Record<ReasoningEffort, string> = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Maximum" };
 import type { RunnerSettings } from "./App";
 import { logout } from "./Login";
 import { newToolId } from "./tools";
@@ -332,6 +335,17 @@ export function Sidebar({
             <span className="range-val">{config.maxTokens}</span>
           </div>
         </div>
+
+        {supportsReasoning && (
+          <div className="field">
+            <label htmlFor="reasoning-effort">Reasoning effort</label>
+            <select id="reasoning-effort" value={config.reasoningEffort ?? ""} onChange={(e) => set("reasoningEffort", e.target.value as BotConfig["reasoningEffort"])}>
+              <option value="">Model default</option>
+              {REASONING_EFFORTS.map((e) => <option key={e} value={e}>{EFFORT_LABEL[e]}</option>)}
+            </select>
+            <span className="hint">Reasoning counts against Max output tokens. Lower effort answers sooner and leaves more of the limit for the answer.</span>
+          </div>
+        )}
 
         <Toggle
           label="Stream responses"

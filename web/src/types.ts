@@ -54,12 +54,26 @@ export interface KBDoc {
 }
 
 /** A saved bot design. */
+export const REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+
+/**
+ * The `reasoning_effort` to send: the chosen one, for a model that reasons; otherwise nothing,
+ * so a model that would refuse the setting never sees it.
+ */
+export function reasoningEffortFor(effort: string | undefined, model: { supported_features?: string[] } | undefined): ReasoningEffort | undefined {
+  if (!effort || !model?.supported_features?.includes("reasoning")) return undefined;
+  return (REASONING_EFFORTS as readonly string[]).includes(effort) ? (effort as ReasoningEffort) : undefined;
+}
+
 export interface BotConfig {
   name: string;
   model: string;
   system: string;
   temperature: number;
   maxTokens: number;
+  /** How hard a reasoning model thinks before it answers; "" leaves the model's (or the runner's) default. */
+  reasoningEffort?: ReasoningEffort | "";
   topP: number;
   jsonMode: boolean;
   stream: boolean;

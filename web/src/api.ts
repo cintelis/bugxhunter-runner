@@ -34,6 +34,8 @@ export interface ChatRequest {
   temperature?: number;
   top_p?: number;
   max_tokens?: number;
+  /** For reasoning models: low | medium | high | xhigh | max. Omitted = the model's default. */
+  reasoning_effort?: string;
   tools?: ToolDef[];
   response_format?: { type: "json_object" | "text" };
   rag?: boolean;
