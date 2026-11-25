@@ -218,7 +218,8 @@ export const clients: Record<Exclude<ProviderId, "anthropic">, SCXClient> = {
   scx: new SCXClient({ apiKey: () => apiKey("scx"), baseUrl: PROVIDERS.scx.baseUrl }),
   openrouter: new SCXClient({ apiKey: () => apiKey("openrouter"), baseUrl: PROVIDERS.openrouter.baseUrl, headers: PROVIDERS.openrouter.headers }),
   nvidia: new SCXClient({ apiKey: () => apiKey("nvidia"), baseUrl: PROVIDERS.nvidia.baseUrl }),
-  bedrock: new SCXClient({ auth: (request) => authHeaders("bedrock", request), baseUrl: PROVIDERS.bedrock.baseUrl }),
+  // Bedrock sends a stream's token usage only when asked, and its reasoning models spend much of a budget unseen.
+  bedrock: new SCXClient({ auth: (request) => authHeaders("bedrock", request), baseUrl: PROVIDERS.bedrock.baseUrl, streamUsage: true }),
 };
 
 /** Output limits of the Claude models seen in the last model list, to cap max_tokens. */

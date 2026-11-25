@@ -40,6 +40,8 @@ export interface ChatMsg {
   usage?: { prompt?: number; completion?: number; reasoning?: number };
   /** UI-only: timings for an assistant turn, in ms (ttft = time to first token). */
   timing?: { ttft?: number; total: number };
+  /** UI-only: why an assistant turn ended ("stop", "length", "tool_calls"...), to say so when it was cut off. */
+  finish?: string | null;
   /** UI-only: RAG sources retrieved for this turn. */
   sources?: RagSource[];
 }

@@ -321,8 +321,15 @@ export default function App() {
             return next;
           }),
         onError: (msg) => setError(msg),
-        onDone: () => {
+        onDone: (finish) => {
           setTiming();
+          if (finish === "length") {
+            setMessages((prev) => {
+              const next = [...prev];
+              if (next[assistantIndex]) next[assistantIndex] = { ...next[assistantIndex], finish };
+              return next;
+            });
+          }
           if (config.speak && spoken.trim()) speak(spoken);
         },
       },

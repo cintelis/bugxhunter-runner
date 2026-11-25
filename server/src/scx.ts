@@ -85,12 +85,15 @@ export interface SCXClientOptions {
   timeoutMs?: number;
   /** Extra headers on every request (e.g. OpenRouter's attribution headers). */
   headers?: Record<string, string>;
+  /** Ask for token usage at the end of a stream (`stream_options.include_usage`), for a provider that sends none unasked. */
+  streamUsage?: boolean;
 }
 
 export class SCXClient {
   readonly baseUrl: string;
   private readonly key: () => string;
   private readonly auth: SCXClientOptions["auth"];
+  private readonly streamUsage: boolean;
   private readonly timeoutMs: number;
   private readonly extraHeaders: Record<string, string>;
 
@@ -98,6 +101,7 @@ export class SCXClient {
     if (!opts.apiKey && !opts.auth) throw new Error("SCXClient: apiKey is required");
     this.key = typeof opts.apiKey === "function" ? opts.apiKey : () => opts.apiKey as string;
     this.auth = opts.auth;
+    this.streamUsage = opts.streamUsage ?? false;
     this.baseUrl = (opts.baseUrl ?? SCX_DEFAULT_BASE_URL).replace(/\/$/, "");
     this.timeoutMs = opts.timeoutMs ?? 120_000;
     this.extraHeaders = opts.headers ?? {};
@@ -189,7 +193,10 @@ export class SCXClient {
   async chatStreamResponse(params: ChatParams): Promise<Response> {
     const res = await this.request("/chat/completions", {
       method: "POST",
-      json: { ...params, stream: true },
+      json: {
+        ...params, stream: true,
+        ...(this.streamUsage && params.stream_options === undefined ? { stream_options: { include_usage: true } } : {}),
+      },
     });
     if (!res.ok) throw await this.toError(res);
     return res;
