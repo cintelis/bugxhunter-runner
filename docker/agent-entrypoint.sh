@@ -34,8 +34,10 @@ if [ -n "${OPENROUTER_MODELS:-}${BEDROCK_MODELS:-}${RECON_EXECUTOR_MODEL:-}${REC
         models,
       } };
     }
-    // OpenAI's hosted GPT models are left out: Bedrock's chat route refuses tools for them,
-    // and the agent cannot work without tools. They stay available in the Playground.
+    // The hosted OpenAI GPT models are left out: the Bedrock chat route refuses tools for
+    // them, and the agent cannot work without tools. They stay available in the Playground.
+    // (No apostrophes in this script: it sits inside a single-quoted shell string, and one
+    // ends it, so node runs only what comes before and prints nothing.)
     const bedrock = (env.BEDROCK_MODELS || "").split(",").map((s) => s.trim()).filter(Boolean)
       .filter((id) => !/(^|\.)openai\.gpt-(?!oss)/.test(id));
     if (bedrock.length) {
