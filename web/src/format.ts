@@ -29,3 +29,15 @@ export function formatTiming(t: { ttft?: number; total: number }, completionToke
   parts.push(`${secs(t.total)} total`);
   return parts.join(" · ");
 }
+
+/**
+ * What to tell the user when a reply stopped at the Max tokens limit. A reasoning model
+ * spends part of that limit thinking before it writes, sometimes all of it, and then the
+ * reply is empty: without this the turn just looks stalled.
+ */
+export function cutOffNotice(content: string | null | undefined, reasoningTokens?: number): string {
+  const spent = reasoningTokens ? ` ${reasoningTokens.toLocaleString("en")} tokens went on reasoning.` : "";
+  return content?.trim()
+    ? `Cut off at the Max tokens limit.${spent} Raise Max tokens in the sidebar to get the rest.`
+    : `The model reached the Max tokens limit before it wrote an answer.${spent || " A reasoning model thinks first, and that counts."} Raise Max tokens in the sidebar and send again.`;
+}

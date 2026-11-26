@@ -4,7 +4,7 @@ import { dictate, speechSupported } from "./voice";
 import { BootSequence, TerminalBar } from "./Terminal";
 import { PaperclipIcon } from "./icons";
 import { DEFAULT_STARTERS, presetFor } from "./presets";
-import { formatTiming } from "./format";
+import { cutOffNotice, formatTiming } from "./format";
 import { FlagText } from "./FlagText";
 import { ATTACH_ACCEPT, AttachChips, useImageAttach } from "./imageAttach";
 import { RichReply } from "./DrawioBlock";
@@ -296,6 +296,7 @@ function MessageRow({ msg, streaming, onToolResult, onFix }: {
             ))}
           </div>
         )}
+        {msg.finish === "length" && <div className="hint" style={{ color: "var(--amber)" }}>{cutOffNotice(msg.content, msg.usage?.reasoning)}</div>}
         {(msg.usage || msg.timing) && (
           <div className="msg-meta">
             {msg.timing && formatTiming(msg.timing, msg.usage?.completion, msg.usage?.reasoning)}

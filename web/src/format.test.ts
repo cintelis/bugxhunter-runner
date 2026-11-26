@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { formatBytes, formatTiming, formatTokens } from "./format";
+import { cutOffNotice, formatBytes, formatTiming, formatTokens } from "./format";
+
+describe("cutOffNotice", () => {
+  it("explains an empty reply: the limit went on reasoning", () => {
+    expect(cutOffNotice("", 4096)).toBe("The model reached the Max tokens limit before it wrote an answer. 4,096 tokens went on reasoning. Raise Max tokens in the sidebar and send again.");
+    expect(cutOffNotice(null)).toContain("A reasoning model thinks first");
+    expect(cutOffNotice("  \n")).toContain("before it wrote an answer");
+  });
+  it("says a partial reply was cut off", () => {
+    expect(cutOffNotice("## Assets\n- token", 2512)).toBe("Cut off at the Max tokens limit. 2,512 tokens went on reasoning. Raise Max tokens in the sidebar to get the rest.");
+    expect(cutOffNotice("partial")).toBe("Cut off at the Max tokens limit. Raise Max tokens in the sidebar to get the rest.");
+  });
+});
 
 describe("formatTiming", () => {
   it("reports first token, throughput over the generation window, and total", () => {

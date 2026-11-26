@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { runChat } from "./api";
 import type { BotConfig, SCXModel } from "./types";
+import { reasoningEffortFor } from "./types";
 import { TerminalBar } from "./Terminal";
 import { PaperclipIcon } from "./icons";
 import { isChatModel } from "./modelFilter";
@@ -309,6 +310,7 @@ export function Canvas({ config, models, onExit }: Props) {
         // A diagram file makes for a big model, and reasoning models think before the JSON, so
         // give them room (within the model's own output limit when the catalogue knows it).
         max_tokens: buildBudget(config.maxTokens, att.docs.length > 0, chat.find((m) => m.id === builderId)?.max_output_length),
+        reasoning_effort: reasoningEffortFor(config.reasoningEffort, chat.find((m) => m.id === builderId)),
         // Streamed so a long think doesn't hit the runner's "started answering" limit; only the
         // answer text (not reasoning) reaches onDelta, so `text` is just the JSON.
         stream: true,

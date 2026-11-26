@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 import { createOpencodeServer, createOpencodeClient } from "@opencode-ai/sdk";
 import type { AgentEvent, AgentModel, MessagePart, StoredMessage } from "../../shared/agent.js";
 import { httpError } from "./errors.js";
-import { anthropicOpencodeProvider, openrouterOpencodeProvider, nvidiaOpencodeProvider, ANTHROPIC_MODELS, OPENROUTER_MODELS, PORT } from "./providers.js";
+import { anthropicOpencodeProvider, bedrockOpencodeProvider, openrouterOpencodeProvider, nvidiaOpencodeProvider, ANTHROPIC_MODELS, OPENROUTER_MODELS, PORT } from "./providers.js";
 import { reconAgents, setAnthropicAvailable, tierOrder, withScrubbedEnv } from "./recon.js";
 
 export type { AgentEvent, AgentModel, StoredMessage };
@@ -57,7 +57,7 @@ export const VISION_AGENT = {
 /**
  * Config layered on the user's own OpenCode setup. With OPENROUTER_MODELS set,
  * it adds an `openrouter` provider that calls back through this server's
- * key-injecting proxy, so the OpenRouter key stays in the vault. NVIDIA and
+ * key-injecting proxy, so the OpenRouter key stays in the vault. NVIDIA, Bedrock and
  * Anthropic work the same way when their keys are configured (Claude through
  * OpenCode's native Anthropic client, the ids in ANTHROPIC_MODELS).
  */
@@ -80,7 +80,8 @@ async function inlineConfig() {
       };
     }
   }
-  const provider = { ...(openrouter ? { openrouter } : {}), ...(nvidia ? { nvidia } : {}), ...(anthropic ? { anthropic } : {}) };
+  const bedrock = bedrockOpencodeProvider(`http://127.0.0.1:${PORT}/bedrock/v1`);
+  const provider = { ...(openrouter ? { openrouter } : {}), ...(nvidia ? { nvidia } : {}), ...(anthropic ? { anthropic } : {}), ...(bedrock ? { bedrock } : {}) };
   return {
     model: DEFAULT_MODEL,
     agent: {

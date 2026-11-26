@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSSE, SCXError } from "./scx.js";
+import { parseSSE, SCXClient, SCXError } from "./scx.js";
 
 const sse = (...chunks: string[]) =>
   new Response(new ReadableStream<Uint8Array>({
@@ -24,6 +24,25 @@ describe("parseSSE", () => {
 });
 
 describe("SCXError", () => {
+  it("asks for a stream's token usage only when the provider needs asking", async () => {
+    const sent: Record<string, unknown>[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      sent.push(JSON.parse(String(init?.body)));
+      return new Response("data: [DONE]\n\n", { status: 200 });
+    }) as typeof fetch;
+    try {
+      const params = { model: "m", messages: [] };
+      await new SCXClient({ apiKey: "k", baseUrl: "https://example.test/v1" }).chatStreamResponse(params);
+      const asking = new SCXClient({ apiKey: "k", baseUrl: "https://example.test/v1", streamUsage: true });
+      await asking.chatStreamResponse(params);
+      await asking.chatStreamResponse({ ...params, stream_options: { include_usage: false } });
+      expect(sent.map((b) => b.stream_options)).toEqual([undefined, { include_usage: true }, { include_usage: false }]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   it("carries the status and provider type", () => {
     const e = new SCXError(429, "rate limited", "rate_limit");
     expect(e).toBeInstanceOf(Error);

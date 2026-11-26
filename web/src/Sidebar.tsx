@@ -3,7 +3,10 @@ import { Logo } from "./brand";
 import { kbAdd, kbDelete, kbList } from "./api";
 import { agentCheckDirectory, agentSessions, agentDeleteSession, type AgentStatus, type SessionSummary } from "./agentApi";
 import { speechSupported } from "./voice";
-import type { BotConfig, KBDoc, SCXModel, ToolDef } from "./types";
+import type { BotConfig, KBDoc, ReasoningEffort, SCXModel, ToolDef } from "./types";
+import { REASONING_EFFORTS } from "./types";
+
+const EFFORT_LABEL: Record<ReasoningEffort, string> = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Maximum" };
 import type { RunnerSettings } from "./App";
 import { logout } from "./Login";
 import { newToolId } from "./tools";
@@ -122,7 +125,7 @@ export function Sidebar({
   const supportsReasoning = features.includes("reasoning");
 
   // Chat models (non-chat ones hidden unless asked), narrowed by the search box, grouped by
-  // provider: SCX first, then Anthropic, NVIDIA and OpenRouter when configured. The selected model always
+  // provider: SCX first, then Anthropic, NVIDIA, Bedrock and OpenRouter when configured. The selected model always
   // stays in the list so the <select> never shows a value it doesn't have.
   const [modelQuery, setModelQuery] = useState("");
   const [showAllModels, setShowAllModels] = useState(false);
@@ -130,7 +133,7 @@ export function Sidebar({
   const chatModels = textModels.filter((m) => showAllModels || isChatModel(m) || m.id === config.model);
   const hiddenCount = textModels.filter((m) => !isChatModel(m)).length;
   const shownModels = chatModels.filter((m) => matchesQuery(m, modelQuery) || m.id === config.model);
-  const modelGroups = (["scx", "anthropic", "nvidia", "openrouter"] as const)
+  const modelGroups = (["scx", "anthropic", "nvidia", "bedrock", "openrouter"] as const)
     .map((p) => [p, shownModels.filter((m) => (m.provider ?? "scx") === p)] as const)
     .filter(([, list]) => list.length > 0);
   const activePreset = presetFor(config.system);
@@ -243,7 +246,7 @@ export function Sidebar({
           />
           <select value={config.model} onChange={(e) => set("model", e.target.value)}>
             {modelGroups.map(([provider, list]) => (
-              <optgroup key={provider} label={provider === "openrouter" ? "OpenRouter" : provider === "nvidia" ? "NVIDIA NIM" : provider === "anthropic" ? "Anthropic" : "SCX.ai"}>
+              <optgroup key={provider} label={provider === "openrouter" ? "OpenRouter" : provider === "nvidia" ? "NVIDIA NIM" : provider === "bedrock" ? "Amazon Bedrock" : provider === "anthropic" ? "Anthropic" : "SCX.ai"}>
                 {list.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name}
@@ -332,6 +335,17 @@ export function Sidebar({
             <span className="range-val">{config.maxTokens}</span>
           </div>
         </div>
+
+        {supportsReasoning && (
+          <div className="field">
+            <label htmlFor="reasoning-effort">Reasoning effort</label>
+            <select id="reasoning-effort" value={config.reasoningEffort ?? ""} onChange={(e) => set("reasoningEffort", e.target.value as BotConfig["reasoningEffort"])}>
+              <option value="">Model default</option>
+              {REASONING_EFFORTS.map((e) => <option key={e} value={e}>{EFFORT_LABEL[e]}</option>)}
+            </select>
+            <span className="hint">Reasoning counts against Max output tokens. Lower effort answers sooner and leaves more of the limit for the answer.</span>
+          </div>
+        )}
 
         <Toggle
           label="Stream responses"

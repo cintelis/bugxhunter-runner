@@ -74,23 +74,38 @@ export interface ChatCompletion {
 
 export interface SCXClientOptions {
   /** The key, or a function that returns it per request (so a vault can supply it after an unlock). */
-  apiKey: string | (() => string);
+  apiKey?: string | (() => string);
+  /**
+   * Instead of a key: the headers that authenticate one request (a signature over
+   * its method, URL, headers and body, as AWS SigV4 needs). May throw like `apiKey`.
+   */
+  auth?: (request: { method: string; url: string; headers: Record<string, string>; body?: string }) => Promise<Record<string, string>>;
   baseUrl?: string;
   /** Per-request timeout in ms (default 120s). */
   timeoutMs?: number;
   /** Extra headers on every request (e.g. OpenRouter's attribution headers). */
   headers?: Record<string, string>;
+  /** Ask for token usage at the end of a stream (`stream_options.include_usage`), for a provider that sends none unasked. */
+  streamUsage?: boolean;
+  /** Shape a chat request for this provider before it is sent: defaults it should carry, parameters a model refuses. */
+  prepare?: (params: ChatParams) => ChatParams;
 }
 
 export class SCXClient {
   readonly baseUrl: string;
   private readonly key: () => string;
+  private readonly auth: SCXClientOptions["auth"];
+  private readonly streamUsage: boolean;
+  private readonly prepare: (params: ChatParams) => ChatParams;
   private readonly timeoutMs: number;
   private readonly extraHeaders: Record<string, string>;
 
   constructor(opts: SCXClientOptions) {
-    if (!opts.apiKey) throw new Error("SCXClient: apiKey is required");
+    if (!opts.apiKey && !opts.auth) throw new Error("SCXClient: apiKey is required");
     this.key = typeof opts.apiKey === "function" ? opts.apiKey : () => opts.apiKey as string;
+    this.auth = opts.auth;
+    this.streamUsage = opts.streamUsage ?? false;
+    this.prepare = opts.prepare ?? ((params) => params);
     this.baseUrl = (opts.baseUrl ?? SCX_DEFAULT_BASE_URL).replace(/\/$/, "");
     this.timeoutMs = opts.timeoutMs ?? 120_000;
     this.extraHeaders = opts.headers ?? {};
@@ -102,21 +117,21 @@ export class SCXClient {
     init: RequestInit & { json?: unknown; timeoutMs?: number } = {},
   ): Promise<Response> {
     const { json, headers, timeoutMs = this.timeoutMs, ...rest } = init;
-    const apiKey = this.key(); // may throw (vault sealed): before any network call
+    const url = `${this.baseUrl}${path}`;
+    const body = json !== undefined ? JSON.stringify(json) : rest.body;
+    const plain: Record<string, string> = {
+      ...this.extraHeaders,
+      ...(json !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...(headers as Record<string, string> | undefined),
+    };
+    // Either may throw (vault sealed, no AWS session): before any network call.
+    const authed = this.auth
+      ? { ...plain, ...(await this.auth({ method: rest.method ?? "GET", url, headers: plain, body: typeof body === "string" ? body : undefined })) }
+      : { Authorization: `Bearer ${this.key()}`, ...plain };
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
-      return await fetch(`${this.baseUrl}${path}`, {
-        ...rest,
-        signal: ctrl.signal,
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          ...this.extraHeaders,
-          ...(json !== undefined ? { "Content-Type": "application/json" } : {}),
-          ...headers,
-        },
-        body: json !== undefined ? JSON.stringify(json) : rest.body,
-      });
+      return await fetch(url, { ...rest, signal: ctrl.signal, headers: authed, body });
     } catch (e) {
       if (ctrl.signal.aborted) {
         const host = new URL(this.baseUrl).host;
@@ -168,7 +183,7 @@ export class SCXClient {
     // can take minutes over, so allow longer than the "started answering" limit for streams.
     const res = await this.request("/chat/completions", {
       method: "POST",
-      json: { ...params, stream: false },
+      json: this.prepare({ ...params, stream: false }),
       timeoutMs: opts.timeoutMs ?? Math.max(this.timeoutMs, NON_STREAM_TIMEOUT_MS),
     });
     return this.json<ChatCompletion>(res);
@@ -182,7 +197,10 @@ export class SCXClient {
   async chatStreamResponse(params: ChatParams): Promise<Response> {
     const res = await this.request("/chat/completions", {
       method: "POST",
-      json: { ...params, stream: true },
+      json: this.prepare({
+        ...params, stream: true,
+        ...(this.streamUsage && params.stream_options === undefined ? { stream_options: { include_usage: true } } : {}),
+      }),
     });
     if (!res.ok) throw await this.toError(res);
     return res;

@@ -565,7 +565,7 @@ export function commandHazard(command: string): string | null {
 /** Operator / provider secrets that must never reach the executor's subprocess env,
  *  so a prompt-injected agent (fed adversarial target output) has nothing to exfil. */
 export const SENSITIVE_ENV = [
-  "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "GITHUB_TOKEN", "GH_TOKEN", "NPM_TOKEN",
+  "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_BEARER_TOKEN_BEDROCK", "AWS_WEB_IDENTITY_TOKEN_FILE", "GITHUB_TOKEN", "GH_TOKEN", "NPM_TOKEN",
   "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "SCX_API", "SCX_API_KEY", "OPENROUTER_API_KEY", "NVIDIA_API_KEY",
   "AZURE_CLIENT_SECRET", "GCP_SERVICE_ACCOUNT", "OPEN_RUNNER_SECRET", "GITHUB_CLIENT_SECRET", "TURNSTILE_SECRET_KEY",
 ];

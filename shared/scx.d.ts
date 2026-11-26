@@ -42,5 +42,5 @@ export interface SCXModel {
   description?: string;
   datacenters?: { country_code: string }[];
   /** Which provider serves it; OpenRouter ids are prefixed `openrouter/`, NVIDIA NIM ids `nim/`, Claude `anthropic/`. */
-  provider?: "scx" | "openrouter" | "nvidia" | "anthropic";
+  provider?: "scx" | "openrouter" | "nvidia" | "anthropic" | "bedrock";
 }

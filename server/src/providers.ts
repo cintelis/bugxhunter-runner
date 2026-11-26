@@ -16,6 +16,10 @@
  * For the agent, OPENROUTER_MODELS (comma list of OpenRouter ids) is turned
  * into an OpenCode provider that calls back through the runner's proxy, so
  * the key stays here in both local and Docker modes.
+ *
+ * Amazon Bedrock (`bedrock/<id>`) is the one provider that need not have a key:
+ * it also takes AWS credentials (an OIDC role, an SSO profile, the compute's
+ * role), with which the runner signs each call. See bedrock.ts.
  */
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -24,12 +28,15 @@ import path from "node:path";
 import type { SCXModel } from "../../shared/scx.js";
 import { SCXClient, SCXError, type ChatCompletion, type ChatParams } from "./scx.js";
 import { ANTHROPIC_PREFIX, AnthropicChatClient, listAnthropicModels, normaliseAnthropic } from "./anthropic.js";
+import * as bedrock from "./bedrock.js";
+import { BEDROCK_CATALOGUE, BEDROCK_MODELS, BEDROCK_PREFIX } from "./bedrock.js";
 import { httpError } from "./errors.js";
 import * as vault from "./vault.js";
 import * as nvidiaHealth from "./nvidia-health.js";
 
-export type ProviderId = "scx" | "openrouter" | "nvidia" | "anthropic";
-export type KeySource = "vault" | "file" | "env" | "opencode-auth" | "none";
+export type ProviderId = "scx" | "openrouter" | "nvidia" | "anthropic" | "bedrock";
+/** `aws`: no key at all, but AWS credentials the runner signs each call with (Bedrock only). */
+export type KeySource = "vault" | "file" | "env" | "aws" | "opencode-auth" | "none";
 
 export interface ProviderDef {
   id: ProviderId;
@@ -69,6 +76,11 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     // Scrubbed from the environment like the others, so the agent's shell never inherits it.
     vaultItem: "ANTHROPIC_API_KEY", envVars: ["ANTHROPIC_API_KEY"], fileVar: "ANTHROPIC_API_KEY_FILE", authId: "anthropic",
     kind: "anthropic",
+  },
+  bedrock: {
+    id: "bedrock", name: "Amazon Bedrock", baseUrl: bedrock.settings.baseUrl,
+    // A Bedrock API key, under the name AWS's own tools use. Optional: AWS credentials do instead (bedrock.ts).
+    vaultItem: "AWS_BEARER_TOKEN_BEDROCK", envVars: ["AWS_BEARER_TOKEN_BEDROCK"], fileVar: "AWS_BEARER_TOKEN_BEDROCK_FILE", authId: "bedrock",
   },
 };
 
@@ -145,11 +157,14 @@ function fileKey(id: ProviderId): string | undefined {
 for (const k of ["SCX_PROXY_TOKEN", "OPEN_RUNNER_SECRET"]) delete process.env[k];
 
 /** Where a provider's key comes from right now. */
+export function keySource(id: Exclude<ProviderId, "bedrock">): Exclude<KeySource, "aws">;
+export function keySource(id: ProviderId): KeySource;
 export function keySource(id: ProviderId): KeySource {
   const p = PROVIDERS[id];
   if (vault.isInitialised() && vault.status("none").items.includes(p.vaultItem)) return "vault";
   if (keyFiles[id]) return "file";
   if (envKeys[id]) return "env";
+  if (id === "bedrock" && bedrock.awsConfigured()) return "aws";
   if (authKeys[p.authId]) return "opencode-auth";
   return "none";
 }
@@ -168,6 +183,7 @@ export function apiKey(id: ProviderId): string {
       return key;
     }
     case "env": return envKeys[id]!;
+    case "aws": throw httpError(500, `${p.name} is signed with AWS credentials here, not a key.`); // callers use authHeaders
     case "opencode-auth": return authKeys[p.authId];
     default:
       throw httpError(503, id === "scx"
@@ -176,10 +192,37 @@ export function apiKey(id: ProviderId): string {
   }
 }
 
+/**
+ * The headers that authenticate one upstream call. A bearer key for every
+ * provider but Bedrock on AWS credentials, where the call is signed (SigV4
+ * covers the method, URL, body and `headers`, so they must be the ones sent).
+ */
+export async function authHeaders(id: ProviderId, request: bedrock.OutboundRequest): Promise<Record<string, string>> {
+  if (id === "bedrock" && keySource(id) === "aws") {
+    // AWS credentials live outside the vault, but a locked vault must mean no model calls at
+    // all: once a vault exists, nothing is signed while it is sealed. A signed call counts as
+    // activity, like reading a key does. A runner with no vault (unattended) signs freely.
+    if (vault.isInitialised()) {
+      if (!vault.isUnsealed()) throw httpError(503, "The vault is sealed (locked). Unlock it in the sidebar.");
+      vault.touch();
+    }
+    return bedrock.sign(request);
+  }
+  return { Authorization: `Bearer ${apiKey(id)}` };
+}
+
+// Locking the vault also drops the AWS credentials held in memory.
+vault.onSealed(bedrock.forget);
+
 export const clients: Record<Exclude<ProviderId, "anthropic">, SCXClient> = {
   scx: new SCXClient({ apiKey: () => apiKey("scx"), baseUrl: PROVIDERS.scx.baseUrl }),
   openrouter: new SCXClient({ apiKey: () => apiKey("openrouter"), baseUrl: PROVIDERS.openrouter.baseUrl, headers: PROVIDERS.openrouter.headers }),
   nvidia: new SCXClient({ apiKey: () => apiKey("nvidia"), baseUrl: PROVIDERS.nvidia.baseUrl }),
+  // Bedrock sends a stream's token usage only when asked, and its reasoning models spend much of a budget unseen.
+  bedrock: new SCXClient({
+    auth: (request) => authHeaders("bedrock", request), baseUrl: PROVIDERS.bedrock.baseUrl, streamUsage: true,
+    prepare: (params) => bedrock.prepareRequest(bedrock.withoutRefusedTools(params)),
+  }),
 };
 
 /** Output limits of the Claude models seen in the last model list, to cap max_tokens. */
@@ -204,6 +247,7 @@ export interface ChatClient {
 export function clientFor(model: string): { client: ChatClient; model: string; provider: ProviderId } {
   if (model.startsWith(ANTHROPIC_PREFIX)) return { client: anthropicClient, model: model.slice(ANTHROPIC_PREFIX.length), provider: "anthropic" };
   if (model.startsWith("openrouter/")) return { client: clients.openrouter, model: model.slice("openrouter/".length), provider: "openrouter" };
+  if (model.startsWith(BEDROCK_PREFIX)) return { client: clients.bedrock, model: model.slice(BEDROCK_PREFIX.length), provider: "bedrock" };
   if (model.startsWith("nim/")) return { client: clients.nvidia, model: model.slice("nim/".length), provider: "nvidia" };
   return { client: clients.scx, model, provider: "scx" };
 }
@@ -359,15 +403,49 @@ async function anthropicModels(): Promise<SCXModel[]> {
   }
 }
 
-/** Every model the Playground can use: SCX's, plus Anthropic's, NVIDIA's and OpenRouter's when their keys are configured. */
+/** Limits assumed for a Bedrock id we hold no metadata for (an application inference profile, another model). */
+const BEDROCK_DEFAULT_LIMIT = { context: 128_000, output: 16_000 };
+
+/** A Bedrock model or inference profile as an SCXModel (Playground id `bedrock/<id>`). */
+export function bedrockModel(id: string): SCXModel {
+  const meta = BEDROCK_CATALOGUE[id];
+  return {
+    id: `${BEDROCK_PREFIX}${id}`,
+    name: meta?.name ?? id,
+    created: 0,
+    input_modalities: meta?.image ? ["text", "image"] : ["text"],
+    output_modalities: ["text"],
+    context_length: meta?.context ?? null,
+    max_output_length: meta?.output ?? null,
+    pricing: {},
+    // The hosted GPT models take sampling settings only at their defaults (bedrock.ts drops them).
+    supported_sampling_parameters: bedrock.isOpenAiGpt(id) ? ["max_tokens"] : ["temperature", "top_p", "max_tokens", "stop"],
+    supported_features: meta?.features ?? ["tools"],
+    description: meta?.description ?? "Amazon Bedrock model named in BEDROCK_MODELS (metadata not curated).",
+    provider: "bedrock",
+  };
+}
+
+/** Bedrock models for the Playground: the ids in BEDROCK_MODELS, once a key or AWS credentials are configured. */
+const bedrockModels = (): SCXModel[] => (configured("bedrock") ? BEDROCK_MODELS.map(bedrockModel) : []);
+
+/** Every model the Playground can use: SCX's, plus Anthropic's, NVIDIA's, Bedrock's and OpenRouter's when they are configured. */
 export async function listModels(): Promise<SCXModel[]> {
-  const [scxResult, anthropic, nvidia] = await Promise.all([
-    clients.scx.listModels().then((list) => ({ list }), (error: unknown) => ({ error })),
+  // SCX is asked only when it has a key, like every other provider: a runner may use only
+  // Bedrock or Claude, and then SCX is neither called nor reported as failing.
+  const scxKeyed = configured("scx");
+  const [scxResult, anthropic, nvidiaOnly] = await Promise.all([
+    scxKeyed
+      ? clients.scx.listModels().then((list) => ({ list }), (error: unknown) => ({ error }))
+      : Promise.resolve({ list: [] as SCXModel[] }),
     anthropicModels(),
     nvidiaModels(),
   ]);
-  // Without a working SCX key, still offer the other providers' models (a runner may use only
-  // Claude, say); the SCX error stands only when there is nothing else to show.
+  const nvidia = [...nvidiaOnly, ...bedrockModels()]; // Bedrock sits with NVIDIA in the list: after Claude, before OpenRouter
+  // With no provider set up at all, say how to set up the default one.
+  if (!scxKeyed && !anthropic.length && !nvidia.length && !configured("openrouter")) apiKey("scx");
+  // With an SCX key that does not work, still offer the other providers' models; the SCX
+  // error stands only when there is nothing else to show.
   if ("error" in scxResult) {
     if (!anthropic.length && !nvidia.length && !configured("openrouter")) throw scxResult.error;
     console.error("[scx] model list failed:", oneLineMessage(scxResult.error));
@@ -444,6 +522,31 @@ export async function nvidiaOpencodeProvider(proxyBaseUrl: string): Promise<Reco
   };
 }
 
+/**
+ * An OpenCode provider for the agent: the Bedrock models in BEDROCK_MODELS,
+ * calling back through the runner's proxy with the proxy token. The agent holds
+ * no AWS credential and no Bedrock key: the runner signs the upstream call.
+ */
+export function bedrockOpencodeProvider(proxyBaseUrl: string): Record<string, unknown> | null {
+  const ids = bedrock.agentModels(); // without the models that cannot call tools on this route
+  if (!ids.length || !configured("bedrock")) return null;
+  const models: Record<string, unknown> = {};
+  for (const id of ids) {
+    const meta = BEDROCK_CATALOGUE[id];
+    models[id] = {
+      name: meta?.name ?? id,
+      limit: { context: meta?.context ?? BEDROCK_DEFAULT_LIMIT.context, output: meta?.output ?? BEDROCK_DEFAULT_LIMIT.output },
+      ...(meta?.image ? { attachment: true, modalities: { input: ["text", "image"], output: ["text"] } } : {}),
+    };
+  }
+  return {
+    npm: "@ai-sdk/openai-compatible",
+    name: "Amazon Bedrock",
+    options: { baseURL: proxyBaseUrl, apiKey: PROXY_TOKEN },
+    models,
+  };
+}
+
 /** Limits the agent assumes for Claude models when the Models API cannot be asked (vault sealed). */
 const CLAUDE_DEFAULT_LIMIT = { context: 1_000_000, output: 128_000 };
 
@@ -488,6 +591,7 @@ const header = (h: Headers, name: string) => { const v = h[name]; return Array.i
 
 /** Upstream paths the proxy forwards for a provider (everything else is a 404). */
 export function proxyPaths(p: ProviderDef): Set<string> {
+  if (p.id === "bedrock") return new Set(["/chat/completions"]); // bedrock-runtime has no OpenAI-style model list
   return p.kind === "anthropic"
     ? new Set(["/messages", "/messages/count_tokens", "/models"])
     : new Set(["/chat/completions", "/models"]);
@@ -505,18 +609,45 @@ export function proxyTokenOk(p: ProviderDef, h: Headers, token: string): boolean
   return p.kind === "anthropic" && sameSecret(header(h, "x-api-key") ?? "", token);
 }
 
-/** Headers for the upstream call: the real key in the provider's own scheme, plus what the client negotiated. */
-export function upstreamHeaders(p: ProviderDef, h: Headers, key: string): Record<string, string> {
+/**
+ * Headers for the upstream call: the real key in the provider's own scheme, plus what the client negotiated.
+ * With no `key` there is no Authorization header: the call is signed instead (see proxyHeaders).
+ */
+export function upstreamHeaders(p: ProviderDef, h: Headers, key?: string): Record<string, string> {
   const common = {
     "Content-Type": header(h, "content-type") ?? "application/json",
     Accept: header(h, "accept") ?? "*/*",
   };
-  if (p.kind !== "anthropic") return { Authorization: `Bearer ${key}`, ...(p.headers ?? {}), ...common };
+  if (p.kind !== "anthropic") return { ...(key === undefined ? {} : { Authorization: `Bearer ${key}` }), ...(p.headers ?? {}), ...common };
   const beta = header(h, "anthropic-beta");
   return {
-    "x-api-key": key,
+    "x-api-key": key ?? "",
     "anthropic-version": header(h, "anthropic-version") ?? "2023-06-01",
     ...(beta ? { "anthropic-beta": beta } : {}),
     ...common,
   };
+}
+
+/** The body the proxy sends upstream: the agent's own, with a provider-wide default added where one is set. */
+export function proxyBody(p: ProviderDef, body: Buffer<ArrayBuffer>): Buffer<ArrayBuffer> {
+  return p.id === "bedrock" ? bedrock.prepareBody(body) : body;
+}
+
+/**
+ * Why the proxy will not forward this call, or null when it will. Bedrock is reached with the
+ * runner's AWS identity, which can usually invoke far more than the runner means to offer, so
+ * the agent may name only the models in BEDROCK_MODELS.
+ */
+export function proxyRefusal(p: ProviderDef, body: Buffer<ArrayBuffer>): string | null {
+  if (p.id !== "bedrock") return null;
+  const model = bedrock.bodyModel(body);
+  if (bedrock.allowsModel(model)) return null;
+  return `Model ${typeof model === "string" ? `"${model.slice(0, 120)}"` : "(none named)"} is not offered by this runner. Its Bedrock models are listed in BEDROCK_MODELS.`;
+}
+
+/** Everything the proxy sends upstream for one agent call, authenticated: the key injected, or the call signed. */
+export async function proxyHeaders(p: ProviderDef, h: Headers, request: { method: string; url: string; body?: Uint8Array }): Promise<Record<string, string>> {
+  if (keySource(p.id) !== "aws") return upstreamHeaders(p, h, apiKey(p.id));
+  const headers = upstreamHeaders(p, h);
+  return { ...headers, ...(await authHeaders(p.id, { ...request, headers })) };
 }
