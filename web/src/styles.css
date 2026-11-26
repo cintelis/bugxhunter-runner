@@ -505,7 +505,9 @@ select {
 .canvas-splitter { width: 1px; flex: none; align-self: stretch; }
 .canvas-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 -4px 4px 0; }
 .canvas-panel-head .section-title { margin: 0; }
-.canvas-panel-show { left: auto; right: 12px; top: 12px; }
+/* Where the panel's own hide button was: top right. Needs the two classes of .sidebar-toggle.floating
+   to win over its `left`, or the button jumps to the left edge. */
+.sidebar-toggle.floating.canvas-panel-show { left: auto; right: 12px; top: 12px; }
 /* Everything in the panel fits its width: fields shrink, rows wrap, long words break. */
 .canvas-panel *, .canvas-panel *::before, .canvas-panel *::after { box-sizing: border-box; }
 .canvas-panel input, .canvas-panel select, .canvas-panel textarea, .canvas-panel button { max-width: 100%; min-width: 0; }
