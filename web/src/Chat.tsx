@@ -170,8 +170,8 @@ export function Chat({ config, activeModel, messages, busy, error, onSend, onSto
               listening
                 ? "Listening…"
                 : seesImages
-                  ? `Message ${modelName}… (attach, paste or drop an image or a .drawio file to review)`
-                  : `Message ${modelName}… (attach or drop a .drawio file to review a diagram)`
+                  ? `Message ${modelName}… (attach, paste or drop an image, a .drawio file or a .md / .txt file)`
+                  : `Message ${modelName}… (attach or drop a .drawio diagram or a .md / .txt file)`
             }
           />
           <div className="composer-bar">
@@ -190,12 +190,12 @@ export function Chat({ config, activeModel, messages, busy, error, onSend, onSto
               className="icon-btn attach-btn"
               onClick={() => fileRef.current?.click()}
               disabled={busy}
-              title={seesImages ? "Attach images or draw.io diagrams (or paste / drop them)" : "Attach draw.io diagrams (images need a vision model)"}
-              aria-label="Attach images or diagrams"
+              title={seesImages ? "Attach images, draw.io diagrams or Markdown / text files (or paste / drop them)" : "Attach draw.io diagrams or Markdown / text files (images need a vision model)"}
+              aria-label="Attach images, diagrams or text files"
             >
               <PaperclipIcon />
             </button>
-            {!blocked && !att.attachError && att.docs.length > 0 && config.maxTokens < 12000 && (
+            {!blocked && !att.attachError && att.docs.some((d) => d.kind !== "text") && config.maxTokens < 12000 && (
               <span className="hint" style={{ margin: "0 8px" }} title="Reasoning models think before they answer; a short limit can end the reply before any text">
                 Diagram reviews can need 10–16k output tokens; Max tokens is {config.maxTokens.toLocaleString()}.
               </span>
@@ -265,7 +265,7 @@ function MessageRow({ msg, streaming, onToolResult, onFix }: {
           {msg.docs?.length ? (
             <div className="attach-row bubble-docs">
               {msg.docs.map((d, i) => (
-                <span className="attach-chip doc" key={i} title={`Sent as an exact outline (${d.text.length.toLocaleString()} characters)`}>
+                <span className="attach-chip doc" key={i} title={`Sent as ${d.kind === "text" ? "text" : "an exact outline"} (${d.text.length.toLocaleString()} characters)`}>
                   <span className="attach-doc-icon" aria-hidden>◇</span>
                   <span className="attach-name">{d.name}</span>
                 </span>

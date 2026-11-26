@@ -55,7 +55,7 @@ ${strideBrief()}
 ${compactCoverage()}`;
 
 export function canvasUserPrompt(description: string, hasImages: boolean): string {
-  const what = hasImages ? "the attached diagram or screenshot" : "the system described below";
+  const what = hasImages ? "the attached diagram, screenshot or document" : "the system described below";
   const extra = description.trim() ? `\n\nContext from the user:\n${description.trim()}` : "";
   return `Build the threat model JSON for ${what}.${extra}`;
 }

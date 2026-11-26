@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { ChatDoc, ChatImage } from "./types";
+import { MAX_TEXT_FILE, MAX_TEXT_FILES, TEXT_ACCEPT, isTextFile, looksBinary } from "./textAttach";
 
 /** Per image, before base64; the /api/chat body limit is 32 MB after it. */
 export const MAX_IMAGE = 5 * 1024 * 1024;
@@ -7,8 +8,8 @@ export const MAX_IMAGES = 4;
 /** draw.io files: the render service reads up to 3 MB. */
 export const MAX_DIAGRAM = 3 * 1024 * 1024 - 2048;
 export const MAX_DIAGRAMS = 3;
-/** For <input type="file" accept>: images, plus draw.io files (.drawio, .drawio.svg, .drawio.xml). */
-export const ATTACH_ACCEPT = "image/*,.drawio,.xml,.svg";
+/** For <input type="file" accept>: images, draw.io files (.drawio, .drawio.svg, .drawio.xml), and Markdown / plain text. */
+export const ATTACH_ACCEPT = `image/*,.drawio,.xml,.svg,${TEXT_ACCEPT}`;
 
 export function readAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -45,8 +46,9 @@ async function readDiagram(f: File): Promise<ChatDoc> {
 }
 
 /**
- * Attachments for a Playground composer: images (pick, paste or drop) and draw.io diagrams,
- * which are turned into exact text outlines so any model, not only vision ones, can review them.
+ * Attachments for a Playground composer: images (pick, paste or drop), draw.io diagrams,
+ * which are turned into exact text outlines so any model, not only vision ones, can review them,
+ * and Markdown or plain-text files, which are sent as they are.
  */
 export function useImageAttach() {
   const [images, setImages] = useState<ChatImage[]>([]);
@@ -59,12 +61,26 @@ export function useImageAttach() {
     const files = Array.from(list);
     const next: ChatImage[] = [];
     const diagrams: File[] = [];
+    const texts: ChatDoc[] = [];
     for (const f of files) {
       if (await isDrawioFile(f)) diagrams.push(f);
       else if (f.type.startsWith("image/")) {
         if (f.size > MAX_IMAGE) setAttachError(`${f.name} is over 5 MB.`);
         else next.push({ name: f.name || "pasted-image.png", url: await readAsDataUrl(f) });
-      } else setAttachError(`${f.name}: attach images or draw.io files (.drawio, .drawio.svg).`);
+      } else if (isTextFile(f.name, f.type)) {
+        if (f.size > MAX_TEXT_FILE) { setAttachError(`${f.name} is over 512 KB.`); continue; }
+        const text = await f.text();
+        if (looksBinary(text)) setAttachError(`${f.name} is not a text file.`);
+        else if (!text.trim()) setAttachError(`${f.name} is empty.`);
+        else texts.push({ name: f.name || "pasted-text.txt", text, kind: "text" });
+      } else setAttachError(`${f.name}: attach images, draw.io files (.drawio, .drawio.svg), or Markdown / text files (.md, .txt).`);
+    }
+    if (texts.length) {
+      setDocs((cur) => {
+        const room = MAX_TEXT_FILES - cur.filter((d) => d.kind === "text").length;
+        if (texts.length > room) setAttachError(`Up to ${MAX_TEXT_FILES} text files per message.`);
+        return [...cur, ...texts.slice(0, Math.max(0, room))];
+      });
     }
     setImages((cur) => {
       const all = [...cur, ...next];
@@ -77,7 +93,7 @@ export function useImageAttach() {
       try {
         const doc = await readDiagram(f);
         setDocs((cur) => {
-          if (cur.length >= MAX_DIAGRAMS) { setAttachError(`Up to ${MAX_DIAGRAMS} diagrams per message.`); return cur; }
+          if (cur.filter((d) => d.kind !== "text").length >= MAX_DIAGRAMS) { setAttachError(`Up to ${MAX_DIAGRAMS} diagrams per message.`); return cur; }
           return [...cur, doc];
         });
       } catch (e) {
@@ -135,7 +151,9 @@ export function AttachChips({ images, docs = [], onRemove, onRemoveDoc, reading 
         </span>
       ))}
       {docs.map((d, i) => (
-        <span className="attach-chip doc" key={`d${i}`} title={`${d.name}: read as an exact outline (${d.text.length.toLocaleString()} characters${d.pages && d.pages.length > 1 ? `, ${d.pages.length} pages` : ""})`}>
+        <span className="attach-chip doc" key={`d${i}`} title={d.kind === "text"
+          ? `${d.name}: attached as text (${d.text.length.toLocaleString()} characters)`
+          : `${d.name}: read as an exact outline (${d.text.length.toLocaleString()} characters${d.pages && d.pages.length > 1 ? `, ${d.pages.length} pages` : ""})`}>
           <span className="attach-doc-icon" aria-hidden>◇</span>
           <span className="attach-name">{d.name}</span>
           {onRemoveDoc && <button className="attach-x" onClick={() => onRemoveDoc(i)} aria-label={`Remove ${d.name}`}>✕</button>}
