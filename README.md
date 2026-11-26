@@ -15,7 +15,7 @@ green accents) and Fira Code throughout. Started from the `sovgov-poc` chatbot d
   `plan` (read-only) agent. Every file edit and shell command waits for your approval.
   Markdown replies, collapsible tool calls and reasoning, per-turn token counts, and a
   **Changes** view of what the agent edited (git repos only — OpenCode tracks changes via git).
-- **Playground** — chat with any SCX, Anthropic (Claude), NVIDIA or OpenRouter model directly (no agent), with
+- **Playground** — chat with any SCX, Anthropic (Claude), NVIDIA, OpenRouter or Amazon Bedrock model directly (no agent), with
   tool-calling, JSON mode, an embeddings-backed knowledge base and browser voice. Also:
   - **Security presets** (code review, threat modelling, AI system review, pentest planning,
     diagram review, diagram drawing, tabletop exercises, CTF coaching, phishing, log triage,
@@ -29,6 +29,9 @@ green accents) and Fira Code throughout. Started from the `sovgov-poc` chatbot d
   - **Images** for vision models, and **draw.io files** (`.drawio`, compressed or not, and
     `.drawio.svg`) for any model: the file becomes an exact text outline of its zones, boxes,
     legend colours and arrows, so labels are never misread.
+  - **Text files** (`.md`, `.markdown`, `.txt`) for any model, in chat, compare mode and the
+    canvas: a design note, a written description of a system or a log excerpt is read in the
+    browser and sent in full. Up to 5 files of 512 KB each per message.
   - **Diagrams in replies**: a model writes a ```` ```drawio ```` spec and the app draws it as an
     editable `.drawio.svg` ([drawgen](https://github.com/cintelis/drawio-tools)), checks it, and
     can send the problems back for a fix.
@@ -591,6 +594,7 @@ publisher** on npmjs.com set to this repository and `release.yml`, once; no npm 
 | `server/src/playground-store.ts` | Saved Playground sessions, sealed with the vault key |
 | `server/src/render.ts`, `docker/render-server.py`, `docker/drawio_outline.py` | The render service (diagrams, `.drawio` outlines) and the runner's client for it |
 | `web/src/Canvas.tsx`, `web/src/canvas/` | The threat-model canvas |
+| `web/src/imageAttach.tsx`, `textAttach.ts`, `wire.ts` | Attachments in the Playground's composers (images, draw.io files, Markdown and plain text) and how they are written into the message sent to the model |
 | `web/src/intel/`, `web/src/presets.ts`, `docker/agent-AGENTS.md` | The security catalogue (OWASP, ASVS, WSTG, STRIDE, MITRE ATLAS) as data, the prompts built from it, and the agent's methodology, which a test keeps in step with the catalogue |
 | `web/src/DrawioBlock.tsx`, `diagrams.ts` | Diagrams in replies |
 | `shared/` | Type contract between server and browser |
