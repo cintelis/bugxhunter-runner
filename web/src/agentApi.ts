@@ -206,6 +206,8 @@ async function readAgentEvents(
 /** Start a supervised recon run on a session (server/src/recon-run.ts). */
 export async function reconStart(body: {
   sessionID: string; directory: string; scope: string; objective: string; env: ReconEnv; authorised: true;
+  /** Whether to look for attack paths once the main loop ends (on unless turned off). */
+  chainPass?: { enabled: boolean };
 }): Promise<ReconState> {
   const r = await fetch("/api/agent/recon", { method: "POST", headers: json(), body: JSON.stringify(body) });
   if (!r.ok) throw new Error((await errMsg(r)) || `Could not start recon (${r.status})`);

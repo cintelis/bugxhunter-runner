@@ -1,8 +1,8 @@
 /**
  * Supervised recon in the Runner: the dialog that starts a run (scope,
  * objective, how the instance differs from production, and the operator's
- * statement of authorisation), the strip that shows a run's progress, and the
- * findings the verifier confirmed.
+ * statement of authorisation), the strip that shows a run's progress, and what
+ * the verifier confirmed: the findings, and the attack paths that combine them.
  *
  * The loop itself runs on the server (server/src/recon-run.ts); the browser
  * starts it, polls its state, and answers the approvals the gate leaves open.
@@ -10,12 +10,15 @@
 import { useState } from "react";
 import { Dialog } from "./Dialog";
 import { formatTokens } from "./format";
-import type { ReconEnv, ReconFinding, ReconState } from "../../shared/agent";
+import { chainPassNote, pathsUsing, progressLabel, splitPaths, stoppedAt } from "./reconView";
+import type { ReconChain, ReconEnv, ReconFinding, ReconState } from "../../shared/agent";
 
 export interface ReconRequest {
   scope: string;
   objective: string;
   env: ReconEnv;
+  /** Whether to look for attack paths once the main loop ends. */
+  chainPass: { enabled: boolean };
 }
 
 const STOP_REASON: Record<NonNullable<ReconState["stopped"]>, string> = {
@@ -36,6 +39,7 @@ export function ReconDialog({ onStart, onClose }: { onStart: (r: ReconRequest) =
   const [divergences, setDivergences] = useState("");
   const [settings, setSettings] = useState("");
   const [authorised, setAuthorised] = useState(false);
+  const [chain, setChain] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -47,6 +51,7 @@ export function ReconDialog({ onStart, onClose }: { onStart: (r: ReconRequest) =
       await onStart({
         scope: scope.trim(), objective: objective.trim(),
         env: { kind, divergences: divergences.trim(), ...(nonProdSettings.length ? { nonProdSettings } : {}) },
+        chainPass: { enabled: chain },
       });
       onClose();
     } catch (e) {
@@ -88,6 +93,13 @@ export function ReconDialog({ onStart, onClose }: { onStart: (r: ReconRequest) =
         <input id="recon-settings" type="text" className="mono" spellCheck={false} placeholder="DEBUG=1, AUTH_DISABLED"
           value={settings} onChange={(e) => setSettings(e.target.value)} />
       </div>
+      <label className="recon-consent recon-option">
+        <input type="checkbox" checked={chain} onChange={(e) => setChain(e.target.checked)} />
+        <span>
+          Look for attack paths afterwards: with two or more findings, try to combine them and show each path end to end.
+          Same approvals, same target; up to 15% of the token budget is kept for it.
+        </span>
+      </label>
       <label className="recon-consent">
         <input type="checkbox" checked={authorised} onChange={(e) => setAuthorised(e.target.checked)} />
         <span>I am authorised to test this target, and it is the only one in scope.</span>
@@ -108,7 +120,7 @@ export function ReconStrip({ recon, onStop, onDismiss }: { recon: ReconState; on
     <div className={"recon-strip" + (running ? " live" : "")} role="status">
       <span className="recon-name">recon</span>
       <span className="mono" title={recon.objective}>{recon.scope}</span>
-      <span>round {running ? recon.rounds + 1 : recon.rounds}/{recon.maxRounds}</span>
+      <span>{progressLabel(recon)}</span>
       <span>{formatTokens(recon.tokens)}/{formatTokens(recon.budgetTokens)} tokens</span>
       {running && recon.model && <span title={`profile ${recon.profile}`}>{recon.model}</span>}
       <span title="Approvals the gate answered itself, and the ones it left for you">
@@ -126,29 +138,88 @@ export function ReconStrip({ recon, onStop, onDismiss }: { recon: ReconState; on
   );
 }
 
-/** The verifier's findings. All of this is model output about the target: shown as plain text. */
+/**
+ * What the verifier confirmed: attack paths first (they are the worst of it), then the
+ * findings, then the paths that could not be shown. All of this is model output about
+ * the target: shown as plain text.
+ */
 export function ReconFindings({ recon }: { recon: ReconState }) {
   if (recon.status === "running" && !recon.findings.length) return null;
+  const { demonstrated, partial } = splitPaths(recon.chains);
+  const chaining = recon.status === "running" && recon.phase === "chains";
+  const note = chainPassNote(recon);
   return (
     <div className="recon-findings">
-      <div className="perm-title recon-title">
-        Recon findings ({recon.findings.length}) · {recon.env.kind}
+      {(demonstrated.length > 0 || chaining) && (
+        <div className="recon-section">
+          <div className="perm-title recon-title">Attack paths ({demonstrated.length})</div>
+          {chaining && <div className="hint">Combining the findings into attack paths and trying each one…</div>}
+          {demonstrated.map((c, i) => <ChainCard key={c.id ?? i} c={c} />)}
+        </div>
+      )}
+      <div className="recon-section">
+        <div className="perm-title recon-title">
+          Recon findings ({recon.findings.length}) · {recon.env.kind}
+        </div>
+        {recon.error && <div className="hint danger">{recon.error}</div>}
+        {!recon.findings.length && <div className="hint">The verifier confirmed no findings in this run.</div>}
+        {recon.findings.map((f, i) => <FindingCard key={f.id ?? i} f={f} paths={pathsUsing(f.id, recon.chains)} />)}
       </div>
-      {recon.error && <div className="hint danger">{recon.error}</div>}
-      {!recon.findings.length && <div className="hint">The verifier confirmed no findings in this run.</div>}
-      {recon.findings.map((f, i) => <FindingCard key={i} f={f} />)}
+      {partial.length > 0 && (
+        <div className="recon-section">
+          <div className="perm-title recon-title recon-title-lead">Unproven paths ({partial.length})</div>
+          <div className="hint">Leads, not findings: each stopped before it was shown end to end.</div>
+          {partial.map((c, i) => <ChainCard key={c.id ?? i} c={c} />)}
+        </div>
+      )}
+      {note && <div className="hint recon-note">{note}</div>}
     </div>
   );
 }
 
-function FindingCard({ f }: { f: ReconFinding }) {
+/** One attack path: what it reaches, the findings it uses, and its steps with their evidence. */
+function ChainCard({ c }: { c: ReconChain }) {
+  const partial = c.status === "partial";
+  return (
+    <div className={"recon-finding recon-chain" + (partial ? " partial" : "")}>
+      <div className="recon-finding-head">
+        {c.id && <span className="badge recon-id">{c.id}</span>}
+        <span className={`badge sev-${c.severity}`} title={partial ? "The worst this path could be: it was not shown" : undefined}>
+          {partial ? `up to ${c.severity}` : c.severity}
+        </span>
+        <span className="recon-finding-title">{c.title}</span>
+        {c.standardId && <span className="badge">{c.standardId}</span>}
+        {c.verdict === "config-dependent" && <span className="badge sev-medium">config-dependent</span>}
+      </div>
+      <div className="recon-impact">{c.impact}</div>
+      <div className="recon-links">
+        <span>uses</span>
+        {c.links.map((id) => <span className="badge recon-id" key={id}>{id}</span>)}
+      </div>
+      {partial && <div className="hint recon-stopped">{stoppedAt(c)}</div>}
+      <ol className="recon-steps">
+        {c.steps.map((s, i) => (
+          <li key={i} className={partial && c.blockedAt === i + 1 ? "blocked" : undefined}>
+            <div>{s.action}</div>
+            {s.evidence && <pre className="recon-repro">{s.evidence}</pre>}
+          </li>
+        ))}
+      </ol>
+      {c.prodCaveat && <div className="hint">Re-test against production: {c.prodCaveat}</div>}
+    </div>
+  );
+}
+
+function FindingCard({ f, paths }: { f: ReconFinding; paths: string[] }) {
   return (
     <div className="recon-finding">
       <div className="recon-finding-head">
+        {f.id && <span className="badge recon-id">{f.id}</span>}
         <span className={`badge sev-${f.severity}`}>{f.severity}</span>
         <span className="recon-finding-title">{f.title}</span>
         {f.standardId && <span className="badge">{f.standardId}</span>}
         {f.verdict === "config-dependent" && <span className="badge sev-medium">config-dependent</span>}
+        {paths.length > 0 && <span className="recon-in-paths" title="Attack paths that build on this finding">in {paths.join(", ")}</span>}
       </div>
       <pre className="recon-repro">{f.repro}</pre>
       {f.prodCaveat && <div className="hint">Re-test against production: {f.prodCaveat}</div>}
