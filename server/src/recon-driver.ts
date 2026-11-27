@@ -537,7 +537,7 @@ async function driveChainPass(run: ReconRun, opts: ReconDriverOptions, gate: (p:
     const grave = worstSeverity(run.findings.filter((f) => f.id && c.links.includes(f.id)));
     let prompt = buildChainDemoPrompt(c, i + 1, candidates.length, run.findings);
     let ruled = false, why = `not shown within ${cfg.maxRoundsPerChain} rounds`;
-    for (let round = 0; round < cfg.maxRoundsPerChain && !ruled; round++) {
+    for (let round = 0; round < cfg.maxRoundsPerChain; round++) {
       if (run.outOfBudget()) { why = "not shown: the token budget was spent"; break; }
       const s = signals(grave);
       if (allCapped(s)) { rest("not tried: every model was rate-limited"); return "rate-limited"; }
