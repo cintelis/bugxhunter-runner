@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { chainPassNote, keptNote, memoryNote, memorySummary, pathsUsing, progressLabel, sessionNote, sessionSummary, splitPaths, stoppedAt } from "./reconView";
+import {
+  chainPassNote, keptNote, memoryNote, memorySummary, pathsUsing, progressLabel, retestStopReason, retestSummary,
+  sessionNote, sessionSummary, splitPaths, stoppedAt,
+} from "./reconView";
 import type { ReconChain } from "../../shared/agent";
 
 const chain = (over: Partial<ReconChain> = {}): ReconChain => ({
@@ -101,5 +104,22 @@ describe("session notes", () => {
   it("says when a run was tested logged in", () => {
     expect(sessionNote({})).toBeNull();
     expect(sessionNote({ session: { capturedAt: at, cookies: 2, authorization: false } })).toBe("Tested with a logged-in session (2 cookies, captured 2026-11-28 09:10 UTC).");
+  });
+});
+
+describe("retest notes", () => {
+  const r = (result: "still-reproducible" | "fixed" | "cannot-confirm") => ({ title: "t", severity: "low" as const, result, lastVerified: 0 });
+
+  it("counts the outcomes, leaving out the ones with none", () => {
+    expect(retestSummary([r("fixed"), r("still-reproducible"), r("still-reproducible"), r("cannot-confirm")])).toBe("2 still reproducible, 1 fixed, 1 could not be confirmed");
+    expect(retestSummary([r("fixed")])).toBe("1 fixed");
+    expect(retestSummary([])).toBe("nothing retested yet");
+    expect(retestSummary(undefined)).toBe("nothing retested yet");
+  });
+
+  it("words the end of a retest run as a retest, and leaves a normal run alone", () => {
+    expect(retestStopReason({ mode: "retest", stopped: "done" })).toBe("every remembered finding was retested");
+    expect(retestStopReason({ mode: "retest", stopped: "budget" })).toBeNull();
+    expect(retestStopReason({ stopped: "done" })).toBeNull();
   });
 });

@@ -23,7 +23,7 @@ import {
   driveRecon, extractReconCommand, parseTurnStatus, parseVerifierFindings, resolveHarness,
   type GateDecision, type ReconPermission, type ReconSessionRunner, type ReconTurnResult,
 } from "./recon-driver.js";
-import { activeProfileName, originOf, type EnvFidelity, type ReconChain, type ReconFinding, type ReconHarness, type ReconRecall, type ReconSessionUse } from "./recon.js";
+import { activeProfileName, originOf, type EnvFidelity, type ReconChain, type ReconFinding, type ReconHarness, type ReconRecall, type ReconSessionUse, type PriorFinding, type ReconRetest } from "./recon.js";
 import { httpError } from "./errors.js";
 
 /** The agent the driver prompts, and the subagent whose replies are verdicts. */
@@ -302,6 +302,8 @@ export interface ReconStart {
   log?: (event: string, data: Record<string, unknown>) => void;
   /** What earlier runs verified on this target, for the run to start from (see recon-memory.ts). */
   prior?: ReconRecall;
+  /** Retest mode: re-check these findings of earlier runs instead of exploring. */
+  retest?: readonly PriorFinding[];
   /** The target's captured logged-in session, already written into the project folder. Removed when the run ends. */
   session?: ReconSessionUse;
   /** Keeps the finished run for later ones, and says whether it could. */
@@ -368,6 +370,7 @@ export async function startRecon(o: ReconStart): Promise<ReconState> {
     sessionID: o.sessionID, scope, objective, env: o.env, profile: activeProfileName(),
     status: "running", rounds: 0, maxRounds: harness.maxRounds!, tokens: 0, budgetTokens: harness.budgetTokens!,
     gate: { allowed: 0, asked: 0, denied: 0 }, findings: [], startedAt: Date.now(),
+    ...(o.retest?.length ? { mode: "retest" as const, retests: [] } : {}),
     ...(o.session ? { session: { capturedAt: o.session.capturedAt, cookies: o.session.cookies, authorization: o.session.authorization } } : {}),
     ...(o.prior ? { memory: { runs: o.prior.runs, findings: o.prior.findings.length, paths: o.prior.paths.length, lastRun: o.prior.lastRun } } : {}),
   };
@@ -393,16 +396,18 @@ export async function startRecon(o: ReconStart): Promise<ReconState> {
     if (state.phase !== "chains") { state.rounds = runner.rounds; state.phase = "chains"; }
     state.chains = [...chains];
   };
+  const onRetest = (retests: readonly ReconRetest[]) => { state.retests = [...retests]; };
   // A path recorded during the main loop: shown at once, and the run stays in its main phase.
   const onChains = (chains: readonly ReconChain[]) => { state.chains = [...chains]; };
-  void driveRecon({ objective, scope, env: o.env, runner: seam, harness, rateLimited: () => runner.rateLimited(), onChainPass, onChains, prior: o.prior, session: o.session })
+  void driveRecon({ objective, scope, env: o.env, runner: seam, harness, rateLimited: () => runner.rateLimited(), onChainPass, onChains, prior: o.prior, session: o.session, retest: o.retest, onRetest })
     .then((result) => {
       snapshot(run); // last live numbers before the status flips
       state.status = "finished";
       state.stopped = runner.wasAborted ? "aborted" : result.stopped;
       state.findings = result.findings;
       state.chains = result.chains;
-      state.chainPass = result.chainPass;
+      if (result.retests) state.retests = result.retests;
+      else state.chainPass = result.chainPass; // a retest run has no chain pass to report on
       state.rounds = result.rounds;
       state.chainRounds = result.chainRounds;
       if (state.stopped === "error") state.error = lastError;

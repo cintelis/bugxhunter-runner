@@ -158,6 +158,11 @@ You never *lose* protection by staying in Monitor; Enforce only adds the network
     they go to the model provider. A read sent as a logged-in user can also have effects a
     logged-out one cannot (a `GET /logout`, a badly designed `GET` that changes state). Both
     are why the dialog says to use a test account.
+- **A retest changes a finding's status only on evidence.** The verifier rules on each retest; the
+  executor's own word never marks a finding fixed. The code then holds the ruling to one rule: a
+  "fixed" or "still reproducible" with no request and response attached is recorded as "cannot
+  confirm". A retest run has the same gate, scope and caps as any run, and is told to test
+  nothing but the finding in front of it.
 - **Memory is data from an earlier model run.** What a finished run verified is sealed with the
   vault key on the runner's volume and, on the next run against the same host and port, listed in
   the opening prompt. That text was written by a model about a target, so it is as trustworthy as

@@ -463,6 +463,14 @@ Nothing is kept without a vault. If the vault is locked when a run finishes, the
 memory and is written at the next unlock; a restart before that loses it. The newest 300 runs
 are kept.
 
+**Retest.** When something is remembered about the target, the start dialog offers *Retest
+only*. That run explores nothing: it takes the remembered findings one at a time, sends the
+original request again, and hands the old evidence and the new response to `recon-verify`,
+which rules *still reproducible*, *fixed* or *cannot confirm*. An error, a timeout or a
+logged-out answer is not a fix, and a ruling with no evidence is recorded as *cannot confirm*.
+What still reproduces is a finding of the retest run, with the new evidence. A finding ruled
+fixed is no longer offered to later runs, unless a later run finds it again.
+
 **Logged-in targets.** By default a run tests what answers without an account. To test behind a
 login, capture the session of a browser you logged in with yourself, so a captcha, an emailed
 code or 2FA is no obstacle:

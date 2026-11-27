@@ -138,11 +138,18 @@ export function recallFrom(runs: readonly ReconState[]): ReconRecall | undefined
   const newestFirst = [...runs].sort((a, b) => (b.finishedAt ?? b.startedAt) - (a.finishedAt ?? a.startedAt));
   const findings = new Map<string, PriorFinding>();
   const paths = new Map<string, PriorPath>();
+  // A finding a later run retested and found fixed is no longer a lead: older runs' record of it is passed over.
+  const fixed = new Set<string>();
   for (const run of newestFirst) {
     const seen = run.finishedAt ?? run.startedAt;
+    for (const r of run.retests ?? []) {
+      const key = sameFinding(r.title, r.standardId);
+      if (r.result === "fixed" && !findings.has(key)) fixed.add(key);
+    }
     for (const f of run.findings) {
       if (f.verdict === "rejected") continue;
       const key = sameFinding(f.title, f.standardId);
+      if (fixed.has(key)) continue;
       const known = findings.get(key);
       if (known) { known.runs += 1; continue; }
       findings.set(key, { title: f.title, severity: f.severity, verdict: f.verdict, standardId: f.standardId, repro: f.repro, env: f.env, seen, runs: 1 });

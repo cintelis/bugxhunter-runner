@@ -812,7 +812,7 @@ app.post("/api/agent/recon", async (req, res) => {
   try {
     const b = (req.body ?? {}) as {
       sessionID?: string; directory?: string; scope?: string; objective?: string; env?: unknown;
-      authorised?: boolean; maxRounds?: number; budgetTokens?: number; chainPass?: unknown; useMemory?: boolean; useSession?: boolean;
+      authorised?: boolean; maxRounds?: number; budgetTokens?: number; chainPass?: unknown; useMemory?: boolean; useSession?: boolean; mode?: string;
     };
     if (!b.sessionID) return res.status(400).json({ error: { message: "sessionID required" } });
     if (b.authorised !== true) return res.status(400).json({ error: { message: "Confirm that you are authorised to test this target." } });
@@ -825,6 +825,9 @@ app.post("/api/agent/recon", async (req, res) => {
         ? "The agent container has no recon agent. Rebuild or pull the agent image for this version."
         : "OpenCode has no recon agent. Restart BugXHunter." } });
     }
+    // Retest mode re-checks what is remembered about the target; with nothing remembered there is nothing to do.
+    const retest = b.mode === "retest" ? reconMemory.recall(String(b.scope ?? ""))?.findings ?? [] : undefined;
+    if (retest && !retest.length) return res.status(400).json({ error: { message: "Nothing is remembered about this target to retest (or the vault is locked)." } });
     setAnthropicAvailable(configured("anthropic"));
     // The captured session becomes two files in the project folder for this run; startRecon removes them when it ends.
     const session = b.useSession === false ? undefined : reconSession.materialise(String(b.scope ?? ""), directory);
@@ -838,7 +841,8 @@ app.post("/api/agent/recon", async (req, res) => {
       backend: await reconBackend(directory),
       log: (event, data) => audit(event, { directory, ...data }),
       // What earlier runs verified here, unless this run is to start cold. It is always kept for the next one.
-      prior: b.useMemory === false ? undefined : reconMemory.recall(String(b.scope ?? "")),
+      retest,
+      prior: retest || b.useMemory === false ? undefined : reconMemory.recall(String(b.scope ?? "")),
       remember: reconMemory.remember,
     }).catch((e) => { session?.cleanup(); throw e; }); // the run never started: do not leave the session lying in the project
     res.json({ recon: state });

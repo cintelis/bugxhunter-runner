@@ -886,6 +886,10 @@ mark.flag {
 .recon-findings .recon-title-lead::before { content: "[?] "; }
 .recon-note { margin-top: 12px; }
 .recon-from { margin-bottom: 12px; }
+.badge.retest-fixed { color: var(--green); border-color: var(--green); }
+.badge.retest-still-reproducible { color: var(--red); border-color: var(--red); }
+.badge.retest-cannot-confirm { color: var(--amber); border-color: var(--amber); }
+.recon-retest.fixed .recon-finding-title { color: var(--muted); }
 .recon-session { margin-bottom: 10px; }
 .recon-pairing { display: grid; gap: 6px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 12.5px; }
 .recon-pairing input { width: 100%; }
