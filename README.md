@@ -436,8 +436,10 @@ round after round:
    run after an error, rate limits or a stop. It spends what is left of the token budget and no
    more: once a run has two findings, the main loop leaves 15% of the budget for it.
 
-A strip above the composer shows the round, tokens, model and how many approvals the gate
-answered; the findings appear in the transcript. Gate decisions and the run's start and end go to
+A strip above the composer shows the round (or the chain pass's turn), tokens, model and how many
+approvals the gate answered. The results appear in the transcript: attack paths first, then the
+findings, each numbered and marked with the paths it is part of, then the unproven paths with the
+step each stopped at. The start dialog has a checkbox to leave the chain pass out of a run. Gate decisions and the run's start and end go to
 the audit log (`recon.gate`, `recon.started`, `recon.finished`). A run lives in the runner's
 memory: restarting the runner ends it (the session and its transcript stay).
 
