@@ -1,5 +1,5 @@
 // What the recon panel says about a run's attack paths, kept apart from the markup so it can be tested.
-import type { ReconChain, ReconMemoryTarget, ReconState } from "../../shared/agent";
+import type { ReconChain, ReconMemoryTarget, ReconSessionInfo, ReconState } from "../../shared/agent";
 
 const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
@@ -9,6 +9,24 @@ export function memorySummary(m: Pick<ReconMemoryTarget, "runs" | "findings" | "
   const parts = [count(m.runs, "earlier run"), count(m.findings, "finding")];
   if (m.paths) parts.push(count(m.paths, "attack path"));
   return `${parts.join(", ")} (last ${day(m.lastRun)})`;
+}
+
+const minute = (ms: number) => new Date(ms).toISOString().slice(0, 16).replace("T", " ") + " UTC";
+
+/** A captured session in a few words: "captured 2026-11-28 09:10 UTC: 6 cookies and the Authorization header". */
+export function sessionSummary(s: Pick<ReconSessionInfo, "capturedAt" | "cookies" | "authorization" | "firstExpiry">, now = Date.now()): string {
+  const parts = [count(s.cookies, "cookie")];
+  if (s.authorization) parts.push("the Authorization header");
+  const expiry = s.firstExpiry === undefined ? "" : s.firstExpiry <= now ? "; a cookie has expired, capture it again" : `; first cookie expires ${minute(s.firstExpiry)}`;
+  return `captured ${minute(s.capturedAt)}: ${parts.join(" and ")}${expiry}`;
+}
+
+/** One line when the run was given a logged-in session. */
+export function sessionNote(r: Pick<ReconState, "session">): string | null {
+  if (!r.session) return null;
+  const parts = [count(r.session.cookies, "cookie")];
+  if (r.session.authorization) parts.push("the Authorization header");
+  return `Tested with a logged-in session (${parts.join(" and ")}, captured ${minute(r.session.capturedAt)}).`;
 }
 
 /** One line when the run started from what earlier runs verified. */

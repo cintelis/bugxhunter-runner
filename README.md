@@ -463,6 +463,31 @@ Nothing is kept without a vault. If the vault is locked when a run finishes, the
 memory and is written at the next unlock; a restart before that loses it. The newest 300 runs
 are kept.
 
+**Logged-in targets.** By default a run tests what answers without an account. To test behind a
+login, capture the session of a browser you logged in with yourself, so a captcha, an emailed
+code or 2FA is no obstacle:
+
+1. In the start dialog, type the target and choose *capture one from your browser*. It shows a
+   pairing code and a link to download the extension (`web/public/bxh-extension`). Install it
+   once: unzip, open `chrome://extensions` in Chrome or Edge, turn on Developer mode, *Load
+   unpacked*.
+2. Open the target in a tab and log in. If the app sends a bearer token, press *Start watching
+   this site* in the extension first, so it sees the `Authorization` header.
+3. Paste the code into the extension and press *Send session to BugXHunter*. The code works
+   once, for that target, for ten minutes.
+
+The extension asks for access to a site only when you press a button on it, and sends that
+site's cookies (and the header, if seen) to your runner and nowhere else. The runner keeps the
+session encrypted with the vault key in `sessions/` beside the vault, one per target. For a run
+it is written into the project folder as a cookie jar and a header file
+(`.bugxhunter/session-…/`), and removed when the run ends. The executor is told the file
+names, not the values: the gate lets `curl` read exactly those two files on a read to the
+target, and asks if the request would print them (`-v`) or goes anywhere else. Untick the box
+to run logged out, or forget the session, in the same dialog.
+
+Use a test account. The agent's container can read those files while a run is going, and a
+`GET` sent as a logged-in user can do more than one sent as a stranger.
+
 **Models.** `RECON_PROFILE` picks a profile: `recon-open` (SCX models only), `recon-balanced`
 (GLM executor, Claude for triage, verification and escalation) or `recon-quality`. With no
 Anthropic key the default is `recon-open`, otherwise `recon-balanced`. `RECON_EXECUTOR_MODEL`,
@@ -521,6 +546,7 @@ nobody is there to unlock.
 | `OPENCODE_URL` | unset (spawn locally) | Use a remote OpenCode server (Docker sets `http://agent:4096`) |
 | `OPEN_RUNNER_RENDER_URL` | unset (diagrams off) | The render service for diagrams and `.drawio` files (Docker sets `http://render:8080`) |
 | `OPEN_RUNNER_PLAYGROUND_DIR` | `playground/` beside the vault | Saved Playground chats and canvases, sealed with the vault key |
+| `OPEN_RUNNER_SESSION_DIR` | `sessions/` beside the vault | Captured logged-in sessions for recon targets, sealed with the vault key |
 | `OPEN_RUNNER_RECON_DIR` | `recon/` beside the vault | Finished recon runs (what later runs on the same target start from), sealed with the vault key |
 | `OPEN_RUNNER_WORKSPACE` | `/workspace` (local: `~/bugxhunter/repos`) | Remote mode: projects must live under this folder. Both modes: where GitHub clones land |
 | `SCX_PROXY_TOKEN` | unset | Enables the `/scx/v1` key proxy for the sandboxed agent |

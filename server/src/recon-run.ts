@@ -23,7 +23,7 @@ import {
   driveRecon, extractReconCommand, parseTurnStatus, parseVerifierFindings, resolveHarness,
   type GateDecision, type ReconPermission, type ReconSessionRunner, type ReconTurnResult,
 } from "./recon-driver.js";
-import { activeProfileName, originOf, type EnvFidelity, type ReconChain, type ReconFinding, type ReconHarness, type ReconRecall } from "./recon.js";
+import { activeProfileName, originOf, type EnvFidelity, type ReconChain, type ReconFinding, type ReconHarness, type ReconRecall, type ReconSessionUse } from "./recon.js";
 import { httpError } from "./errors.js";
 
 /** The agent the driver prompts, and the subagent whose replies are verdicts. */
@@ -302,6 +302,8 @@ export interface ReconStart {
   log?: (event: string, data: Record<string, unknown>) => void;
   /** What earlier runs verified on this target, for the run to start from (see recon-memory.ts). */
   prior?: ReconRecall;
+  /** The target's captured logged-in session, already written into the project folder. Removed when the run ends. */
+  session?: ReconSessionUse;
   /** Keeps the finished run for later ones, and says whether it could. */
   remember?: (state: ReconState) => ReconState["kept"];
 }
@@ -366,6 +368,7 @@ export async function startRecon(o: ReconStart): Promise<ReconState> {
     sessionID: o.sessionID, scope, objective, env: o.env, profile: activeProfileName(),
     status: "running", rounds: 0, maxRounds: harness.maxRounds!, tokens: 0, budgetTokens: harness.budgetTokens!,
     gate: { allowed: 0, asked: 0, denied: 0 }, findings: [], startedAt: Date.now(),
+    ...(o.session ? { session: { capturedAt: o.session.capturedAt, cookies: o.session.cookies, authorization: o.session.authorization } } : {}),
     ...(o.prior ? { memory: { runs: o.prior.runs, findings: o.prior.findings.length, paths: o.prior.paths.length, lastRun: o.prior.lastRun } } : {}),
   };
   const run: Run = { state, runner };
@@ -392,7 +395,7 @@ export async function startRecon(o: ReconStart): Promise<ReconState> {
   };
   // A path recorded during the main loop: shown at once, and the run stays in its main phase.
   const onChains = (chains: readonly ReconChain[]) => { state.chains = [...chains]; };
-  void driveRecon({ objective, scope, env: o.env, runner: seam, harness, rateLimited: () => runner.rateLimited(), onChainPass, onChains, prior: o.prior })
+  void driveRecon({ objective, scope, env: o.env, runner: seam, harness, rateLimited: () => runner.rateLimited(), onChainPass, onChains, prior: o.prior, session: o.session })
     .then((result) => {
       snapshot(run); // last live numbers before the status flips
       state.status = "finished";
@@ -405,6 +408,7 @@ export async function startRecon(o: ReconStart): Promise<ReconState> {
       if (state.stopped === "error") state.error = lastError;
       state.finishedAt = Date.now();
       runner.close();
+      try { o.session?.cleanup(); } catch { /* the folder is gone or not ours to remove */ }
       if (o.remember) {
         try { state.kept = o.remember(state); } catch { state.kept = "off"; }
       }

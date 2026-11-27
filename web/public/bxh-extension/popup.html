@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>BugXHunter session capture</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <h1>BugXHunter session capture</h1>
+  <p id="site" class="site"></p>
+  <label for="runner">Runner address</label>
+  <input id="runner" type="text" spellcheck="false" placeholder="http://localhost:8790">
+  <label for="code">Pairing code (from the recon dialog)</label>
+  <input id="code" type="password" spellcheck="false" autocomplete="off">
+  <ol>
+    <li><button id="watch" type="button">Start watching this site</button> Optional: needed only if the app sends an Authorization header (a bearer token).</li>
+    <li>Log in here, 2FA included, and open a page that needs the login.</li>
+    <li><button id="send" type="button" class="primary">Send session to BugXHunter</button></li>
+  </ol>
+  <p id="status" role="status"></p>
+  <p class="fine">Sends this site's cookies, and its Authorization header if one was seen, to the runner address above and nowhere else. Use a test account, on a target you are authorised to test.</p>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

@@ -8,7 +8,7 @@
 import type {
   AgentEvent, AgentModel, AgentQuestion, AgentStatus, FileDiff, PendingRequests, SessionSummary, SlashCommand,
   StoredMessage, Todo, Tokens, ProjectEntry, ProjectListing, UploadResult, Workspace, WorkspaceList, ReconEnv, ReconState,
-  ReconMemoryTarget,
+  ReconMemoryTarget, ReconPairing, ReconSessionInfo,
 } from "../../shared/agent";
 export type { AgentEvent, AgentModel, AgentQuestion, AgentStatus, FileDiff, PendingRequests, SessionSummary, SlashCommand, StoredMessage, Todo, Tokens, ProjectEntry, ProjectListing, UploadResult, Workspace, WorkspaceList };
 
@@ -211,10 +211,30 @@ export async function reconStart(body: {
   chainPass?: { enabled: boolean };
   /** Whether to start from what earlier runs verified on this target (on unless turned off). */
   useMemory?: boolean;
+  /** Whether to give the run the logged-in session captured for this target (on unless turned off). */
+  useSession?: boolean;
 }): Promise<ReconState> {
   const r = await fetch("/api/agent/recon", { method: "POST", headers: json(), body: JSON.stringify(body) });
   if (!r.ok) throw new Error((await errMsg(r)) || `Could not start recon (${r.status})`);
   return (await r.json()).recon;
+}
+
+/** The logged-in session held for a target (counts and dates only), or null. */
+export async function reconSessionGet(scope: string): Promise<ReconSessionInfo | null> {
+  const r = await fetch(`/api/agent/recon/session?scope=${encodeURIComponent(scope)}`);
+  return r.ok ? ((await r.json()).session ?? null) : null;
+}
+
+export async function reconSessionForget(scope: string): Promise<void> {
+  const r = await fetch(`/api/agent/recon/session?scope=${encodeURIComponent(scope)}`, { method: "DELETE", headers: json() });
+  if (!r.ok) throw new Error((await errMsg(r)) || `Could not forget the session (${r.status})`);
+}
+
+/** A single-use pairing code for the browser extension, good for this target for ten minutes. */
+export async function reconSessionPair(scope: string): Promise<ReconPairing> {
+  const r = await fetch("/api/agent/recon/session/pair", { method: "POST", headers: json(), body: JSON.stringify({ scope }) });
+  if (!r.ok) throw new Error((await errMsg(r)) || `Could not make a pairing code (${r.status})`);
+  return r.json();
 }
 
 /** What earlier runs left behind for a target, or null (nothing, a locked vault, or not a host yet). */

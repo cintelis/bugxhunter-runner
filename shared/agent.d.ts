@@ -258,6 +258,8 @@ export interface ReconState {
   error?: string;
   startedAt: number;
   finishedAt?: number;
+  /** The captured logged-in session the run was given, if any (counts only, never values). */
+  session?: { capturedAt: number; cookies: number; authorization: boolean };
   /** What earlier runs on this target had verified, when the run started from it. */
   memory?: { runs: number; findings: number; paths: number; lastRun: number };
   /**
@@ -266,6 +268,24 @@ export interface ReconState {
    * runner restarts first). `off`: there is no vault, so nothing is kept.
    */
   kept?: "saved" | "pending" | "off";
+}
+
+/** GET /api/agent/recon/session: the logged-in session held for a target, without any value. */
+export interface ReconSessionInfo {
+  target: string;
+  capturedAt: number;
+  cookies: number;
+  /** Whether an Authorization header was captured too. */
+  authorization: boolean;
+  /** When the first cookie with an expiry runs out (ms). Absent when every cookie is a session cookie. */
+  firstExpiry?: number;
+}
+
+/** POST /api/agent/recon/session/pair: a single-use code for the browser extension. */
+export interface ReconPairing {
+  token: string;
+  target: string;
+  expiresAt: number;
 }
 
 /** GET /api/agent/recon/memory: what is remembered about one target. `target` is its host and port. */

@@ -138,6 +138,26 @@ You never *lose* protection by staying in Monitor; Enforce only adds the network
   fresh hypothesis. It is a prompt, nothing more: the step it leads to goes through the same gate
   and the same scope, and a path shown this way is ruled on by `recon-verify` and held to the
   same code rules as a path from the chain pass.
+- **A captured session is a credential, and is handled as one.**
+  - *Getting it in.* `POST /api/capture/session` is the one API route that needs no sign-in. It
+    needs a pairing code instead: 24 random bytes, issued to a signed-in person for one target,
+    kept only as a hash, good for ten minutes and for one accepted post. A capture for any other
+    host or port is refused. The extension holds no standing access: it requests a site's
+    permission when the person presses a button on that site.
+  - *What is kept.* Only cookies the browser would send to the target's host, with names and
+    values that cannot start a new line in a cookie jar or a header file. Sealed with the vault
+    key; nothing about the target is readable in the file.
+  - *What the run gets.* Two files in the project folder, in a folder of their own per run,
+    removed when the run ends (or if it fails to start). The values are never in a prompt. The
+    gate allows `curl -b <that jar>` and `curl -H @<that header file>` only under the rules a
+    read already has (GET or HEAD, exactly the in-scope origin, no redirects), so the session
+    cannot be sent to another host without a person approving it. A request that would print it
+    (`-v`) asks.
+  - *What this does not stop.* The agent's container can read the files during the run, so a
+    model that ignores its instructions could put the values in its transcript, and from there
+    they go to the model provider. A read sent as a logged-in user can also have effects a
+    logged-out one cannot (a `GET /logout`, a badly designed `GET` that changes state). Both
+    are why the dialog says to use a test account.
 - **Memory is data from an earlier model run.** What a finished run verified is sealed with the
   vault key on the runner's volume and, on the next run against the same host and port, listed in
   the opening prompt. That text was written by a model about a target, so it is as trustworthy as

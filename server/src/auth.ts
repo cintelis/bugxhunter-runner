@@ -228,6 +228,9 @@ export function mountAuth(app: express.Express, allowedHosts: Set<string>) {
   // Gate everything else under /api.
   app.use("/api", (req, res, next) => {
     if (req.path === "/health" || isAuthenticated(req)) return next();
+    // The browser extension's post: it carries a single-use pairing code in place of a sign-in
+    // (see recon-session.ts). The route checks the code; nothing else is reachable this way.
+    if (req.method === "POST" && req.path === "/capture/session") return next();
     // The header is how the browser tells our 401 apart from an upstream one
     // (e.g. SCX rejecting a key), which must not bounce it to the sign-in screen.
     res.setHeader("WWW-Authenticate", "BXH-Passkey");
