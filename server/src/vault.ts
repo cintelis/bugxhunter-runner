@@ -234,6 +234,16 @@ export function unseal(dekB64: string) {
   dek = key;
   lastUse = Date.now();
   audit("vault.unsealed", {});
+  for (const listener of unsealListeners) {
+    try { listener(); } catch { /* a listener's failure must not fail the unlock */ }
+  }
+}
+
+const unsealListeners: (() => void)[] = [];
+
+/** Run `listener` whenever the vault is unlocked: for work that had to wait for the key. */
+export function onUnsealed(listener: () => void) {
+  unsealListeners.push(listener);
 }
 
 const sealListeners: (() => void)[] = [];

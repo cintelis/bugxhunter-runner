@@ -885,6 +885,9 @@ mark.flag {
 .recon-findings .recon-title-lead { color: var(--amber); }
 .recon-findings .recon-title-lead::before { content: "[?] "; }
 .recon-note { margin-top: 12px; }
+.recon-from { margin-bottom: 12px; }
+.btn-link { background: none; border: 0; padding: 0; font: inherit; color: var(--cyan); cursor: pointer; text-decoration: underline; }
+.btn-link:disabled { color: var(--muted); cursor: default; }
 .badge.recon-id { font-family: var(--mono); color: var(--text); }
 .recon-in-paths { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
 .recon-impact { margin-top: 7px; font-size: 13px; }

@@ -669,6 +669,38 @@ export interface ReconFinding {
   env: EnvFidelity["kind"];
 }
 
+/** A finding an earlier run on the same target verified, as the next run is told about it. */
+export interface PriorFinding {
+  title: string;
+  severity: ReconFinding["severity"];
+  verdict: "real" | "config-dependent";
+  standardId?: string;
+  repro: string;
+  env: EnvFidelity["kind"];
+  /** When the newest run that verified it finished (ms). */
+  seen: number;
+  /** How many earlier runs verified it. */
+  runs: number;
+}
+
+/** An attack path an earlier run recorded. */
+export interface PriorPath {
+  title: string;
+  severity: ReconFinding["severity"];
+  status: "demonstrated" | "partial";
+  impact: string;
+  steps: string[];
+  seen: number;
+}
+
+/** What earlier runs on a target left behind: where the next run starts from. */
+export interface ReconRecall {
+  runs: number;
+  lastRun: number;
+  findings: PriorFinding[];
+  paths: PriorPath[];
+}
+
 /** One step of an attack path: what was done, and the request and response that show it. */
 export interface ReconChainStep {
   action: string;

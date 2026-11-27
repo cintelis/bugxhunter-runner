@@ -445,8 +445,23 @@ A strip above the composer shows the round (or the chain pass's turn), tokens, m
 approvals the gate answered. The results appear in the transcript: attack paths first, then the
 findings, each numbered and marked with the paths it is part of, then the unproven paths with the
 step each stopped at. The start dialog has a checkbox to leave the chain pass out of a run. Gate decisions and the run's start and end go to
-the audit log (`recon.gate`, `recon.started`, `recon.finished`). A run lives in the runner's
+the audit log (`recon.gate`, `recon.started`, `recon.finished`). A run that is still going lives in the runner's
 memory: restarting the runner ends it (the session and its transcript stay).
+
+**Memory.** A finished run is kept, encrypted with the vault key, in `recon/` beside the vault
+(Docker: the `runner-data` volume, which the agent container cannot read). Only an id and the
+finish time are in the clear. Two things use it:
+
+- The next run on the same host and port starts from what earlier runs verified there. The
+  opening prompt lists those findings and attack paths as leads: the executor re-tests each with
+  one probe, and one counts again only after `recon-verify` has ruled on the new evidence. The
+  start dialog shows what is remembered about the target you typed, with a checkbox to start
+  cold and a link to forget that target.
+- A session shows its last finished run again after the runner restarts.
+
+Nothing is kept without a vault. If the vault is locked when a run finishes, the run waits in
+memory and is written at the next unlock; a restart before that loses it. The newest 300 runs
+are kept.
 
 **Models.** `RECON_PROFILE` picks a profile: `recon-open` (SCX models only), `recon-balanced`
 (GLM executor, Claude for triage, verification and escalation) or `recon-quality`. With no
@@ -506,6 +521,7 @@ nobody is there to unlock.
 | `OPENCODE_URL` | unset (spawn locally) | Use a remote OpenCode server (Docker sets `http://agent:4096`) |
 | `OPEN_RUNNER_RENDER_URL` | unset (diagrams off) | The render service for diagrams and `.drawio` files (Docker sets `http://render:8080`) |
 | `OPEN_RUNNER_PLAYGROUND_DIR` | `playground/` beside the vault | Saved Playground chats and canvases, sealed with the vault key |
+| `OPEN_RUNNER_RECON_DIR` | `recon/` beside the vault | Finished recon runs (what later runs on the same target start from), sealed with the vault key |
 | `OPEN_RUNNER_WORKSPACE` | `/workspace` (local: `~/bugxhunter/repos`) | Remote mode: projects must live under this folder. Both modes: where GitHub clones land |
 | `SCX_PROXY_TOKEN` | unset | Enables the `/scx/v1` key proxy for the sandboxed agent |
 | `RECON_PROFILE` | `recon-balanced` (`recon-open` without an Anthropic key) | Model profile for [supervised recon](#supervised-recon); `RECON_PROFILES_FILE` adds your own (JSON) |

@@ -258,6 +258,23 @@ export interface ReconState {
   error?: string;
   startedAt: number;
   finishedAt?: number;
+  /** What earlier runs on this target had verified, when the run started from it. */
+  memory?: { runs: number; findings: number; paths: number; lastRun: number };
+  /**
+   * Whether the finished run is kept for later ones. `saved`: written, encrypted with the vault
+   * key. `pending`: the vault was locked, so it is written at the next unlock (and lost if the
+   * runner restarts first). `off`: there is no vault, so nothing is kept.
+   */
+  kept?: "saved" | "pending" | "off";
+}
+
+/** GET /api/agent/recon/memory: what is remembered about one target. `target` is its host and port. */
+export interface ReconMemoryTarget {
+  target: string;
+  runs: number;
+  findings: number;
+  paths: number;
+  lastRun: number;
 }
 
 /** A folder under the workspace root (shared/agent.d.ts; server/src/workspaces.ts). */

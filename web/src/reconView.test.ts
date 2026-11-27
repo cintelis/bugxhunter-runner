@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chainPassNote, pathsUsing, progressLabel, splitPaths, stoppedAt } from "./reconView";
+import { chainPassNote, keptNote, memoryNote, memorySummary, pathsUsing, progressLabel, splitPaths, stoppedAt } from "./reconView";
 import type { ReconChain } from "../../shared/agent";
 
 const chain = (over: Partial<ReconChain> = {}): ReconChain => ({
@@ -67,5 +67,24 @@ describe("chainPassNote", () => {
     expect(note("few-findings")).toBe("No further attack paths were looked for: it takes at least two findings to combine.");
     expect(note("off")).toContain("No further attack paths");
     expect(note("no-paths")).toContain("no other combination was proposed");
+  });
+});
+
+describe("memory notes", () => {
+  const memory = { runs: 2, findings: 5, paths: 1, lastRun: Date.UTC(2026, 10, 20) };
+
+  it("sums up what is remembered about a target", () => {
+    expect(memorySummary(memory)).toBe("2 earlier runs, 5 findings, 1 attack path (last 2026-11-20)");
+    expect(memorySummary({ ...memory, runs: 1, findings: 1, paths: 0 })).toBe("1 earlier run, 1 finding (last 2026-11-20)");
+  });
+
+  it("says when a run started from memory, and when it was not kept", () => {
+    expect(memoryNote({})).toBeNull();
+    expect(memoryNote({ memory })).toContain("Started from 2 earlier runs");
+    expect(keptNote({ status: "running", kept: undefined })).toBeNull();
+    expect(keptNote({ status: "finished", kept: "saved" })).toBeNull();
+    expect(keptNote({ status: "finished", kept: undefined })).toBeNull();
+    expect(keptNote({ status: "finished", kept: "pending" })).toContain("vault is locked");
+    expect(keptNote({ status: "finished", kept: "off" })).toContain("needs the vault");
   });
 });

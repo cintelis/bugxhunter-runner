@@ -8,6 +8,7 @@
 import type {
   AgentEvent, AgentModel, AgentQuestion, AgentStatus, FileDiff, PendingRequests, SessionSummary, SlashCommand,
   StoredMessage, Todo, Tokens, ProjectEntry, ProjectListing, UploadResult, Workspace, WorkspaceList, ReconEnv, ReconState,
+  ReconMemoryTarget,
 } from "../../shared/agent";
 export type { AgentEvent, AgentModel, AgentQuestion, AgentStatus, FileDiff, PendingRequests, SessionSummary, SlashCommand, StoredMessage, Todo, Tokens, ProjectEntry, ProjectListing, UploadResult, Workspace, WorkspaceList };
 
@@ -208,10 +209,24 @@ export async function reconStart(body: {
   sessionID: string; directory: string; scope: string; objective: string; env: ReconEnv; authorised: true;
   /** Whether to look for attack paths once the main loop ends (on unless turned off). */
   chainPass?: { enabled: boolean };
+  /** Whether to start from what earlier runs verified on this target (on unless turned off). */
+  useMemory?: boolean;
 }): Promise<ReconState> {
   const r = await fetch("/api/agent/recon", { method: "POST", headers: json(), body: JSON.stringify(body) });
   if (!r.ok) throw new Error((await errMsg(r)) || `Could not start recon (${r.status})`);
   return (await r.json()).recon;
+}
+
+/** What earlier runs left behind for a target, or null (nothing, a locked vault, or not a host yet). */
+export async function reconMemoryGet(scope: string): Promise<ReconMemoryTarget | null> {
+  const r = await fetch(`/api/agent/recon/memory?scope=${encodeURIComponent(scope)}`);
+  return r.ok ? ((await r.json()).memory ?? null) : null;
+}
+
+/** Forget every earlier run on a target. */
+export async function reconMemoryForget(scope: string): Promise<void> {
+  const r = await fetch(`/api/agent/recon/memory?scope=${encodeURIComponent(scope)}`, { method: "DELETE", headers: json() });
+  if (!r.ok) throw new Error((await errMsg(r)) || `Could not forget this target (${r.status})`);
 }
 
 /** The recon run on a session, if there is one (running or finished). */
