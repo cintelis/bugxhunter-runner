@@ -336,7 +336,8 @@ app.get("/api/models", async (_req, res) => {
  * Otherwise returns the full completion JSON.
  */
 app.post("/api/chat", async (req, res) => {
-  const { rag, ragTopK, ...params } = req.body as ChatParams & { rag?: boolean; ragTopK?: number };
+  // `turnContext` is the runner's own field (set below for Claude): one sent by the browser is dropped.
+  const { rag, ragTopK, turnContext: _dropped, ...params } = req.body as ChatParams & { rag?: boolean; ragTopK?: number };
   let retrieved: { text: string; score: number; doc: string }[] = [];
   try {
     const { client, model, provider } = clientFor(String(params.model ?? ""));

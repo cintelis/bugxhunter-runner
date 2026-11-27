@@ -328,7 +328,9 @@ Things that differ from the OpenAI-style providers:
   can lift cyber-category declines.
 - **Prompt caching** is on, so repeated history in a long chat is billed at the cached rate, and
   chats that share a preset share its cached system prompt. Each reply's token line shows it:
-  `9340 in (9000 cached, 300 written)`. Entries last five minutes from their last use. Knowledge-base
+  `9340 in (9000 cached, 300 written)`. Entries last an hour from their last use, so a pause to read a
+  long reply does not lose them (`ANTHROPIC_CACHE_TTL=5m` for five minutes, which is cheaper to write:
+  1.25 times the input price against 2). Knowledge-base
   passages are sent with the question, not in the system prompt, so they do not reset the cache.
   Changing the system prompt, the tools or JSON mode mid-chat does.
 
@@ -463,6 +465,7 @@ nobody is there to unlock.
 | `ANTHROPIC_API_KEY_FILE` | unset | A file holding the Anthropic key, as `SCX_API_FILE` |
 | `ANTHROPIC_API_KEY` | the vault, else unset | Anthropic key in the clear; prefer the vault item of the same name |
 | `ANTHROPIC_MODELS` | `claude-opus-5-5,claude-sonnet-5-5,claude-haiku-5-5` | Claude model ids in the agent's picker (local mode; Docker: `docker/opencode.json`) |
+| `ANTHROPIC_CACHE_TTL` | `1h` | `1h` or `5m`: how long a Playground chat's cached Claude prompt lasts after its last use. An hour costs 2 times the input price to write, five minutes 1.25 times |
 | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1` | Anthropic endpoint |
 | `BEDROCK_REGION` | `AWS_REGION`, else `us-east-1` | AWS region whose Bedrock endpoint is called |
 | `BEDROCK_MODELS` | `global.zai.glm-5.3` | Comma list of Bedrock model or inference-profile ids (Docker: set it to show them in the agent's picker) |

@@ -21,7 +21,8 @@
  *    conversation is cached up to its last turn, so history is not billed in full on
  *    every turn. Knowledge-base passages change every turn, so they go after the last
  *    breakpoint, never into the system prompt. What was read and written is reported
- *    in `usage.prompt_tokens_details`.
+ *    in `usage.prompt_tokens_details`. Entries last an hour from their last use
+ *    (ANTHROPIC_CACHE_TTL=5m for five minutes).
  *
  * The agent does not use this module: OpenCode talks to Claude natively, through
  * the runner's key-injecting proxy (see index.ts and providers.ts).
@@ -48,7 +49,22 @@ const FALLBACK_BETA = "server-side-fallback-2026-07-01";
 /** Image types the Messages API accepts. */
 const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 
-const CACHE = { type: "ephemeral" as const };
+/**
+ * ANTHROPIC_CACHE_TTL as a cache lifetime: "1h" (the default) or "5m". Throws on anything else.
+ * An entry's time runs from its last use. One hour costs twice the input price to write, five
+ * minutes 1.25 times; a read costs a fraction either way. A person reading a long reply often
+ * takes more than five minutes, and an entry that has lapsed is written again in full, so the
+ * Playground defaults to the hour.
+ */
+export function readCacheTtl(value: string | undefined): "5m" | "1h" {
+  const v = value?.trim().toLowerCase();
+  if (!v) return "1h";
+  if (v !== "5m" && v !== "1h") throw new Error(`ANTHROPIC_CACHE_TTL: "${value}" is not 5m or 1h.`);
+  return v;
+}
+
+/** Every breakpoint in a request carries the same lifetime (a longer one may not follow a shorter one). */
+const CACHE = { type: "ephemeral" as const, ttl: readCacheTtl(process.env.ANTHROPIC_CACHE_TTL) };
 
 const JSON_ONLY = "Reply with one valid JSON object and nothing else: no prose before or after it, no code fences.";
 

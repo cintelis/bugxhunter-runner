@@ -43,6 +43,7 @@ services:
       # (ANTHROPIC_API_KEY) or here; ANTHROPIC_MODELS lists the ids the agent's picker shows.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_MODELS: ${ANTHROPIC_MODELS:-}
+      ANTHROPIC_CACHE_TTL: ${ANTHROPIC_CACHE_TTL:-}   # 1h (default) or 5m: how long a Playground chat's cached prompt lasts
       # Optional: models on Amazon Bedrock, called directly (GLM 5.3 by default). Sign in
       # with ONE of these (see "Amazon Bedrock" in the README):
       #  - an AWS profile: mount your ~/.aws read-only (the volume below) and name the
