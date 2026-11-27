@@ -242,8 +242,19 @@ export interface ReconState {
   /** Approvals the gate answered itself (allowed, denied) and left for the person (asked). */
   gate: { allowed: number; asked: number; denied: number };
   findings: ReconFinding[];
+  /** "chains" once the chain pass has started: the main loop is over and the findings are being combined into attack paths. */
+  phase?: "chains";
   /** Attack paths from the chain pass that follows the main loop. Empty until that pass runs. */
   chains?: ReconChain[];
+  /**
+   * How the chain pass went, once the run has finished. `ran`: paths were proposed and tried.
+   * Not run: `off`, `skipped` (the main loop ended on an error, rate limits or a stop),
+   * `few-findings` (fewer than two), `budget`, `no-paths` (nothing proposed builds on a finding),
+   * `rate-limited`. `error`: a turn of the pass failed; what it had recorded is kept.
+   */
+  chainPass?: "ran" | "off" | "skipped" | "few-findings" | "budget" | "no-paths" | "rate-limited" | "error";
+  /** Turns the chain pass took. They are not counted in `rounds`, which `maxRounds` caps. */
+  chainRounds?: number;
   error?: string;
   startedAt: number;
   finishedAt?: number;

@@ -19,7 +19,7 @@
  */
 
 import {
-  routeModel, harnessFor, classifyCommand, commandHazard, allCapped, originOf, escalateAfter, STATUS_LINE,
+  routeModel, harnessFor, classifyCommand, commandHazard, allCapped, originOf, escalateAfter, resolveChainPass, STATUS_LINE,
   type ReconFinding, type ReconChain, type ReconChainStep, type ChainCandidate,
   type EnvFidelity, type ReconHarness, type RouteSignals, type GateContext,
 } from "./recon.js";
@@ -110,6 +110,8 @@ export function extractReconCommand(raw: unknown): string | undefined {
 export class ReconRun {
   spentTokens = 0;
   rounds = 0;
+  /** Turns the chain pass took (not counted in `rounds`, which caps the main loop). */
+  chainRounds = 0;
   /** Consecutive turns the executor reported stuck — the escalation signal. */
   attempts = 0;
   readonly findings: ReconFinding[] = [];
@@ -148,7 +150,18 @@ export class ReconRun {
   budgetRemaining(): number | undefined {
     return this.harness.budgetTokens === undefined ? undefined : Math.max(0, this.harness.budgetTokens - this.spentTokens);
   }
-  outOfBudget(): boolean { const r = this.budgetRemaining(); return r !== undefined && r <= 0; }
+  /** Is the budget spent, counting `reserve` tokens as already gone (the main loop leaves them for the chain pass)? */
+  outOfBudget(reserve = 0): boolean { const r = this.budgetRemaining(); return r !== undefined && r - reserve <= 0; }
+  /**
+   * Tokens the main loop leaves for the chain pass: a share of the budget, held back only
+   * once the run has the two findings the pass needs. Without them there will be no pass,
+   * and the main loop may spend the whole budget as before.
+   */
+  chainReserve(): number {
+    const c = resolveChainPass(this.harness.chainPass);
+    if (!c.enabled || this.findings.length < 2 || this.harness.budgetTokens === undefined) return 0;
+    return Math.floor(this.harness.budgetTokens * c.reservePercent / 100);
+  }
   outOfRounds(): boolean { return this.harness.maxRounds !== undefined && this.rounds >= this.harness.maxRounds; }
 
   /** The worst severity seen so far, for the escalation signal. */
@@ -178,6 +191,10 @@ export interface ReconTurnResult {
   stuck?: boolean;
   /** The executor reports the in-scope surface is exhausted — stop cleanly. */
   done?: boolean;
+  /** What the executor wrote this turn (the chain pass reads the proposed paths from it). */
+  text?: string;
+  /** The verifier's replies this turn, as written (the chain pass reads its verdicts on paths from them). */
+  verifierOutputs?: string[];
 }
 
 /** The OpenCode-facing seam. The server implements this; the loop stays pure. */
@@ -199,13 +216,26 @@ export interface ReconDriverOptions {
   rateLimited?: () => Partial<Record<string, boolean>>;
   /** Override the run caps; defaults to the executor role's profile harness. */
   harness?: ReconHarness;
+  /** Called when the chain pass starts, and again each time it records a path. */
+  onChainPass?: (chains: readonly ReconChain[]) => void;
 }
+
+/**
+ * How the chain pass went. `ran`: paths were proposed and tried. Not run: `off` (turned off),
+ * `skipped` (the main loop ended on an error or on rate limits), `few-findings` (fewer than
+ * two), `budget` (no tokens left), `no-paths` (nothing was proposed that builds on a finding),
+ * `rate-limited`. `error`: it started and a turn failed; what it had recorded is kept.
+ */
+export type ChainPassOutcome = "ran" | "off" | "skipped" | "few-findings" | "budget" | "no-paths" | "rate-limited" | "error";
 
 export interface ReconRunResult {
   findings: ReconFinding[];
   /** Attack paths from the chain pass (none until the pass runs). */
   chains: ReconChain[];
+  chainPass: ChainPassOutcome;
+  /** Rounds of the main loop. The chain pass's turns are counted apart, in `chainRounds`. */
   rounds: number;
+  chainRounds: number;
   tokens: number;
   stopped: "done" | "idle" | "budget" | "rounds" | "stuck" | "rate-limited" | "error";
 }
@@ -421,16 +451,117 @@ export function parseVerifierChains(text: string, env: EnvFidelity["kind"], find
   return out;
 }
 
+/* ─────────────── the chain pass ─────────────── */
+
+const clipLine = (t: string, n: number) => { const one = t.replace(/\s+/g, " ").trim(); return one.length > n ? one.slice(0, n) + "…" : one; };
+const findingLine = (f: ReconFinding) => `${f.id} [${f.severity}${f.verdict === "config-dependent" ? ", config-dependent" : ""}] ${clipLine(f.title, 160)}: ${clipLine(f.repro, 300)}`;
+
+/** The proposal turn: no tools, just which of the verified findings combine. */
+export function buildChainProposalPrompt(findings: readonly ReconFinding[], max: number): string {
+  return [
+    "CHAIN PASS. The assessment loop has ended. Do not run any tool in this turn.",
+    `Verified findings of this run:\n${findings.map(findingLine).join("\n")}`,
+    `From these, and from anything you observed during this run, propose up to ${max} attack paths: sequences in which what one step returns is what the next step needs, and which reach something worse than any single finding does. Stay inside the declared scope. Every path must build on at least one finding above, named by its id. Put the most valuable path first. If nothing combines, say so and give an empty list.`,
+    'Output one fenced json block and nothing after it: {"paths": [{"title": "short name", "goal": "what the attacker ends up with", "links": ["F1", "F3"], "steps": ["step 1", "step 2"], "unproven": the number of the step you are least sure of, or null}]}.',
+  ].join("\n\n");
+}
+
+/** The first turn on one path: show it end to end, then have the verifier rule on it. */
+export function buildChainDemoPrompt(c: ChainCandidate, n: number, of: number, findings: readonly ReconFinding[]): string {
+  const used = findings.filter((f) => f.id && c.links.includes(f.id));
+  return [
+    `ATTACK PATH ${n} of ${of}: ${c.title}`,
+    `Goal: ${c.goal}`,
+    `Builds on:\n${used.map(findingLine).join("\n")}`,
+    `Steps as proposed:\n${c.steps.map((s, i) => `${i + 1}. ${s}`).join("\n")}${c.unproven ? `\nStep ${c.unproven} is the one that has not been shown.` : ""}`,
+    "Show this path end to end against the target, inside the same scope. Run each step with the smallest probe that settles it, using what the step before returned. Test nothing that is not on this path. Read-only probes run freely; a step that changes state pauses for human approval, and if it is declined the path stops there.",
+    "Then hand the whole path to recon-verify as an ATTACK PATH: for each step the request or command and the response, the finding ids it builds on, and what the attacker ends up with. If a step could not be shown, hand it over all the same and say which step and why: it is recorded as partial. Do not promote the path yourself.",
+    `End your turn with one final line: "${STATUS_LINE}: done" once the verifier has ruled on this path, "${STATUS_LINE}: continue" if it needs more probes, "${STATUS_LINE}: stuck" if it cannot be shown.`,
+  ].join("\n\n");
+}
+
+export const CHAIN_CONTINUE =
+  `Continue with this attack path only: run the next step, then hand the whole path to recon-verify as an ATTACK PATH. End with "${STATUS_LINE}: done" once the verifier has ruled, "${STATUS_LINE}: continue" or "${STATUS_LINE}: stuck".`;
+
+/** A proposed path nothing ruled on, kept as a lead: partial, rated as the worst finding it builds on. */
+function leadFrom(c: ChainCandidate, findings: readonly ReconFinding[], env: EnvFidelity["kind"], why: string): ReconChain {
+  const used = findings.filter((f) => f.id && c.links.includes(f.id));
+  return applyChainRules({
+    title: c.title, impact: c.goal, links: c.links, env,
+    severity: worstSeverity(used) ?? "low", verdict: "real",
+    steps: c.steps.map((action) => ({ action })),
+    status: "partial", blockedWhy: why,
+    ...(c.unproven ? { blockedAt: c.unproven } : {}),
+  }, findings);
+}
+
 /**
- * Drive one supervised recon run to completion. Pure control flow over the
- * injected runner: route (and escalate) the executor model each round, run a
- * turn under the gate, fold in usage and findings, and stop on done / idle /
- * budget / rounds. The harness for the executor role supplies the caps.
+ * The chain pass: one turn to propose attack paths from the verified findings, then a few
+ * turns on each to show it and have the verifier rule. Same runner, same gate and same
+ * scope as the main loop; the pass can spend what is left of the token budget and no more.
+ * A path the verifier did not rule on is kept as a partial lead that says why.
  */
-export async function driveRecon(opts: ReconDriverOptions): Promise<ReconRunResult> {
-  const run = new ReconRun(resolveHarness(opts.harness));
-  const { host: scopeHost, port: scopePort } = originOf(opts.scope);
-  const gate = (p: ReconPermission) => reconGateDecision(p, { scopeHost, scopePort });
+async function driveChainPass(run: ReconRun, opts: ReconDriverOptions, gate: (p: ReconPermission) => GateDecision, harness: ReconHarness): Promise<ChainPassOutcome> {
+  const cfg = resolveChainPass(harness.chainPass);
+  if (!cfg.enabled) return "off";
+  if (run.findings.length < 2) return "few-findings";
+  if (run.outOfBudget()) return "budget";
+  const env = opts.env.kind;
+  const signals = (severityHint?: Severity) => run.signals({ rateLimited: opts.rateLimited?.(), severityHint });
+  const record = (chains: readonly ReconChain[]) => { run.addChains(chains); opts.onChainPass?.(run.chains); };
+  const turn = async (prompt: string, model: string) => {
+    const res = await opts.runner.runTurn({ prompt, model, gate });
+    run.chainRounds += 1;
+    run.recordUsage(res.tokensUsed);
+    run.addFindings(res.findings); // a new finding met on the way is kept like any other
+    return res;
+  };
+
+  if (allCapped(signals())) return "rate-limited";
+  opts.onChainPass?.(run.chains);
+  let candidates: ChainCandidate[];
+  try {
+    const res = await turn(buildChainProposalPrompt(run.findings, cfg.maxCandidates), routeModel("escalate", signals()));
+    candidates = parseChainProposal(res.text ?? "", run.findings, cfg.maxCandidates);
+  } catch {
+    return "error";
+  }
+  if (!candidates.length) return "no-paths";
+
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i];
+    const rest = (why: string) => record(candidates.slice(i).map((x) => leadFrom(x, run.findings, env, why)));
+    if (run.outOfBudget()) { rest("not tried: the token budget was spent"); return "ran"; }
+    run.resetAttempts();
+    // A path through a High or Critical finding gets the escalation model, as such a finding does in the main loop.
+    const grave = worstSeverity(run.findings.filter((f) => f.id && c.links.includes(f.id)));
+    let prompt = buildChainDemoPrompt(c, i + 1, candidates.length, run.findings);
+    let ruled = false, why = `not shown within ${cfg.maxRoundsPerChain} rounds`;
+    for (let round = 0; round < cfg.maxRoundsPerChain; round++) {
+      if (run.outOfBudget()) { why = "not shown: the token budget was spent"; break; }
+      const s = signals(grave);
+      if (allCapped(s)) { rest("not tried: every model was rate-limited"); return "rate-limited"; }
+      let res: ReconTurnResult;
+      try {
+        res = await turn(prompt, routeModel("executor", s));
+      } catch {
+        rest("not tried: the run stopped");
+        return "error";
+      }
+      const chains = (res.verifierOutputs ?? []).flatMap((out) => parseVerifierChains(out, env, run.findings));
+      if (chains.length) { record(chains); ruled = true; break; }
+      if (res.stuck) { run.recordStuck(); why = "the executor could not show it"; break; }
+      if (res.done) { why = "the verifier did not rule on it"; break; }
+      if (!res.madeProgress) { why = "the executor made no progress on it"; break; }
+      prompt = CHAIN_CONTINUE;
+    }
+    if (!ruled) record([leadFrom(c, run.findings, env, why)]);
+  }
+  return "ran";
+}
+
+/** The main loop: route the executor each round, run a turn under the gate, stop on done / idle / a cap. */
+async function driveMainLoop(run: ReconRun, opts: ReconDriverOptions, gate: (p: ReconPermission) => GateDecision): Promise<ReconRunResult["stopped"]> {
   const maxStuck = escalateAfter() + 2; // give escalation a chance before giving up
   let prompt = buildReconKickoff(opts);
   // One-shot: the worst severity found LAST turn informs THIS turn's routing, then clears.
@@ -439,14 +570,14 @@ export async function driveRecon(opts: ReconDriverOptions): Promise<ReconRunResu
   for (;;) {
     const signals = run.signals({ rateLimited: opts.rateLimited?.(), severityHint });
     // Every model is rate-limited — back off rather than thrash (H4).
-    if (allCapped(signals)) return finish(run, "rate-limited");
+    if (allCapped(signals)) return "rate-limited";
 
     const model = routeModel("executor", signals);
     let res: ReconTurnResult;
     try {
       res = await opts.runner.runTurn({ prompt, model, gate });
     } catch {
-      return finish(run, "error"); // keep the findings gathered so far (M2)
+      return "error"; // keep the findings gathered so far (M2)
     }
 
     run.recordRound();
@@ -455,16 +586,30 @@ export async function driveRecon(opts: ReconDriverOptions): Promise<ReconRunResu
     severityHint = worstSeverity(res.findings);
     if (res.stuck) run.recordStuck(); else run.resetAttempts();
 
-    if (res.done) return finish(run, "done");                       // a clean finish wins over the caps
-    if (run.outOfBudget()) return finish(run, "budget");
-    if (run.outOfRounds()) return finish(run, "rounds");
-    if (run.attempts >= maxStuck) return finish(run, "stuck");      // persistently stuck, even escalated (H3)
-    if (!res.madeProgress && !res.stuck) return finish(run, "idle"); // surface spent
+    if (res.done) return "done";                                    // a clean finish wins over the caps
+    if (run.outOfBudget(run.chainReserve())) return "budget";       // what is held back is for the chain pass
+    if (run.outOfRounds()) return "rounds";
+    if (run.attempts >= maxStuck) return "stuck";                   // persistently stuck, even escalated (H3)
+    if (!res.madeProgress && !res.stuck) return "idle";             // surface spent
 
     prompt = RECON_CONTINUE;
   }
 }
 
-function finish(run: ReconRun, stopped: ReconRunResult["stopped"]): ReconRunResult {
-  return { findings: run.findings, chains: run.chains, rounds: run.rounds, tokens: run.spentTokens, stopped };
+/**
+ * Drive one supervised recon run to completion. Pure control flow over the
+ * injected runner: the main loop (route and escalate the executor model each
+ * round, run a turn under the gate, fold in usage and findings, stop on done /
+ * idle / budget / rounds), then the chain pass over what it found. The harness
+ * for the executor role supplies the caps.
+ */
+export async function driveRecon(opts: ReconDriverOptions): Promise<ReconRunResult> {
+  const harness = resolveHarness(opts.harness);
+  const run = new ReconRun(harness);
+  const { host: scopeHost, port: scopePort } = originOf(opts.scope);
+  const gate = (p: ReconPermission) => reconGateDecision(p, { scopeHost, scopePort });
+  const stopped = await driveMainLoop(run, opts, gate);
+  // An error (which is also how a stop by the person arrives) or rate limits end the run: no pass.
+  const chainPass = stopped === "error" || stopped === "rate-limited" ? "skipped" : await driveChainPass(run, opts, gate, harness);
+  return { findings: run.findings, chains: run.chains, chainPass, rounds: run.rounds, chainRounds: run.chainRounds, tokens: run.spentTokens, stopped };
 }

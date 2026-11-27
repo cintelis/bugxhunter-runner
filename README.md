@@ -424,6 +424,17 @@ round after round:
 4. **Stop.** The run ends when the executor reports the surface exhausted, a round finds nothing
    new, the round or token cap is reached, it stays stuck after escalating, every model is
    rate-limited, a round fails, or you press stop.
+5. **Chain.** When the loop ends with two or more findings, a chain pass tries to combine them
+   into attack paths. One turn on the escalation model proposes up to three paths, each naming the
+   findings it builds on (`F1`, `F2`, …). The executor then has up to three rounds per path to
+   show it end to end, under the same gate and scope, and hands it to `recon-verify`, which
+   rejects a path unless every step has its evidence and each step used what the one before
+   returned. A path that holds is recorded as *demonstrated*, rated on what the attacker ends up
+   with and never below the worst finding it uses; it is config-dependent if any of those is. A
+   path that stops (a write you declined, a step that did not work, the rounds running out) is
+   recorded as *partial*, with the step and the reason: a lead, not a finding. The pass does not
+   run after an error, rate limits or a stop. It spends what is left of the token budget and no
+   more: once a run has two findings, the main loop leaves 15% of the budget for it.
 
 A strip above the composer shows the round, tokens, model and how many approvals the gate
 answered; the findings appear in the transcript. Gate decisions and the run's start and end go to
