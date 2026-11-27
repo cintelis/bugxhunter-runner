@@ -244,7 +244,7 @@ export interface ReconState {
   findings: ReconFinding[];
   /** "chains" once the chain pass has started: the main loop is over and the findings are being combined into attack paths. */
   phase?: "chains";
-  /** Attack paths from the chain pass that follows the main loop. Empty until that pass runs. */
+  /** Attack paths: the ones the executor showed while following a finding up in the main loop, then the chain pass's. */
   chains?: ReconChain[];
   /**
    * How the chain pass went, once the run has finished. `ran`: paths were proposed and tried.
