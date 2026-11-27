@@ -23,6 +23,7 @@ import { VAULT_FILE, isInitialised, isUnsealed, openData, sealData } from "./vau
 import { httpError } from "./errors.js";
 import { audit } from "./audit.js";
 import { originOf, type ReconSessionUse } from "./recon.js";
+import { isInside, projectPath } from "./opencode.js";
 
 const dir = () => process.env.OPEN_RUNNER_SESSION_DIR ?? path.join(path.dirname(VAULT_FILE), "sessions");
 
@@ -247,11 +248,17 @@ export function materialise(scope: string, directory: string, now = Date.now()):
 
   // One folder per run, so two runs in the same project never share or remove each other's files.
   const rel = `${SESSION_FOLDER}/session-${crypto.randomBytes(4).toString("hex")}`;
-  const folder = path.join(directory, ...rel.split("/"));
+  const root = projectPath(directory, "", "dir"); // the project folder itself, symlinks resolved
+  const folder = path.join(root, ...rel.split("/"));
   fs.mkdirSync(folder, { recursive: true });
-  // Keeps the folder out of the project's changes and commits.
-  const ignore = path.join(path.dirname(folder), ".gitignore");
-  if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, "*\n");
+  // The project's contents are the agent's to change: if .bugxhunter was made a link to somewhere
+  // else, the session must not follow it out of the project.
+  if (!isInside(fs.realpathSync(folder), root)) {
+    audit("recon.session.refused", { reason: "folder" });
+    throw httpError(400, "The project's .bugxhunter folder points outside the project. Remove it and start again.");
+  }
+  // Keeps the folder out of the project's changes and commits. Never replaces one that is there.
+  try { fs.writeFileSync(path.join(path.dirname(folder), ".gitignore"), "*\n", { flag: "wx" }); } catch { /* already there */ }
   const use: ReconSessionUse = { capturedAt: s.capturedAt, cookies: live.length, authorization: Boolean(s.authorization), cleanup: () => fs.rmSync(folder, { recursive: true, force: true }) };
   if (live.length) {
     fs.writeFileSync(path.join(folder, "cookies.txt"), cookieJar(live, now), { mode: 0o600 });

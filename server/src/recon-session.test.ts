@@ -164,6 +164,21 @@ describe("handing the session to a run", () => {
     expect(sessions.materialise(SCOPE, project, NOW + 60_000)).toBeUndefined();
   });
 
+  it("refuses to follow a .bugxhunter link out of the project", () => {
+    setUpVault();
+    sessions.redeem(sessions.issuePairing(SCOPE, NOW).token, capture(), NOW);
+    const outside = path.join(dir, "outside");
+    fs.mkdirSync(outside);
+    try {
+      fs.symlinkSync(outside, path.join(project, ".bugxhunter"), "junction");
+    } catch {
+      return; // no way to make a link here: nothing to test
+    }
+    expect(() => sessions.materialise(SCOPE, project, NOW)).toThrow(/outside the project/);
+    const written = fs.readdirSync(outside).flatMap((d) => fs.readdirSync(path.join(outside, d)));
+    expect(written).toEqual([]); // no session file was written there
+  });
+
   it("is named in the kickoff, never quoted", () => {
     const base = { objective: "o", scope: SCOPE, env: { kind: "staging" as const, divergences: "seed data" } };
     expect(buildReconKickoff(base)).not.toContain("LOGGED-IN SESSION");
