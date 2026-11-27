@@ -59,8 +59,8 @@ export function markRetired(id: string) {
   const s = load();
   if (s.retired.has(id)) return;
   s.retired.set(id, new Date().toISOString());
-  // The id can come from a request: no line breaks or control characters in the log.
-  console.log(`[nvidia] ${id.replace(/[^ -~]/g, "?")} answers 404, hiding it from the Playground`);
+  // The id can come from a request: quoted and escaped, so it cannot break the log line.
+  console.log(`[nvidia] ${JSON.stringify(id)} answers 404, hiding it from the Playground`);
   save();
 }
 
