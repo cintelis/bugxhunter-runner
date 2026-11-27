@@ -23,7 +23,7 @@ import {
   driveRecon, extractReconCommand, parseTurnStatus, parseVerifierFindings, resolveHarness,
   type GateDecision, type ReconPermission, type ReconSessionRunner, type ReconTurnResult,
 } from "./recon-driver.js";
-import { activeProfileName, originOf, type EnvFidelity, type ReconChain, type ReconFinding, type ReconHarness } from "./recon.js";
+import { activeProfileName, originOf, type EnvFidelity, type ReconChain, type ReconFinding, type ReconHarness, type ReconRecall } from "./recon.js";
 import { httpError } from "./errors.js";
 
 /** The agent the driver prompts, and the subagent whose replies are verdicts. */
@@ -300,6 +300,10 @@ export interface ReconStart {
   backend: ReconBackend;
   /** Audit hook: run started/finished and every gate decision. */
   log?: (event: string, data: Record<string, unknown>) => void;
+  /** What earlier runs verified on this target, for the run to start from (see recon-memory.ts). */
+  prior?: ReconRecall;
+  /** Keeps the finished run for later ones, and says whether it could. */
+  remember?: (state: ReconState) => ReconState["kept"];
 }
 
 interface Run { state: ReconState; runner: OpencodeReconRunner }
@@ -362,6 +366,7 @@ export async function startRecon(o: ReconStart): Promise<ReconState> {
     sessionID: o.sessionID, scope, objective, env: o.env, profile: activeProfileName(),
     status: "running", rounds: 0, maxRounds: harness.maxRounds!, tokens: 0, budgetTokens: harness.budgetTokens!,
     gate: { allowed: 0, asked: 0, denied: 0 }, findings: [], startedAt: Date.now(),
+    ...(o.prior ? { memory: { runs: o.prior.runs, findings: o.prior.findings.length, paths: o.prior.paths.length, lastRun: o.prior.lastRun } } : {}),
   };
   const run: Run = { state, runner };
   await runner.start(); // subscribed before the first prompt, so no event is missed
@@ -387,7 +392,7 @@ export async function startRecon(o: ReconStart): Promise<ReconState> {
   };
   // A path recorded during the main loop: shown at once, and the run stays in its main phase.
   const onChains = (chains: readonly ReconChain[]) => { state.chains = [...chains]; };
-  void driveRecon({ objective, scope, env: o.env, runner: seam, harness, rateLimited: () => runner.rateLimited(), onChainPass, onChains })
+  void driveRecon({ objective, scope, env: o.env, runner: seam, harness, rateLimited: () => runner.rateLimited(), onChainPass, onChains, prior: o.prior })
     .then((result) => {
       snapshot(run); // last live numbers before the status flips
       state.status = "finished";
@@ -400,6 +405,9 @@ export async function startRecon(o: ReconStart): Promise<ReconState> {
       if (state.stopped === "error") state.error = lastError;
       state.finishedAt = Date.now();
       runner.close();
+      if (o.remember) {
+        try { state.kept = o.remember(state); } catch { state.kept = "off"; }
+      }
       o.log?.("recon.finished", {
         session: o.sessionID, stopped: state.stopped, rounds: state.rounds, tokens: state.tokens,
         gate: state.gate, findings: state.findings, chainPass: state.chainPass, chains: state.chains, error: state.error,

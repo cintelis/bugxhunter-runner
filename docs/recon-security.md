@@ -138,6 +138,14 @@ You never *lose* protection by staying in Monitor; Enforce only adds the network
   fresh hypothesis. It is a prompt, nothing more: the step it leads to goes through the same gate
   and the same scope, and a path shown this way is ruled on by `recon-verify` and held to the
   same code rules as a path from the chain pass.
+- **Memory is data from an earlier model run.** What a finished run verified is sealed with the
+  vault key on the runner's volume and, on the next run against the same host and port, listed in
+  the opening prompt. That text was written by a model about a target, so it is as trustworthy as
+  a transcript and no more: it is clipped to one line per item, introduced as records and not
+  instructions, and nothing in it becomes a finding of the new run unless the executor reproduces
+  it and `recon-verify` rules on the new evidence. It grants nothing: the gate and the scope of
+  the new run decide every command. Memory is keyed by host and port, so it is not offered to a
+  run on another target.
 - **The chain pass has no permission of its own.** After the main loop it proposes attack paths from
   the verified findings and tries each one with the same runner, the same gate and the same scope: a
   state-changing step still waits for a person, and an out-of-scope host still asks. What the model

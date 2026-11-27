@@ -7,11 +7,12 @@
  * The loop itself runs on the server (server/src/recon-run.ts); the browser
  * starts it, polls its state, and answers the approvals the gate leaves open.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { reconMemoryForget, reconMemoryGet } from "./agentApi";
 import { Dialog } from "./Dialog";
 import { formatTokens } from "./format";
-import { chainPassNote, pathsUsing, progressLabel, splitPaths, stoppedAt } from "./reconView";
-import type { ReconChain, ReconEnv, ReconFinding, ReconState } from "../../shared/agent";
+import { chainPassNote, keptNote, memoryNote, memorySummary, pathsUsing, progressLabel, splitPaths, stoppedAt } from "./reconView";
+import type { ReconChain, ReconEnv, ReconFinding, ReconMemoryTarget, ReconState } from "../../shared/agent";
 
 export interface ReconRequest {
   scope: string;
@@ -19,6 +20,8 @@ export interface ReconRequest {
   env: ReconEnv;
   /** Whether to look for attack paths once the main loop ends. */
   chainPass: { enabled: boolean };
+  /** Whether to start from what earlier runs verified on this target. */
+  useMemory: boolean;
 }
 
 const STOP_REASON: Record<NonNullable<ReconState["stopped"]>, string> = {
@@ -40,8 +43,31 @@ export function ReconDialog({ onStart, onClose }: { onStart: (r: ReconRequest) =
   const [settings, setSettings] = useState("");
   const [authorised, setAuthorised] = useState(false);
   const [chain, setChain] = useState(true);
+  const [memory, setMemory] = useState<ReconMemoryTarget | null>(null);
+  const [useMemory, setUseMemory] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Look up what earlier runs left for this target, once the typing pauses.
+  useEffect(() => {
+    const target = scope.trim();
+    setMemory(null);
+    if (!target) return;
+    let live = true;
+    const t = setTimeout(() => { reconMemoryGet(target).then((m) => { if (live) setMemory(m); }).catch(() => {}); }, 400);
+    return () => { live = false; clearTimeout(t); };
+  }, [scope]);
+
+  async function forget() {
+    if (!memory) return;
+    setError(null);
+    try {
+      await reconMemoryForget(scope.trim());
+      setMemory(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
 
   const ready = scope.trim() && objective.trim() && divergences.trim() && authorised && !busy;
   async function start() {
@@ -52,6 +78,7 @@ export function ReconDialog({ onStart, onClose }: { onStart: (r: ReconRequest) =
         scope: scope.trim(), objective: objective.trim(),
         env: { kind, divergences: divergences.trim(), ...(nonProdSettings.length ? { nonProdSettings } : {}) },
         chainPass: { enabled: chain },
+        useMemory: Boolean(memory) && useMemory,
       });
       onClose();
     } catch (e) {
@@ -93,6 +120,15 @@ export function ReconDialog({ onStart, onClose }: { onStart: (r: ReconRequest) =
         <input id="recon-settings" type="text" className="mono" spellCheck={false} placeholder="DEBUG=1, AUTH_DISABLED"
           value={settings} onChange={(e) => setSettings(e.target.value)} />
       </div>
+      {memory && (
+        <label className="recon-consent recon-option">
+          <input type="checkbox" checked={useMemory} onChange={(e) => setUseMemory(e.target.checked)} />
+          <span>
+            Start from what is remembered about this target: {memorySummary(memory)}. Each is re-tested before it counts.{" "}
+            <button type="button" className="btn-link" disabled={busy} onClick={(e) => { e.preventDefault(); void forget(); }}>forget this target</button>
+          </span>
+        </label>
+      )}
       <label className="recon-consent recon-option">
         <input type="checkbox" checked={chain} onChange={(e) => setChain(e.target.checked)} />
         <span>
@@ -148,8 +184,11 @@ export function ReconFindings({ recon }: { recon: ReconState }) {
   const { demonstrated, partial } = splitPaths(recon.chains);
   const chaining = recon.status === "running" && recon.phase === "chains";
   const note = chainPassNote(recon);
+  const from = memoryNote(recon);
+  const kept = keptNote(recon);
   return (
     <div className="recon-findings">
+      {from && <div className="hint recon-from">{from}</div>}
       {(demonstrated.length > 0 || chaining) && (
         <div className="recon-section">
           <div className="perm-title recon-title">Attack paths ({demonstrated.length})</div>
@@ -173,6 +212,7 @@ export function ReconFindings({ recon }: { recon: ReconState }) {
         </div>
       )}
       {note && <div className="hint recon-note">{note}</div>}
+      {kept && <div className="hint recon-note">{kept}</div>}
     </div>
   );
 }

@@ -28,6 +28,7 @@ import { audit, followOpencode, LOG_DIR } from "./audit.js";
 import { saveAttachments, type Attachment } from "./attachments.js";
 import * as vault from "./vault.js";
 import * as playground from "./playground-store.js";
+import * as reconMemory from "./recon-memory.js";
 import * as nvidiaHealth from "./nvidia-health.js";
 import * as render from "./render.js";
 import { VERSION } from "./version.js";
@@ -809,7 +810,7 @@ app.post("/api/agent/recon", async (req, res) => {
   try {
     const b = (req.body ?? {}) as {
       sessionID?: string; directory?: string; scope?: string; objective?: string; env?: unknown;
-      authorised?: boolean; maxRounds?: number; budgetTokens?: number; chainPass?: unknown;
+      authorised?: boolean; maxRounds?: number; budgetTokens?: number; chainPass?: unknown; useMemory?: boolean;
     };
     if (!b.sessionID) return res.status(400).json({ error: { message: "sessionID required" } });
     if (b.authorised !== true) return res.status(400).json({ error: { message: "Confirm that you are authorised to test this target." } });
@@ -831,6 +832,9 @@ app.post("/api/agent/recon", async (req, res) => {
       harness: parseReconHarness({ maxRounds: b.maxRounds, budgetTokens: b.budgetTokens, chainPass: b.chainPass }),
       backend: await reconBackend(directory),
       log: (event, data) => audit(event, { directory, ...data }),
+      // What earlier runs verified here, unless this run is to start cold. It is always kept for the next one.
+      prior: b.useMemory === false ? undefined : reconMemory.recall(String(b.scope ?? "")),
+      remember: reconMemory.remember,
     });
     res.json({ recon: state });
   } catch (e) {
@@ -839,7 +843,33 @@ app.post("/api/agent/recon", async (req, res) => {
 });
 
 app.get("/api/agent/recon", (req, res) => {
-  res.json({ recon: reconState(String(req.query.sessionID || "")) });
+  const sessionID = String(req.query.sessionID || "");
+  // After a restart the run is gone from this process: show what was kept of it.
+  res.json({ recon: reconState(sessionID) ?? reconMemory.lastForSession(sessionID) });
+});
+
+/** What is remembered: about one target (`?scope=`), or the list of targets. */
+app.get("/api/agent/recon/memory", (req, res) => {
+  try {
+    const scope = typeof req.query.scope === "string" ? req.query.scope : "";
+    const all = reconMemory.targets();
+    if (!scope) return res.json({ targets: all });
+    const key = reconMemory.targetKey(scope);
+    res.json({ memory: all.find((t) => t.target === key) ?? null });
+  } catch (e) {
+    sendError(res, e);
+  }
+});
+
+/** Forget every run on one target. */
+app.delete("/api/agent/recon/memory", (req, res) => {
+  try {
+    const scope = typeof req.query.scope === "string" ? req.query.scope : "";
+    if (!reconMemory.targetKey(scope)) return res.status(400).json({ error: { message: "scope must be one host or URL" } });
+    res.json({ deleted: reconMemory.forget(scope) });
+  } catch (e) {
+    sendError(res, e);
+  }
 });
 
 app.post("/api/agent/recon/stop", async (req, res) => {

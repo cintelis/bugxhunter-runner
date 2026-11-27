@@ -1,5 +1,28 @@
 // What the recon panel says about a run's attack paths, kept apart from the markup so it can be tested.
-import type { ReconChain, ReconState } from "../../shared/agent";
+import type { ReconChain, ReconMemoryTarget, ReconState } from "../../shared/agent";
+
+const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+
+/** What is remembered about a target, in a few words: "2 earlier runs, 5 findings, 1 attack path (last 2026-11-20)". */
+export function memorySummary(m: Pick<ReconMemoryTarget, "runs" | "findings" | "paths" | "lastRun">): string {
+  const parts = [count(m.runs, "earlier run"), count(m.findings, "finding")];
+  if (m.paths) parts.push(count(m.paths, "attack path"));
+  return `${parts.join(", ")} (last ${day(m.lastRun)})`;
+}
+
+/** One line when the run started from what earlier runs verified. */
+export function memoryNote(r: Pick<ReconState, "memory">): string | null {
+  return r.memory ? `Started from ${memorySummary(r.memory)} on this target. Only what was reproduced in this run is listed here.` : null;
+}
+
+/** One line when a finished run was not written to memory. Null when it was, or the run is still going. */
+export function keptNote(r: Pick<ReconState, "status" | "kept">): string | null {
+  if (r.status !== "finished") return null;
+  if (r.kept === "pending") return "Not saved yet: the vault is locked. Unlock it and this run is kept for the next one on this target.";
+  if (r.kept === "off") return "Not kept for later runs: that needs the vault (sidebar → keys).";
+  return null;
+}
 
 /** Attack paths that held, and the ones that stopped: leads, shown apart and never counted as findings. */
 export function splitPaths(chains: readonly ReconChain[] | undefined): { demonstrated: ReconChain[]; partial: ReconChain[] } {
