@@ -530,6 +530,17 @@ select {
 .cf-add select { flex: 1 1 0; width: auto; min-width: 0; }
 .cf-add .btn { flex: none; }
 .canvas-builder { max-width: 260px; margin-left: 8px; font-size: 12px; }
+/* Full screen: the canvas and its panel over the whole page (below dialogs, above the app's own
+   floating toggle). The button shows when the pointer is over the canvas, and stays while full. */
+.canvas-wrap.full { position: fixed; inset: 0; z-index: 15; background: var(--bg); }
+.canvas-full-btn {
+  position: absolute; top: 12px; left: 12px; z-index: 3; width: 30px; height: 30px; display: grid; place-items: center;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px; color: var(--muted); cursor: pointer;
+  opacity: 0; transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+}
+.canvas-stage:hover .canvas-full-btn, .canvas-full-btn:focus-visible, .canvas-full-btn.on { opacity: 1; }
+.canvas-full-btn:hover { border-color: var(--cyan); color: var(--cyan); }
+@media (hover: none) { .canvas-full-btn { opacity: 1; } } /* touch: nothing to hover with */
 .canvas-zoom { position: absolute; right: 12px; bottom: 12px; z-index: 2; display: flex; gap: 4px; align-items: center; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 4px; font-family: var(--mono); font-size: 11px; }
 .canvas-zoom button { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; min-width: 28px; height: 26px; cursor: pointer; font-family: inherit; }
 .canvas-zoom button:hover { border-color: var(--cyan); color: var(--cyan); }

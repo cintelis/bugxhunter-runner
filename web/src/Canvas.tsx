@@ -117,6 +117,25 @@ export function Canvas({ config, models, onExit }: Props) {
   useEffect(() => {
     try { localStorage.setItem(PANEL_KEY, JSON.stringify(panel)); } catch { /* not essential */ }
   }, [panel]);
+  // Full screen: the canvas and its panel laid over the whole page, and the browser's own full
+  // screen with it when the browser allows that. Esc leaves both; so does leaving the canvas.
+  const [full, setFull] = useState(false);
+  useEffect(() => {
+    if (!full) return;
+    // The page goes full screen, not this element, so dialogs and tooltips still show above it.
+    document.documentElement.requestFullscreen?.().catch(() => { /* refused: the overlay alone still fills the window */ });
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setFull(false); };
+    // In the browser's full screen Esc never reaches the page: it ends full screen, and this follows.
+    const onChange = () => { if (!document.fullscreenElement) setFull(false); };
+    window.addEventListener("keydown", onKey);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.removeEventListener("fullscreenchange", onChange);
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => { /* already left */ });
+    };
+  }, [full]);
+
   const wrapRef = useRef<HTMLDivElement>(null);
   /** Drag the splitter: the panel is as wide as the distance from the pointer to the right edge. */
   function startPanelResize(e: React.PointerEvent<HTMLDivElement>) {
@@ -493,8 +512,19 @@ export function Canvas({ config, models, onExit }: Props) {
         <input ref={importRef} type="file" accept="application/json,.json" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void importFile(f); e.target.value = ""; }} />
       </TerminalBar>
 
-      <div className="canvas-wrap" ref={wrapRef}>
+      <div className={"canvas-wrap" + (full ? " full" : "")} ref={wrapRef}>
         <div className="canvas-stage grid-bg" onPointerDown={() => { setSelected(null); setSelectedEdge(null); }}>
+          {(hasNodes || full) && (
+            <button className={"canvas-full-btn" + (full ? " on" : "")} onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => setFull((f) => !f)} aria-pressed={full}
+              title={full ? "Exit full screen (Esc)" : "Full screen"} aria-label={full ? "Exit full screen" : "Full screen"}>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                {full
+                  ? <path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" />
+                  : <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" />}
+              </svg>
+            </button>
+          )}
           {hasNodes && (
             <div className="canvas-zoom" onPointerDown={(e) => e.stopPropagation()}>
               <button onClick={() => zoomAt(1 / 1.25)} title="Zoom out" aria-label="Zoom out">−</button>
