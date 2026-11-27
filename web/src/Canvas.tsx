@@ -27,6 +27,7 @@ const LEGACY_KEY = "or_threat_model";
 const SAVE_DELAY = 1200;
 /** The right-hand panel's width and hidden state, remembered per browser (a convenience only). */
 const PANEL_KEY = "or_canvas_panel";
+const BOX_KEY = "or_canvas_build_box";
 const PANEL_DEFAULT = 340, PANEL_MIN = 260, PANEL_MAX = 640;
 function loadPanel(): { width: number; collapsed: boolean } {
   try {
@@ -117,6 +118,61 @@ export function Canvas({ config, models, onExit }: Props) {
   useEffect(() => {
     try { localStorage.setItem(PANEL_KEY, JSON.stringify(panel)); } catch { /* not essential */ }
   }, [panel]);
+  // The build box (attach, describe, build) can be put away to give the diagram its height.
+  const [boxHidden, setBoxHidden] = useState(() => {
+    try { return localStorage.getItem(BOX_KEY) === "hidden"; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(BOX_KEY, boxHidden ? "hidden" : "shown"); } catch { /* not essential */ }
+  }, [boxHidden]);
+
+  // Full screen: the canvas and its panel laid over the whole page, and the browser's own full
+  // screen with it when the browser allows that. Esc leaves both; so does leaving the canvas.
+  const [full, setFull] = useState(false);
+  useEffect(() => {
+    if (!full) return;
+    let left = false;
+    const leaveBrowserFullScreen = () => {
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => { /* already left */ });
+    };
+    // The page goes full screen, not this element, so dialogs and tooltips still show above it.
+    // The request settles later: if the canvas has left full screen by then (a quick second
+    // click), take the browser back out too, or it would be stranded there without the overlay.
+    void document.documentElement.requestFullscreen?.()
+      .then(() => { if (left) leaveBrowserFullScreen(); })
+      .catch(() => { /* refused: the overlay alone still fills the window */ });
+
+    // What the overlay covers (the top bar, the build box, the app's sidebar) must not take
+    // focus or clicks while it is covered: everything beside the canvas, at each level up to the
+    // app's root (not past it: what else sits in <body> is not ours to switch off).
+    const covered: Element[] = [];
+    for (let el: Element | null = wrapRef.current; el?.parentElement && el.parentElement !== document.body; el = el.parentElement) {
+      for (const sibling of Array.from(el.parentElement?.children ?? [])) {
+        if (sibling !== el && !sibling.hasAttribute("inert")) { sibling.setAttribute("inert", ""); covered.push(sibling); }
+      }
+    }
+
+    // Esc leaves, unless it belongs to something else: a text field being edited, an input
+    // method, a dialog open above the canvas, or a handler that already took it.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || e.isComposing) return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.("input, textarea, select, [contenteditable]") || document.querySelector(".overlay")) return;
+      setFull(false);
+    };
+    // In the browser's full screen Esc never reaches the page: it ends full screen, and this follows.
+    const onChange = () => { if (!document.fullscreenElement) setFull(false); };
+    window.addEventListener("keydown", onKey);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => {
+      left = true;
+      window.removeEventListener("keydown", onKey);
+      document.removeEventListener("fullscreenchange", onChange);
+      for (const el of covered) el.removeAttribute("inert");
+      leaveBrowserFullScreen();
+    };
+  }, [full]);
+
   const wrapRef = useRef<HTMLDivElement>(null);
   /** Drag the splitter: the panel is as wide as the distance from the pointer to the right edge. */
   function startPanelResize(e: React.PointerEvent<HTMLDivElement>) {
@@ -493,8 +549,26 @@ export function Canvas({ config, models, onExit }: Props) {
         <input ref={importRef} type="file" accept="application/json,.json" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void importFile(f); e.target.value = ""; }} />
       </TerminalBar>
 
-      <div className="canvas-wrap" ref={wrapRef}>
+      <div className={"canvas-wrap" + (full ? " full" : "")} ref={wrapRef}>
         <div className="canvas-stage grid-bg" onPointerDown={() => { setSelected(null); setSelectedEdge(null); }}>
+          {(hasNodes || full) && (
+            <button className={"canvas-full-btn" + (full ? " on" : "")} onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => setFull((f) => !f)} aria-pressed={full}
+              title={full ? "Exit full screen (Esc)" : "Full screen"} aria-label={full ? "Exit full screen" : "Full screen"}>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                {full
+                  ? <path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" />
+                  : <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" />}
+              </svg>
+            </button>
+          )}
+          {/* The build box is covered in full screen, so a build's progress or failure shows here. */}
+          {full && (building || buildError) && (
+            <div className={"canvas-full-status" + (buildError && !building ? " failed" : "")} role="status" onPointerDown={(e) => e.stopPropagation()}>
+              {building ? "Building the threat model…" : buildError}
+              {building && <button className="btn ghost mini" onClick={() => abortRef.current?.abort()}>stop</button>}
+            </div>
+          )}
           {hasNodes && (
             <div className="canvas-zoom" onPointerDown={(e) => e.stopPropagation()}>
               <button onClick={() => zoomAt(1 / 1.25)} title="Zoom out" aria-label="Zoom out">−</button>
@@ -691,8 +765,26 @@ export function Canvas({ config, models, onExit }: Props) {
         </aside>
       </div>
 
+      {boxHidden ? (
+        // Put away: one thin row. A build in progress, or one that failed, still says so here.
+        <div className="composer canvas-box-collapsed">
+          <button className="canvas-box-toggle" onClick={() => setBoxHidden(false)} title="Show the build box" aria-label="Show the build box" aria-expanded={false}>
+            <span aria-hidden>▴</span> build box
+          </button>
+          {building ? (
+            <>
+              <span className="hint">Building the threat model…</span>
+              <button className="btn ghost mini" onClick={() => abortRef.current?.abort()}>stop</button>
+            </>
+          ) : (buildError || att.attachError) ? (
+            <span className="hint" style={{ color: "var(--amber)" }}>{buildError ?? att.attachError}</span>
+          ) : null}
+        </div>
+      ) : (
       <div className="composer">
-        <div className="composer-box" onDragOver={(e) => e.preventDefault()} onDrop={att.onDrop}>
+        <div className="composer-box canvas-build-box" onDragOver={(e) => e.preventDefault()} onDrop={att.onDrop}>
+          {/* In the box's top corner, clear of the model picker and the build button below. */}
+          <button className="sidebar-toggle canvas-box-hide" onClick={() => setBoxHidden(true)} title="Hide the build box" aria-label="Hide the build box" aria-expanded>▾</button>
           <AttachChips images={att.images} docs={att.docs} reading={att.reading} onRemove={att.remove} onRemoveDoc={att.removeDoc} />
           <textarea
             value={description}
@@ -728,6 +820,7 @@ export function Canvas({ config, models, onExit }: Props) {
           {building ? "Building the threat model… (reasoning models can take several minutes on a big diagram)" : "Each build starts a new saved canvas; undo brings the previous one back. Saved on the runner, encrypted with your vault."}
         </div>
       </div>
+      )}
     </main>
   );
 }

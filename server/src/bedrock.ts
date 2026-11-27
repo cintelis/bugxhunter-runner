@@ -240,7 +240,7 @@ export const BEDROCK_CATALOGUE: Record<string, BedrockMeta> = {
  * inference profile of one. They take the output limit as `max_completion_tokens`, and refuse
  * `stop` and any `temperature` or `top_p` but the default.
  */
-export const isOpenAiGpt = (model: string) => /(^|\.)openai\.gpt-(?!oss)/.test(model);
+export const isOpenAiGpt = (model: string) => /(^|[./])openai\.gpt-(?!oss)/.test(model); // `/`: an ARN ends ".../openai.gpt-..."
 
 /** Chat parameters the hosted GPT models refuse outright or accept only at their default. */
 const GPT_REFUSED = ["temperature", "top_p", "stop", "frequency_penalty", "presence_penalty"] as const;

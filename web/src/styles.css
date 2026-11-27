@@ -505,7 +505,9 @@ select {
 .canvas-splitter { width: 1px; flex: none; align-self: stretch; }
 .canvas-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 -4px 4px 0; }
 .canvas-panel-head .section-title { margin: 0; }
-.canvas-panel-show { left: auto; right: 12px; top: 12px; }
+/* Where the panel's own hide button was: top right. Needs the two classes of .sidebar-toggle.floating
+   to win over its `left`, or the button jumps to the left edge. */
+.sidebar-toggle.floating.canvas-panel-show { left: auto; right: 12px; top: 12px; }
 /* Everything in the panel fits its width: fields shrink, rows wrap, long words break. */
 .canvas-panel *, .canvas-panel *::before, .canvas-panel *::after { box-sizing: border-box; }
 .canvas-panel input, .canvas-panel select, .canvas-panel textarea, .canvas-panel button { max-width: 100%; min-width: 0; }
@@ -527,7 +529,40 @@ select {
 .cf-add input { flex: 1 1 100%; min-width: 0; }
 .cf-add select { flex: 1 1 0; width: auto; min-width: 0; }
 .cf-add .btn { flex: none; }
-.canvas-builder { max-width: 260px; margin-left: 8px; font-size: 12px; }
+/* The model that builds: wide enough for a long model name (it was cut short at 260px), without
+   running the whole row. A build error, when there is one, has the rest. */
+.canvas-builder { flex: 1 1 220px; min-width: 140px; max-width: 400px; margin-left: 8px; font-size: 12px; text-overflow: ellipsis; }
+/* The build box's hide button: its top right corner. The text keeps clear of it. */
+.canvas-build-box { position: relative; }
+.canvas-build-box .canvas-box-hide { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; font-size: 13px; }
+.composer-box.canvas-build-box textarea, .composer-box.canvas-build-box .attach-row { padding-right: 28px; }
+/* The build box put away: a thin row with the button that brings it back, and any build status. */
+.composer.canvas-box-collapsed { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 6px 24px; border-top: 1px solid var(--border-soft); min-height: 34px; }
+.canvas-box-collapsed .hint { margin: 0; }
+.canvas-box-toggle {
+  display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 1px solid var(--border); border-radius: 8px;
+  color: var(--muted); cursor: pointer; font-family: var(--mono); font-size: 11px; padding: 4px 10px; transition: var(--transition);
+}
+.canvas-box-toggle:hover { border-color: var(--cyan); color: var(--cyan); }
+
+/* Full screen: the canvas and its panel over the whole page (below dialogs, above the app's own
+   floating toggle). The button shows when the pointer is over the canvas, and stays while full. */
+.canvas-wrap.full { position: fixed; inset: 0; z-index: 15; background: var(--bg); }
+.canvas-full-btn {
+  position: absolute; top: 12px; left: 12px; z-index: 3; width: 30px; height: 30px; display: grid; place-items: center;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px; color: var(--muted); cursor: pointer;
+  opacity: 0; transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+}
+.canvas-stage:hover .canvas-full-btn, .canvas-full-btn:focus-visible, .canvas-full-btn.on { opacity: 1; }
+.canvas-full-btn:hover { border-color: var(--cyan); color: var(--cyan); }
+@media (hover: none) { .canvas-full-btn { opacity: 1; } } /* touch: nothing to hover with */
+/* A build's progress or failure while full screen, where the build box is covered. */
+.canvas-full-status {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 3; max-width: min(70%, 720px);
+  display: flex; align-items: center; gap: 10px; padding: 6px 12px; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; font-family: var(--mono); font-size: 11.5px; color: var(--muted);
+}
+.canvas-full-status.failed { color: var(--amber); border-color: var(--amber); }
 .canvas-zoom { position: absolute; right: 12px; bottom: 12px; z-index: 2; display: flex; gap: 4px; align-items: center; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 4px; font-family: var(--mono); font-size: 11px; }
 .canvas-zoom button { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; min-width: 28px; height: 26px; cursor: pointer; font-family: inherit; }
 .canvas-zoom button:hover { border-color: var(--cyan); color: var(--cyan); }
