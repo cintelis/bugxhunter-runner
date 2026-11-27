@@ -530,6 +530,19 @@ select {
 .cf-add select { flex: 1 1 0; width: auto; min-width: 0; }
 .cf-add .btn { flex: none; }
 .canvas-builder { max-width: 260px; margin-left: 8px; font-size: 12px; }
+/* The build box's hide button: its top right corner. The text keeps clear of it. */
+.canvas-build-box { position: relative; }
+.canvas-build-box .canvas-box-hide { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; font-size: 13px; }
+.composer-box.canvas-build-box textarea, .composer-box.canvas-build-box .attach-row { padding-right: 28px; }
+/* The build box put away: a thin row with the button that brings it back, and any build status. */
+.composer.canvas-box-collapsed { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 6px 24px; border-top: 1px solid var(--border-soft); min-height: 34px; }
+.canvas-box-collapsed .hint { margin: 0; }
+.canvas-box-toggle {
+  display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 1px solid var(--border); border-radius: 8px;
+  color: var(--muted); cursor: pointer; font-family: var(--mono); font-size: 11px; padding: 4px 10px; transition: var(--transition);
+}
+.canvas-box-toggle:hover { border-color: var(--cyan); color: var(--cyan); }
+
 /* Full screen: the canvas and its panel over the whole page (below dialogs, above the app's own
    floating toggle). The button shows when the pointer is over the canvas, and stays while full. */
 .canvas-wrap.full { position: fixed; inset: 0; z-index: 15; background: var(--bg); }

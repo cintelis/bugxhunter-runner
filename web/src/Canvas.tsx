@@ -27,6 +27,7 @@ const LEGACY_KEY = "or_threat_model";
 const SAVE_DELAY = 1200;
 /** The right-hand panel's width and hidden state, remembered per browser (a convenience only). */
 const PANEL_KEY = "or_canvas_panel";
+const BOX_KEY = "or_canvas_build_box";
 const PANEL_DEFAULT = 340, PANEL_MIN = 260, PANEL_MAX = 640;
 function loadPanel(): { width: number; collapsed: boolean } {
   try {
@@ -117,6 +118,14 @@ export function Canvas({ config, models, onExit }: Props) {
   useEffect(() => {
     try { localStorage.setItem(PANEL_KEY, JSON.stringify(panel)); } catch { /* not essential */ }
   }, [panel]);
+  // The build box (attach, describe, build) can be put away to give the diagram its height.
+  const [boxHidden, setBoxHidden] = useState(() => {
+    try { return localStorage.getItem(BOX_KEY) === "hidden"; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(BOX_KEY, boxHidden ? "hidden" : "shown"); } catch { /* not essential */ }
+  }, [boxHidden]);
+
   // Full screen: the canvas and its panel laid over the whole page, and the browser's own full
   // screen with it when the browser allows that. Esc leaves both; so does leaving the canvas.
   const [full, setFull] = useState(false);
@@ -721,8 +730,26 @@ export function Canvas({ config, models, onExit }: Props) {
         </aside>
       </div>
 
+      {boxHidden ? (
+        // Put away: one thin row. A build in progress, or one that failed, still says so here.
+        <div className="composer canvas-box-collapsed">
+          <button className="canvas-box-toggle" onClick={() => setBoxHidden(false)} title="Show the build box" aria-label="Show the build box" aria-expanded={false}>
+            <span aria-hidden>▴</span> build box
+          </button>
+          {building ? (
+            <>
+              <span className="hint">Building the threat model…</span>
+              <button className="btn ghost mini" onClick={() => abortRef.current?.abort()}>stop</button>
+            </>
+          ) : (buildError || att.attachError) ? (
+            <span className="hint" style={{ color: "var(--amber)" }}>{buildError ?? att.attachError}</span>
+          ) : null}
+        </div>
+      ) : (
       <div className="composer">
-        <div className="composer-box" onDragOver={(e) => e.preventDefault()} onDrop={att.onDrop}>
+        <div className="composer-box canvas-build-box" onDragOver={(e) => e.preventDefault()} onDrop={att.onDrop}>
+          {/* In the box's top corner, clear of the model picker and the build button below. */}
+          <button className="sidebar-toggle canvas-box-hide" onClick={() => setBoxHidden(true)} title="Hide the build box" aria-label="Hide the build box" aria-expanded>▾</button>
           <AttachChips images={att.images} docs={att.docs} reading={att.reading} onRemove={att.remove} onRemoveDoc={att.removeDoc} />
           <textarea
             value={description}
@@ -758,6 +785,7 @@ export function Canvas({ config, models, onExit }: Props) {
           {building ? "Building the threat model… (reasoning models can take several minutes on a big diagram)" : "Each build starts a new saved canvas; undo brings the previous one back. Saved on the runner, encrypted with your vault."}
         </div>
       </div>
+      )}
     </main>
   );
 }
