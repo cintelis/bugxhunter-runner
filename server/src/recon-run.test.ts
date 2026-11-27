@@ -112,6 +112,9 @@ describe("OpencodeReconRunner — one turn against a scripted event stream", () 
     expect(res.madeProgress).toBe(true);
     expect(res.findings.map((f) => [f.title, f.severity, f.env])).toEqual([["Open admin", "high", "staging"]]);
     expect(runner.rounds).toBe(1);
+    // What the chain pass reads: the executor's own text, and the verifier's reply as written.
+    expect(res.text).toContain("Found one.");
+    expect(res.verifierOutputs).toEqual(['{"title":"Open admin","verdict":"real","severity":"high","repro":"GET /admin -> 200"}']);
   });
 
   it("counts a subagent's tokens once its session is adopted, and ignores its idle", async () => {

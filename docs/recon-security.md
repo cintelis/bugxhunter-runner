@@ -133,6 +133,13 @@ You never *lose* protection by staying in Monitor; Enforce only adds the network
   environment it was seen in; the verifier flags config-dependent findings instead of shipping a bug
   that only exists because a non-prod flag was off.
 - **Egress audit trail** as a product/accountability feature (prove you stayed in scope).
+- **The chain pass has no permission of its own.** After the main loop it proposes attack paths from
+  the verified findings and tries each one with the same runner, the same gate and the same scope: a
+  state-changing step still waits for a person, and an out-of-scope host still asks. What the model
+  writes about a path stays data. The code, not the model, decides that a link must name a finding
+  of the run, that a path with an unevidenced step is partial, that it is config-dependent if a
+  finding it uses is, and that it is never rated below its worst finding. Its turns are capped
+  (paths, rounds per path) and it cannot spend past the run's token budget.
 
 ## Status
 

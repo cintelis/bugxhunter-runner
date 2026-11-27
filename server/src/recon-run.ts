@@ -23,7 +23,7 @@ import {
   driveRecon, extractReconCommand, parseTurnStatus, parseVerifierFindings, resolveHarness,
   type GateDecision, type ReconPermission, type ReconSessionRunner, type ReconTurnResult,
 } from "./recon-driver.js";
-import { activeProfileName, originOf, type EnvFidelity, type ReconFinding, type ReconHarness } from "./recon.js";
+import { activeProfileName, originOf, type EnvFidelity, type ReconChain, type ReconFinding, type ReconHarness } from "./recon.js";
 import { httpError } from "./errors.js";
 
 /** The agent the driver prompts, and the subagent whose replies are verdicts. */
@@ -57,6 +57,8 @@ interface Turn {
   /** Root-session text parts of this turn: part id -> { message, text }. */
   texts: Map<string, { messageID: string; text: string }>;
   findings: ReconFinding[];
+  /** The verifier's replies this turn, as written: the chain pass reads its verdicts on attack paths from them. */
+  verifierOutputs: string[];
 }
 
 const obj = (v: unknown): Record<string, any> => (v && typeof v === "object" ? (v as Record<string, any>) : {});
@@ -157,7 +159,7 @@ export class OpencodeReconRunner implements ReconSessionRunner {
       this.turn = {
         model: args.model, gate: args.gate, resolve, reject,
         tokensAtStart: this.tokens, sawAssistant: false,
-        toolsCompleted: new Set(), texts: new Map(), findings: [],
+        toolsCompleted: new Set(), texts: new Map(), findings: [], verifierOutputs: [],
       };
     });
     try {
@@ -187,6 +189,8 @@ export class OpencodeReconRunner implements ReconSessionRunner {
     t.resolve({
       tokensUsed: Math.max(0, this.tokens - t.tokensAtStart),
       findings: t.findings,
+      text,
+      verifierOutputs: t.verifierOutputs,
       ...parseTurnStatus(text, t.toolsCompleted.size),
       ...extra,
     });
@@ -262,6 +266,7 @@ export class OpencodeReconRunner implements ReconSessionRunner {
     if ((input.subagent_type ?? input.agent) !== VERIFY_AGENT || typeof st.output !== "string") return;
     this.verified.add(part.callID);
     this.turn.findings.push(...parseVerifierFindings(st.output, this.env));
+    this.turn.verifierOutputs.push(st.output);
   }
 
   private onPermission(perm: Record<string, any>): void {
@@ -303,7 +308,9 @@ const runs = new Map<string, Run>();
 function snapshot(run: Run): ReconState {
   const { state, runner } = run;
   if (state.status === "running") {
-    state.rounds = runner.rounds;
+    // Once the chain pass has started, `rounds` stays at the main loop's count and its own turns are counted apart.
+    if (state.phase === "chains") state.chainRounds = Math.max(0, runner.rounds - state.rounds);
+    else state.rounds = runner.rounds;
     state.tokens = runner.tokens;
     state.model = runner.model;
     state.gate = { ...runner.gateCounts };
@@ -374,20 +381,26 @@ export async function startRecon(o: ReconStart): Promise<ReconState> {
       }
     },
   };
-  void driveRecon({ objective, scope, env: o.env, runner: seam, harness, rateLimited: () => runner.rateLimited() })
+  const onChainPass = (chains: readonly ReconChain[]) => {
+    if (state.phase !== "chains") { state.rounds = runner.rounds; state.phase = "chains"; }
+    state.chains = [...chains];
+  };
+  void driveRecon({ objective, scope, env: o.env, runner: seam, harness, rateLimited: () => runner.rateLimited(), onChainPass })
     .then((result) => {
       snapshot(run); // last live numbers before the status flips
       state.status = "finished";
       state.stopped = runner.wasAborted ? "aborted" : result.stopped;
       state.findings = result.findings;
       state.chains = result.chains;
+      state.chainPass = result.chainPass;
       state.rounds = result.rounds;
+      state.chainRounds = result.chainRounds;
       if (state.stopped === "error") state.error = lastError;
       state.finishedAt = Date.now();
       runner.close();
       o.log?.("recon.finished", {
         session: o.sessionID, stopped: state.stopped, rounds: state.rounds, tokens: state.tokens,
-        gate: state.gate, findings: state.findings, error: state.error,
+        gate: state.gate, findings: state.findings, chainPass: state.chainPass, chains: state.chains, error: state.error,
       });
     });
   return snapshot(run);

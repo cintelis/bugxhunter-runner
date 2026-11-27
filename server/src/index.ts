@@ -809,7 +809,7 @@ app.post("/api/agent/recon", async (req, res) => {
   try {
     const b = (req.body ?? {}) as {
       sessionID?: string; directory?: string; scope?: string; objective?: string; env?: unknown;
-      authorised?: boolean; maxRounds?: number; budgetTokens?: number;
+      authorised?: boolean; maxRounds?: number; budgetTokens?: number; chainPass?: unknown;
     };
     if (!b.sessionID) return res.status(400).json({ error: { message: "sessionID required" } });
     if (b.authorised !== true) return res.status(400).json({ error: { message: "Confirm that you are authorised to test this target." } });
@@ -828,7 +828,7 @@ app.post("/api/agent/recon", async (req, res) => {
       scope: String(b.scope ?? ""),
       objective: String(b.objective ?? ""),
       env: parseEnvFidelity(b.env),
-      harness: parseReconHarness({ maxRounds: b.maxRounds, budgetTokens: b.budgetTokens }),
+      harness: parseReconHarness({ maxRounds: b.maxRounds, budgetTokens: b.budgetTokens, chainPass: b.chainPass }),
       backend: await reconBackend(directory),
       log: (event, data) => audit(event, { directory, ...data }),
     });
