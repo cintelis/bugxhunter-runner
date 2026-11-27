@@ -264,6 +264,10 @@ export interface GateContext {
   scopeHost?: string;
   /** In-scope port as a string ("8765", "80", "443"). */
   scopePort?: string;
+  /** The run's captured-session cookie jar (a path relative to the project): the one file `curl -b` may name. */
+  cookieFile?: string;
+  /** The run's captured-session header file: the one file `curl -H @…` may name. */
+  headerFile?: string;
 }
 
 /**
@@ -417,6 +421,10 @@ function stageAllow(argv: string[], isFirst: boolean, ctx: GateContext): "allow"
  *  flag allowlist (unknown flag -> ask), no redirects, no file read/write. */
 function curlAllow(args: string[], ctx: GateContext): "allow" | "ask" {
   if (!ctx.scopeHost) return "ask";
+  // -v prints the request headers: with the captured session that would put its values in the transcript.
+  const usesSession = args.some((a) => (ctx.cookieFile && a === ctx.cookieFile) || (ctx.headerFile && a === `@${ctx.headerFile}`)
+    || (ctx.cookieFile && a === `--cookie=${ctx.cookieFile}`) || (ctx.headerFile && a === `--header=@${ctx.headerFile}`));
+  if (usesSession && args.some((a) => a === "--verbose" || (/^-[A-Za-z0-9#]+$/.test(a) && a.includes("v")))) return "ask";
   let url = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -432,8 +440,8 @@ function curlAllow(args: string[], ctx: GateContext): "allow" | "ask" {
       if (CURL_SAFE_VAL.has(flag)) {
         const v = eq >= 0 ? a.slice(eq + 1) : args[++i];
         if (v === undefined) return "ask";
-        if (flag === "--header" && v.startsWith("@")) return "ask"; // @file read
-        if (flag === "--cookie" && !v.includes("=")) return "ask";  // no "=" -> curl reads it as a cookie FILE
+        if (flag === "--header" && v.startsWith("@") && !isSessionFile(v.slice(1), ctx.headerFile)) return "ask"; // @file read
+        if (flag === "--cookie" && !v.includes("=") && !isSessionFile(v, ctx.cookieFile)) return "ask";  // no "=" -> curl reads it as a cookie FILE
         continue;
       }
       return "ask";
@@ -443,8 +451,8 @@ function curlAllow(args: string[], ctx: GateContext): "allow" | "ask" {
       if (CURL_SAFE_VAL.has(a)) {
         const v = args[++i];
         if (v === undefined) return "ask";
-        if (a === "-H" && v.startsWith("@")) return "ask";
-        if (a === "-b" && !v.includes("=")) return "ask"; // no "=" -> a cookie FILE
+        if (a === "-H" && v.startsWith("@") && !isSessionFile(v.slice(1), ctx.headerFile)) return "ask";
+        if (a === "-b" && !v.includes("=") && !isSessionFile(v, ctx.cookieFile)) return "ask"; // no "=" -> a cookie FILE
         continue;
       }
       // a cluster of safe no-value single flags, e.g. -sS, -sI
@@ -455,6 +463,15 @@ function curlAllow(args: string[], ctx: GateContext): "allow" | "ask" {
     url = true;
   }
   return url ? "allow" : "ask";
+}
+
+/**
+ * The one file a run's curl may read: the captured session the runner wrote for it, named
+ * exactly as the runner named it (no other spelling of the path). The URL check still
+ * applies, so the session only ever goes to the in-scope origin.
+ */
+function isSessionFile(arg: string, allowed?: string): boolean {
+  return Boolean(allowed) && arg === allowed;
 }
 
 /** True if `arg` is an http(s) URL for exactly the in-scope origin, no userinfo. */
@@ -667,6 +684,22 @@ export interface ReconFinding {
   verdict: "real" | "config-dependent" | "rejected";
   prodCaveat?: string;
   env: EnvFidelity["kind"];
+}
+
+/**
+ * A captured logged-in session, written into the project folder for one run. The run is
+ * given the file names, never the values.
+ */
+export interface ReconSessionUse {
+  /** The cookie jar, relative to the project folder; absent when the session has no cookies. */
+  cookieFile?: string;
+  /** The header file (the Authorization header); absent when none was captured. */
+  headerFile?: string;
+  capturedAt: number;
+  cookies: number;
+  authorization: boolean;
+  /** Removes the files. Called when the run ends. */
+  cleanup: () => void;
 }
 
 /** A finding an earlier run on the same target verified, as the next run is told about it. */

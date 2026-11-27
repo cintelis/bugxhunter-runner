@@ -22,7 +22,7 @@ import {
   routeModel, harnessFor, classifyCommand, commandHazard, allCapped, originOf, escalateAfter, resolveChainPass, STATUS_LINE,
   type ReconFinding, type ReconChain, type ReconChainStep, type ChainCandidate,
   type EnvFidelity, type ReconHarness, type RouteSignals, type GateContext,
-  type ReconRecall,
+  type ReconRecall, type ReconSessionUse,
 } from "./recon.js";
 
 type Severity = ReconFinding["severity"];
@@ -219,6 +219,8 @@ export interface ReconDriverOptions {
   harness?: ReconHarness;
   /** What earlier runs verified on this target, if anything is remembered and the run is to use it. */
   prior?: ReconRecall;
+  /** A logged-in session the person captured for this target, as files curl can read. */
+  session?: Pick<ReconSessionUse, "cookieFile" | "headerFile" | "capturedAt">;
   /** Called when the chain pass starts, and again each time it records a path. */
   onChainPass?: (chains: readonly ReconChain[]) => void;
   /** Called when the main loop records an attack path: the executor followed a finding up and the verifier ruled on it. */
@@ -248,13 +250,14 @@ export interface ReconRunResult {
 const STATUS_REMINDER = `End your turn with one final line: "${STATUS_LINE}: continue", "${STATUS_LINE}: stuck" or "${STATUS_LINE}: done".`;
 
 /** Build the executor's seed prompt: scope fence + env-fidelity gate + objective. */
-export function buildReconKickoff(opts: Pick<ReconDriverOptions, "objective" | "scope" | "env" | "prior">): string {
-  const { objective, scope, env, prior } = opts;
+export function buildReconKickoff(opts: Pick<ReconDriverOptions, "objective" | "scope" | "env" | "prior" | "session">): string {
+  const { objective, scope, env, prior, session } = opts;
   const nonProd = env.nonProdSettings?.length ? ` Known non-production settings: ${env.nonProdSettings.join(", ")}.` : "";
   return [
     `SCOPE (authorisation fence): test only ${scope}. Anything outside it is out of bounds — do not touch it.`,
     `ENVIRONMENT FIDELITY: this is a ${env.kind} instance. ${env.divergences}${nonProd} Tag every finding with this environment; if a finding depends on a setting that differs from production, mark it config-dependent and say what to re-test against production — never report it as a clean production bug.`,
     `OBJECTIVE: ${objective}`,
+    ...(session && (session.cookieFile || session.headerFile) ? [buildSessionBlock(session)] : []),
     ...(prior && (prior.findings.length || prior.paths.length) ? [buildPriorBlock(prior)] : []),
     `Work one hypothesis at a time with the smallest low-impact probe. Read-only probes run freely; anything that changes state pauses for human approval. When you have a candidate, hand it to the recon-verify subagent — do not promote it yourself.`,
     STATUS_REMINDER,
@@ -262,6 +265,17 @@ export function buildReconKickoff(opts: Pick<ReconDriverOptions, "objective" | "
 }
 
 const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+
+/** How to use the captured session. The block names the files; their contents are never in a prompt. */
+export function buildSessionBlock(session: Pick<ReconSessionUse, "cookieFile" | "headerFile" | "capturedAt">): string {
+  const flags = [session.cookieFile ? `-b ${session.cookieFile}` : "", session.headerFile ? `-H @${session.headerFile}` : ""].filter(Boolean).join(" ");
+  return [
+    `LOGGED-IN SESSION: the person logged in to the target themselves and captured that session for this run (${new Date(session.capturedAt).toISOString().slice(0, 16).replace("T", " ")} UTC).`,
+    `To send a request as that account, add \`${flags}\` to a curl request to the target, written exactly like that. A read in that form runs without approval like any other.`,
+    "Test both ways: what answers without the session, and what this account can reach that it should not (another user's objects, functions of a higher role). A finding must say which of the two it was shown with.",
+    "Do not print, copy, decode or edit these files, do not add -v to a request that uses them, and never send them anywhere but the target. Do not log out, change the password or change the account's settings: that ends the session for the rest of the run. If the target starts answering as logged out (a redirect to the login page, a 401), say that the session has expired and carry on without it.",
+  ].join("\n");
+}
 
 /**
  * What earlier runs verified, for the kickoff. It is a record of an earlier state of the
@@ -667,7 +681,7 @@ export async function driveRecon(opts: ReconDriverOptions): Promise<ReconRunResu
   const harness = resolveHarness(opts.harness);
   const run = new ReconRun(harness);
   const { host: scopeHost, port: scopePort } = originOf(opts.scope);
-  const gate = (p: ReconPermission) => reconGateDecision(p, { scopeHost, scopePort });
+  const gate = (p: ReconPermission) => reconGateDecision(p, { scopeHost, scopePort, cookieFile: opts.session?.cookieFile, headerFile: opts.session?.headerFile });
   const stopped = await driveMainLoop(run, opts, gate);
   // An error (which is also how a stop by the person arrives) or rate limits end the run: no pass.
   const chainPass = stopped === "error" || stopped === "rate-limited" ? "skipped" : await driveChainPass(run, opts, gate, harness);

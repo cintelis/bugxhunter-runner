@@ -29,6 +29,8 @@ import { saveAttachments, type Attachment } from "./attachments.js";
 import * as vault from "./vault.js";
 import * as playground from "./playground-store.js";
 import * as reconMemory from "./recon-memory.js";
+import * as reconSession from "./recon-session.js";
+import { zip } from "./zip.js";
 import * as nvidiaHealth from "./nvidia-health.js";
 import * as render from "./render.js";
 import { VERSION } from "./version.js";
@@ -810,7 +812,7 @@ app.post("/api/agent/recon", async (req, res) => {
   try {
     const b = (req.body ?? {}) as {
       sessionID?: string; directory?: string; scope?: string; objective?: string; env?: unknown;
-      authorised?: boolean; maxRounds?: number; budgetTokens?: number; chainPass?: unknown; useMemory?: boolean;
+      authorised?: boolean; maxRounds?: number; budgetTokens?: number; chainPass?: unknown; useMemory?: boolean; useSession?: boolean;
     };
     if (!b.sessionID) return res.status(400).json({ error: { message: "sessionID required" } });
     if (b.authorised !== true) return res.status(400).json({ error: { message: "Confirm that you are authorised to test this target." } });
@@ -824,7 +826,10 @@ app.post("/api/agent/recon", async (req, res) => {
         : "OpenCode has no recon agent. Restart BugXHunter." } });
     }
     setAnthropicAvailable(configured("anthropic"));
+    // The captured session becomes two files in the project folder for this run; startRecon removes them when it ends.
+    const session = b.useSession === false ? undefined : reconSession.materialise(String(b.scope ?? ""), directory);
     const state = await startRecon({
+      session,
       sessionID: b.sessionID,
       scope: String(b.scope ?? ""),
       objective: String(b.objective ?? ""),
@@ -835,8 +840,65 @@ app.post("/api/agent/recon", async (req, res) => {
       // What earlier runs verified here, unless this run is to start cold. It is always kept for the next one.
       prior: b.useMemory === false ? undefined : reconMemory.recall(String(b.scope ?? "")),
       remember: reconMemory.remember,
-    });
+    }).catch((e) => { session?.cleanup(); throw e; }); // the run never started: do not leave the session lying in the project
     res.json({ recon: state });
+  } catch (e) {
+    sendError(res, e);
+  }
+});
+
+// --- A logged-in session for a recon target (recon-session.ts) ---
+
+/** The session held for a target (counts and dates only). */
+app.get("/api/agent/recon/session", (req, res) => {
+  try {
+    res.json({ session: reconSession.sessionInfo(typeof req.query.scope === "string" ? req.query.scope : "") });
+  } catch (e) {
+    sendError(res, e);
+  }
+});
+
+app.delete("/api/agent/recon/session", (req, res) => {
+  try {
+    res.json({ deleted: reconSession.forgetSession(typeof req.query.scope === "string" ? req.query.scope : "") });
+  } catch (e) {
+    sendError(res, e);
+  }
+});
+
+/** A single-use pairing code for the browser extension, good for this target for ten minutes. */
+app.post("/api/agent/recon/session/pair", (req, res) => {
+  try {
+    res.json(reconSession.issuePairing(String(req.body?.scope ?? "")));
+  } catch (e) {
+    sendError(res, e);
+  }
+});
+
+/**
+ * The browser extension posts the session here with the pairing code as a bearer token.
+ * This is the one route under /api that is reachable without a sign-in (see auth.ts): the
+ * code is what authorises it, once.
+ */
+app.post("/api/capture/session", (req, res) => {
+  try {
+    const m = /^Bearer\s+(\S+)$/i.exec(String(req.headers.authorization ?? ""));
+    res.json({ session: reconSession.redeem(m?.[1], req.body) });
+  } catch (e) {
+    sendError(res, e);
+  }
+});
+
+/** The browser extension as a zip, to unpack and load (chrome://extensions → Load unpacked). */
+app.get("/api/agent/recon/extension.zip", (_req, res) => {
+  try {
+    const dir = [path.join(REPO_ROOT, "web", "dist", "bxh-extension"), path.join(REPO_ROOT, "web", "public", "bxh-extension")].find((d) => fs.existsSync(d));
+    if (!dir) return res.status(404).json({ error: { message: "The extension is not part of this build." } });
+    const entries = fs.readdirSync(dir).filter((n) => /^[\w.-]+\.(?:json|js|html|css|png|md)$/.test(n)).sort()
+      .map((name) => ({ name: `bugxhunter-extension/${name}`, data: fs.readFileSync(path.join(dir, name)) }));
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", 'attachment; filename="bugxhunter-extension.zip"');
+    res.send(zip(entries));
   } catch (e) {
     sendError(res, e);
   }

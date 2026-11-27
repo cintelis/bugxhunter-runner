@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chainPassNote, keptNote, memoryNote, memorySummary, pathsUsing, progressLabel, splitPaths, stoppedAt } from "./reconView";
+import { chainPassNote, keptNote, memoryNote, memorySummary, pathsUsing, progressLabel, sessionNote, sessionSummary, splitPaths, stoppedAt } from "./reconView";
 import type { ReconChain } from "../../shared/agent";
 
 const chain = (over: Partial<ReconChain> = {}): ReconChain => ({
@@ -86,5 +86,20 @@ describe("memory notes", () => {
     expect(keptNote({ status: "finished", kept: undefined })).toBeNull();
     expect(keptNote({ status: "finished", kept: "pending" })).toContain("vault is locked");
     expect(keptNote({ status: "finished", kept: "off" })).toContain("needs the vault");
+  });
+});
+
+describe("session notes", () => {
+  const at = Date.UTC(2026, 10, 28, 9, 10);
+
+  it("sums up a captured session, and says when a cookie has run out", () => {
+    expect(sessionSummary({ capturedAt: at, cookies: 6, authorization: true }, at)).toBe("captured 2026-11-28 09:10 UTC: 6 cookies and the Authorization header");
+    expect(sessionSummary({ capturedAt: at, cookies: 1, authorization: false, firstExpiry: at + 3_600_000 }, at)).toBe("captured 2026-11-28 09:10 UTC: 1 cookie; first cookie expires 2026-11-28 10:10 UTC");
+    expect(sessionSummary({ capturedAt: at, cookies: 1, authorization: false, firstExpiry: at - 1 }, at)).toContain("a cookie has expired, capture it again");
+  });
+
+  it("says when a run was tested logged in", () => {
+    expect(sessionNote({})).toBeNull();
+    expect(sessionNote({ session: { capturedAt: at, cookies: 2, authorization: false } })).toBe("Tested with a logged-in session (2 cookies, captured 2026-11-28 09:10 UTC).");
   });
 });

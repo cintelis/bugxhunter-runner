@@ -8,11 +8,11 @@
  * starts it, polls its state, and answers the approvals the gate leaves open.
  */
 import { useEffect, useState } from "react";
-import { reconMemoryForget, reconMemoryGet } from "./agentApi";
+import { reconMemoryForget, reconMemoryGet, reconSessionForget, reconSessionGet, reconSessionPair } from "./agentApi";
 import { Dialog } from "./Dialog";
 import { formatTokens } from "./format";
-import { chainPassNote, keptNote, memoryNote, memorySummary, pathsUsing, progressLabel, splitPaths, stoppedAt } from "./reconView";
-import type { ReconChain, ReconEnv, ReconFinding, ReconMemoryTarget, ReconState } from "../../shared/agent";
+import { chainPassNote, keptNote, memoryNote, memorySummary, pathsUsing, progressLabel, sessionNote, sessionSummary, splitPaths, stoppedAt } from "./reconView";
+import type { ReconChain, ReconEnv, ReconFinding, ReconMemoryTarget, ReconPairing, ReconSessionInfo, ReconState } from "../../shared/agent";
 
 export interface ReconRequest {
   scope: string;
@@ -22,6 +22,8 @@ export interface ReconRequest {
   chainPass: { enabled: boolean };
   /** Whether to start from what earlier runs verified on this target. */
   useMemory: boolean;
+  /** Whether to give the run the logged-in session captured for this target. */
+  useSession: boolean;
 }
 
 const STOP_REASON: Record<NonNullable<ReconState["stopped"]>, string> = {
@@ -45,6 +47,9 @@ export function ReconDialog({ onStart, onClose }: { onStart: (r: ReconRequest) =
   const [chain, setChain] = useState(true);
   const [memory, setMemory] = useState<ReconMemoryTarget | null>(null);
   const [useMemory, setUseMemory] = useState(true);
+  const [session, setSession] = useState<ReconSessionInfo | null>(null);
+  const [useSession, setUseSession] = useState(true);
+  const [pairing, setPairing] = useState<ReconPairing | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -57,6 +62,37 @@ export function ReconDialog({ onStart, onClose }: { onStart: (r: ReconRequest) =
     const t = setTimeout(() => { reconMemoryGet(target).then((m) => { if (live) setMemory(m); }).catch(() => {}); }, 400);
     return () => { live = false; clearTimeout(t); };
   }, [scope]);
+
+  // The logged-in session held for this target; while a pairing code is out, watch for the extension's post.
+  useEffect(() => {
+    const target = scope.trim();
+    setSession(null);
+    setPairing(null);
+    if (!target) return;
+    let live = true;
+    const t = setTimeout(() => { reconSessionGet(target).then((s) => { if (live) setSession(s); }).catch(() => {}); }, 400);
+    return () => { live = false; clearTimeout(t); };
+  }, [scope]);
+  useEffect(() => {
+    if (!pairing) return;
+    const target = scope.trim();
+    const had = session?.capturedAt ?? 0;
+    const t = setInterval(() => {
+      if (Date.now() > pairing.expiresAt) return setPairing(null);
+      reconSessionGet(target).then((s) => { if (s && s.capturedAt > had) { setSession(s); setUseSession(true); setPairing(null); } }).catch(() => {});
+    }, 2500);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- restart only when a new code is issued
+  }, [pairing]);
+
+  async function pair() {
+    setError(null);
+    try { setPairing(await reconSessionPair(scope.trim())); } catch (e) { setError((e as Error).message); }
+  }
+  async function forgetSession() {
+    setError(null);
+    try { await reconSessionForget(scope.trim()); setSession(null); } catch (e) { setError((e as Error).message); }
+  }
 
   async function forget() {
     if (!memory) return;
@@ -79,6 +115,7 @@ export function ReconDialog({ onStart, onClose }: { onStart: (r: ReconRequest) =
         env: { kind, divergences: divergences.trim(), ...(nonProdSettings.length ? { nonProdSettings } : {}) },
         chainPass: { enabled: chain },
         useMemory: Boolean(memory) && useMemory,
+        useSession: Boolean(session) && useSession,
       });
       onClose();
     } catch (e) {
@@ -120,6 +157,37 @@ export function ReconDialog({ onStart, onClose }: { onStart: (r: ReconRequest) =
         <input id="recon-settings" type="text" className="mono" spellCheck={false} placeholder="DEBUG=1, AUTH_DISABLED"
           value={settings} onChange={(e) => setSettings(e.target.value)} />
       </div>
+      {scope.trim() && (
+        <div className="recon-session">
+          {session ? (
+            <label className="recon-consent recon-option">
+              <input type="checkbox" checked={useSession} onChange={(e) => setUseSession(e.target.checked)} />
+              <span>
+                Test logged in, with the session {sessionSummary(session)}.{" "}
+                <button type="button" className="btn-link" disabled={busy} onClick={(e) => { e.preventDefault(); void pair(); }}>capture again</button>{" · "}
+                <button type="button" className="btn-link" disabled={busy} onClick={(e) => { e.preventDefault(); void forgetSession(); }}>forget</button>
+              </span>
+            </label>
+          ) : (
+            <div className="hint">
+              No logged-in session for this target: the run tests what answers without an account.{" "}
+              <button type="button" className="btn-link" disabled={busy} onClick={() => void pair()}>capture one from your browser</button>
+            </div>
+          )}
+          {pairing && (
+            <div className="recon-pairing">
+              <div>
+                1. Install the extension once: <a href="/api/agent/recon/extension.zip">download</a>, unzip, then in
+                Chrome or Edge open <span className="mono">chrome://extensions</span>, turn on Developer mode and choose Load unpacked.
+              </div>
+              <div>2. Open the target in a tab and log in yourself, 2FA included. Use a test account.</div>
+              <div>3. Click the extension, paste this code and press send. It works once, for this target, for ten minutes.</div>
+              <input type="text" className="mono" readOnly value={pairing.token} aria-label="Pairing code" onFocus={(e) => e.target.select()} />
+              <div className="hint">Waiting for the extension…</div>
+            </div>
+          )}
+        </div>
+      )}
       {memory && (
         <label className="recon-consent recon-option">
           <input type="checkbox" checked={useMemory} onChange={(e) => setUseMemory(e.target.checked)} />
@@ -185,9 +253,11 @@ export function ReconFindings({ recon }: { recon: ReconState }) {
   const chaining = recon.status === "running" && recon.phase === "chains";
   const note = chainPassNote(recon);
   const from = memoryNote(recon);
+  const loggedIn = sessionNote(recon);
   const kept = keptNote(recon);
   return (
     <div className="recon-findings">
+      {loggedIn && <div className="hint recon-from">{loggedIn}</div>}
       {from && <div className="hint recon-from">{from}</div>}
       {(demonstrated.length > 0 || chaining) && (
         <div className="recon-section">
