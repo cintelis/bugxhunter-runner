@@ -26,7 +26,7 @@ import {
 
 type Severity = ReconFinding["severity"];
 const SEVERITY_RANK: Record<Severity, number> = { low: 0, medium: 1, high: 2, critical: 3 };
-const worstSeverity = (fs: readonly ReconFinding[]): Severity | undefined => {
+const worstSeverity = (fs: readonly Pick<ReconFinding, "severity" | "verdict">[]): Severity | undefined => {
   let best: Severity | undefined;
   for (const f of fs) if (f.verdict !== "rejected" && (!best || SEVERITY_RANK[f.severity] > SEVERITY_RANK[best])) best = f.severity;
   return best;
@@ -115,7 +115,7 @@ export class ReconRun {
   /** Consecutive turns the executor reported stuck — the escalation signal. */
   attempts = 0;
   readonly findings: ReconFinding[] = [];
-  /** Attack paths from the chain pass: demonstrated ones and partial leads. */
+  /** Attack paths the verifier ruled on, in the main loop or the chain pass: demonstrated ones and partial leads. */
   readonly chains: ReconChain[] = [];
 
   constructor(private readonly harness: ReconHarness = {}) {}
@@ -218,6 +218,8 @@ export interface ReconDriverOptions {
   harness?: ReconHarness;
   /** Called when the chain pass starts, and again each time it records a path. */
   onChainPass?: (chains: readonly ReconChain[]) => void;
+  /** Called when the main loop records an attack path: the executor followed a finding up and the verifier ruled on it. */
+  onChains?: (chains: readonly ReconChain[]) => void;
 }
 
 /**
@@ -255,9 +257,38 @@ export function buildReconKickoff(opts: Pick<ReconDriverOptions, "objective" | "
   ].join("\n\n");
 }
 
-/** Prompt that nudges the executor forward after a turn goes idle with work left. */
-export const RECON_CONTINUE =
-  "Continue: take the next untested hypothesis within scope. If the in-scope surface is genuinely exhausted, stop and say so rather than widening scope. Hand any new candidate to recon-verify. " + STATUS_REMINDER;
+const NEXT_HYPOTHESIS =
+  "take the next untested hypothesis within scope. If the in-scope surface is genuinely exhausted, stop and say so rather than widening scope. Hand any new candidate to recon-verify.";
+
+/** Prompt that nudges the executor forward after a turn goes idle with work left, while nothing is verified yet. */
+export const RECON_CONTINUE = `Continue: ${NEXT_HYPOTHESIS} ${STATUS_REMINDER}`;
+
+/** The most findings and paths a continue prompt lists: the newest ones, since those are the ones not yet followed up. */
+const MAX_LISTED = 30;
+
+const oneLine = (t: string, n: number) => { const one = t.replace(/\s+/g, " ").trim(); return one.length > n ? one.slice(0, n) + "…" : one; };
+const findingHead = (f: ReconFinding) => `${f.id} [${f.severity}${f.verdict === "config-dependent" ? ", config-dependent" : ""}] ${oneLine(f.title, 160)}`;
+const chainHead = (c: ReconChain) => `${c.id} [${c.status}] ${oneLine(c.title, 160)} (${c.links.join(", ")})`;
+
+/**
+ * The prompt for the next round of the main loop. Once something is verified, the round
+ * starts from what it unlocks before it moves to a fresh hypothesis: a path that needs a
+ * step nobody took cannot be shown later, in the few rounds the chain pass has. The titles
+ * are enough here: the session already holds each finding's evidence.
+ */
+export function buildReconContinue(findings: readonly ReconFinding[], chains: readonly ReconChain[] = []): string {
+  if (!findings.length) return RECON_CONTINUE;
+  const paths = chains.length ? `Attack paths already recorded (do not repeat them):\n${chains.slice(-MAX_LISTED).map(chainHead).join("\n")}` : "";
+  return [
+    "Continue: first see what the verified findings unlock.",
+    `Verified so far:\n${findings.slice(-MAX_LISTED).map(findingHead).join("\n")}`,
+    ...(paths ? [paths] : []),
+    "Ask what these give an attacker that has not been used yet: a credential, a token, an identifier, an internal address, a level of access. If one of them is what a further step needs, that step is inside the scope and it has not been tried, take it now with the smallest probe, using what the earlier step returned. The same rules apply: read-only probes run freely, anything that changes state pauses for human approval.",
+    "If the step reaches something worse than the finding it builds on, hand the whole sequence to recon-verify as an ATTACK PATH: for each step the request or command and the response, the finding ids it builds on, and what the attacker ends up with. Do not promote it yourself.",
+    `If nothing follows from them, ${NEXT_HYPOTHESIS}`,
+    STATUS_REMINDER,
+  ].join("\n\n");
+}
 
 /* ─────────────── reading a turn back (pure; the session runner calls these) ─────────────── */
 
@@ -457,10 +488,11 @@ const clipLine = (t: string, n: number) => { const one = t.replace(/\s+/g, " ").
 const findingLine = (f: ReconFinding) => `${f.id} [${f.severity}${f.verdict === "config-dependent" ? ", config-dependent" : ""}] ${clipLine(f.title, 160)}: ${clipLine(f.repro, 300)}`;
 
 /** The proposal turn: no tools, just which of the verified findings combine. */
-export function buildChainProposalPrompt(findings: readonly ReconFinding[], max: number): string {
+export function buildChainProposalPrompt(findings: readonly ReconFinding[], max: number, recorded: readonly ReconChain[] = []): string {
   return [
     "CHAIN PASS. The assessment loop has ended. Do not run any tool in this turn.",
     `Verified findings of this run:\n${findings.map(findingLine).join("\n")}`,
+    ...(recorded.length ? [`Attack paths already recorded in this run. Do not propose them again, and do not propose one that only restates them:\n${recorded.map(chainHead).join("\n")}`] : []),
     `From these, and from anything you observed during this run, propose up to ${max} attack paths: sequences in which what one step returns is what the next step needs, and which reach something worse than any single finding does. Stay inside the declared scope. Every path must build on at least one finding above, named by its id. Put the most valuable path first. If nothing combines, say so and give an empty list.`,
     'Output one fenced json block and nothing after it: {"paths": [{"title": "short name", "goal": "what the attacker ends up with", "links": ["F1", "F3"], "steps": ["step 1", "step 2"], "unproven": the number of the step you are least sure of, or null}]}.',
   ].join("\n\n");
@@ -521,7 +553,7 @@ async function driveChainPass(run: ReconRun, opts: ReconDriverOptions, gate: (p:
   opts.onChainPass?.(run.chains);
   let candidates: ChainCandidate[];
   try {
-    const res = await turn(buildChainProposalPrompt(run.findings, cfg.maxCandidates), routeModel("escalate", signals()));
+    const res = await turn(buildChainProposalPrompt(run.findings, cfg.maxCandidates, run.chains), routeModel("escalate", signals()));
     candidates = parseChainProposal(res.text ?? "", run.findings, cfg.maxCandidates);
   } catch {
     return "error";
@@ -583,7 +615,10 @@ async function driveMainLoop(run: ReconRun, opts: ReconDriverOptions, gate: (p: 
     run.recordRound();
     run.recordUsage(res.tokensUsed);
     run.addFindings(res.findings);
-    severityHint = worstSeverity(res.findings);
+    // A path the executor showed while following a finding up, ruled on by the verifier like any other.
+    const paths = (res.verifierOutputs ?? []).flatMap((out) => parseVerifierChains(out, opts.env.kind, run.findings));
+    if (paths.length) { run.addChains(paths); opts.onChains?.(run.chains); }
+    severityHint = worstSeverity([...res.findings, ...paths.filter((c) => c.status === "demonstrated")]);
     if (res.stuck) run.recordStuck(); else run.resetAttempts();
 
     if (res.done) return "done";                                    // a clean finish wins over the caps
@@ -592,7 +627,7 @@ async function driveMainLoop(run: ReconRun, opts: ReconDriverOptions, gate: (p: 
     if (run.attempts >= maxStuck) return "stuck";                   // persistently stuck, even escalated (H3)
     if (!res.madeProgress && !res.stuck) return "idle";             // surface spent
 
-    prompt = RECON_CONTINUE;
+    prompt = buildReconContinue(run.findings, run.chains);
   }
 }
 

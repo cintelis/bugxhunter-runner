@@ -34,13 +34,17 @@ export function progressLabel(r: Pick<ReconState, "status" | "phase" | "rounds" 
  */
 export function chainPassNote(r: Pick<ReconState, "status" | "chainPass" | "chains">): string | null {
   if (r.status !== "finished") return null;
+  // A path can be recorded during the main loop, so "none were looked for" would be wrong then.
+  const none = r.chains?.length ? "No further attack paths were looked for" : "Attack paths were not looked for";
   switch (r.chainPass) {
     case "ran": return r.chains?.length ? null : "No attack path was recorded.";
-    case "off": return "Attack paths were not looked for: the chain pass was turned off for this run.";
-    case "skipped": return "Attack paths were not looked for: the run ended before the chain pass.";
-    case "few-findings": return "Attack paths were not looked for: it takes at least two findings to combine.";
-    case "budget": return "Attack paths were not looked for: the token budget was spent.";
-    case "no-paths": return "The findings were reviewed for attack paths and no combination was proposed.";
+    case "off": return `${none}: the chain pass was turned off for this run.`;
+    case "skipped": return `${none}: the run ended before the chain pass.`;
+    case "few-findings": return `${none}: it takes at least two findings to combine.`;
+    case "budget": return `${none}: the token budget was spent.`;
+    case "no-paths": return r.chains?.length
+      ? "The findings were reviewed for further attack paths and no other combination was proposed."
+      : "The findings were reviewed for attack paths and no combination was proposed.";
     case "rate-limited": return "The chain pass stopped: every model was rate-limited.";
     case "error": return "The chain pass stopped early. What it had recorded is shown.";
     default: return null; // a run from before the chain pass existed

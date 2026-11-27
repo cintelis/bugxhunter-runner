@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  buildChainDemoPrompt, buildChainProposalPrompt, driveRecon,
+  buildChainDemoPrompt, buildChainProposalPrompt, buildReconContinue, driveRecon, RECON_CONTINUE,
   type ReconSessionRunner, type ReconTurnResult,
 } from "./recon-driver.js";
 import { modelFor, type EnvFidelity, type ReconChain, type ReconFinding } from "./recon.js";
@@ -159,6 +159,61 @@ describe("the chain pass", () => {
     expect(res.chains).toHaveLength(2);
     expect(res.chainRounds).toBe(5);
     expect(models).toHaveLength(6);
+  });
+});
+
+describe("following a finding up in the main loop", () => {
+  it("asks for the next hypothesis until something is verified, then for what the findings unlock", async () => {
+    const { runner, prompts } = scripted([
+      () => turn(),
+      () => turn({ findings: [finding({ title: "Debug token in /status", severity: "low" })] }),
+      () => turn({ done: true }),
+    ]);
+    await driveRecon({ ...base, runner });
+    expect(prompts[1]).toBe(RECON_CONTINUE);
+    expect(prompts[2]).toMatch(/^Continue:/);
+    for (const s of ["F1 [low] Debug token in /status", "has not been used yet", "ATTACK PATH", "pauses for human approval", "next untested hypothesis within scope", "RECON-STATUS"]) expect(prompts[2]).toContain(s);
+    expect(prompts[2]).not.toContain("already recorded");
+  });
+
+  it("records a path the verifier rules on mid-loop, and neither round asks for it again", async () => {
+    const seen: string[][] = [], phases: number[] = [];
+    const { runner, prompts } = scripted([
+      () => ({ ...twoFindings(), done: false }),                      // the loop goes on
+      () => turn({ verifierOutputs: [ruling()] }),                    // followed F1 and F2 up
+      () => turn({ done: true }),
+      () => turn({ text: '{"paths": []}' }),                          // the chain pass's proposal turn
+    ]);
+    const res = await driveRecon({ ...base, runner, onChains: (c) => seen.push(c.map((x) => x.id ?? "")), onChainPass: (c) => phases.push(c.length) });
+
+    expect(res).toMatchObject({ stopped: "done", rounds: 3, chainRounds: 1, chainPass: "no-paths" });
+    expect(res.chains).toMatchObject([{ id: "P1", status: "demonstrated", severity: "high", links: ["F1", "F2"] }]);
+    expect(seen).toEqual([["P1"]]);
+    expect(phases).toEqual([1]); // the pass starts with the path already there
+    expect(prompts[2]).toContain("Attack paths already recorded (do not repeat them):\nP1 [demonstrated] Read any user's runs (F1, F2)");
+    expect(prompts[3]).toContain("CHAIN PASS");
+    expect(prompts[3]).toContain("Do not propose them again");
+    expect(prompts[3]).toContain("P1 [demonstrated] Read any user's runs (F1, F2)");
+  });
+
+  it("gives the round after a demonstrated High path the escalation model", async () => {
+    const { runner, models } = scripted([
+      () => ({ ...twoFindings(), done: false }),
+      () => turn({ verifierOutputs: [ruling()] }),
+      () => turn({ done: true }),
+      () => turn({ text: '{"paths": []}' }),
+    ]);
+    await driveRecon({ ...base, runner });
+    expect(models[1]).not.toBe(modelFor("escalate")); // Low and Medium findings do not escalate
+    expect(models[2]).toBe(modelFor("escalate"));
+  });
+
+  it("lists only the newest findings when there are many", () => {
+    const many = Array.from({ length: 40 }, (_, n) => finding({ id: `F${n + 1}`, title: `T${n + 1}` }));
+    const p = buildReconContinue(many);
+    expect(p).not.toContain("F10 [medium] T10");
+    expect(p).toContain("F11 [medium] T11");
+    expect(p).toContain("F40 [medium] T40");
   });
 });
 

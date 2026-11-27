@@ -61,4 +61,11 @@ describe("chainPassNote", () => {
     expect(note("error")).toContain("stopped early");
     expect(note("ran")).toBe("No attack path was recorded.");
   });
+
+  it("does not say none were looked for when the main loop recorded one", () => {
+    const note = (chainPass: Parameters<typeof chainPassNote>[0]["chainPass"]) => chainPassNote({ status: "finished", chainPass, chains: [chain()] });
+    expect(note("few-findings")).toBe("No further attack paths were looked for: it takes at least two findings to combine.");
+    expect(note("off")).toContain("No further attack paths");
+    expect(note("no-paths")).toContain("no other combination was proposed");
+  });
 });

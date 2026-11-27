@@ -133,6 +133,11 @@ You never *lose* protection by staying in Monitor; Enforce only adds the network
   environment it was seen in; the verifier flags config-dependent findings instead of shipping a bug
   that only exists because a non-prod flag was off.
 - **Egress audit trail** as a product/accountability feature (prove you stayed in scope).
+- **Following a finding up has no permission of its own either.** From the second round on, the
+  main loop's prompt lists the verified findings and asks what they unlock before it asks for a
+  fresh hypothesis. It is a prompt, nothing more: the step it leads to goes through the same gate
+  and the same scope, and a path shown this way is ruled on by `recon-verify` and held to the
+  same code rules as a path from the chain pass.
 - **The chain pass has no permission of its own.** After the main loop it proposes attack paths from
   the verified findings and tries each one with the same runner, the same gate and the same scope: a
   state-changing step still waits for a person, and an out-of-scope host still asks. What the model

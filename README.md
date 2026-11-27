@@ -421,11 +421,16 @@ round after round:
 3. **Verify.** The executor hands each candidate to the `recon-verify` subagent, which rejects it
    without reproduction evidence and marks it *config-dependent* when it relies on a setting that
    differs from production. Only its verdicts become findings.
-4. **Stop.** The run ends when the executor reports the surface exhausted, a round finds nothing
+4. **Follow up.** From the second round on, once something is verified, each round starts from
+   what the findings so far unlock (a credential, a token, an identifier, a level of access) and
+   takes that next step, if there is one inside the scope, before it moves to a fresh hypothesis.
+   A sequence that reaches something worse goes to `recon-verify` as an attack path and is
+   recorded as soon as it is ruled on.
+5. **Stop.** The run ends when the executor reports the surface exhausted, a round finds nothing
    new, the round or token cap is reached, it stays stuck after escalating, every model is
    rate-limited, a round fails, or you press stop.
-5. **Chain.** When the loop ends with two or more findings, a chain pass tries to combine them
-   into attack paths. One turn on the escalation model proposes up to three paths, each naming the
+6. **Chain.** When the loop ends with two or more findings, a chain pass tries to combine them
+   into attack paths the loop did not already record. One turn on the escalation model proposes up to three paths, each naming the
    findings it builds on (`F1`, `F2`, …). The executor then has up to three rounds per path to
    show it end to end, under the same gate and scope, and hands it to `recon-verify`, which
    rejects a path unless every step has its evidence and each step used what the one before

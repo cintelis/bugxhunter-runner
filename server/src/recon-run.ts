@@ -385,7 +385,9 @@ export async function startRecon(o: ReconStart): Promise<ReconState> {
     if (state.phase !== "chains") { state.rounds = runner.rounds; state.phase = "chains"; }
     state.chains = [...chains];
   };
-  void driveRecon({ objective, scope, env: o.env, runner: seam, harness, rateLimited: () => runner.rateLimited(), onChainPass })
+  // A path recorded during the main loop: shown at once, and the run stays in its main phase.
+  const onChains = (chains: readonly ReconChain[]) => { state.chains = [...chains]; };
+  void driveRecon({ objective, scope, env: o.env, runner: seam, harness, rateLimited: () => runner.rateLimited(), onChainPass, onChains })
     .then((result) => {
       snapshot(run); // last live numbers before the status flips
       state.status = "finished";
