@@ -121,8 +121,8 @@ describe("requests for OpenAI's GPT models on Bedrock", () => {
   const astra = "global.openai.gpt-6.2-astra";
 
   it("tells the hosted GPT models from the rest", () => {
-    for (const id of [astra, "global.openai.gpt-6-astra", "openai.gpt-6.2-sol", "us.openai.gpt-5.5"]) expect(isOpenAiGpt(id), id).toBe(true);
-    for (const id of ["global.zai.glm-5.3", "openai.gpt-oss-120b-1:0", "anthropic.claude-opus-5-5", "myopenai.gpt-x"]) expect(isOpenAiGpt(id), id).toBe(false);
+    for (const id of [astra, "global.openai.gpt-6-astra", "openai.gpt-6.2-sol", "us.openai.gpt-5.5", "arn:aws:bedrock:us-east-1::foundation-model/openai.gpt-6.2-astra"]) expect(isOpenAiGpt(id), id).toBe(true);
+    for (const id of ["global.zai.glm-5.3", "openai.gpt-oss-120b-1:0", "anthropic.claude-opus-5-5", "myopenai.gpt-x", "arn:aws:bedrock:us-east-1::foundation-model/openai.gpt-oss-120b-1:0"]) expect(isOpenAiGpt(id), id).toBe(false);
   });
 
   it("sends the output limit as max_completion_tokens, and drops what the model refuses", () => {

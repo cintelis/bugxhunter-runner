@@ -131,17 +131,45 @@ export function Canvas({ config, models, onExit }: Props) {
   const [full, setFull] = useState(false);
   useEffect(() => {
     if (!full) return;
+    let left = false;
+    const leaveBrowserFullScreen = () => {
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => { /* already left */ });
+    };
     // The page goes full screen, not this element, so dialogs and tooltips still show above it.
-    document.documentElement.requestFullscreen?.().catch(() => { /* refused: the overlay alone still fills the window */ });
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setFull(false); };
+    // The request settles later: if the canvas has left full screen by then (a quick second
+    // click), take the browser back out too, or it would be stranded there without the overlay.
+    void document.documentElement.requestFullscreen?.()
+      .then(() => { if (left) leaveBrowserFullScreen(); })
+      .catch(() => { /* refused: the overlay alone still fills the window */ });
+
+    // What the overlay covers (the top bar, the build box, the app's sidebar) must not take
+    // focus or clicks while it is covered: everything beside the canvas, at each level up to the
+    // app's root (not past it: what else sits in <body> is not ours to switch off).
+    const covered: Element[] = [];
+    for (let el: Element | null = wrapRef.current; el?.parentElement && el.parentElement !== document.body; el = el.parentElement) {
+      for (const sibling of Array.from(el.parentElement?.children ?? [])) {
+        if (sibling !== el && !sibling.hasAttribute("inert")) { sibling.setAttribute("inert", ""); covered.push(sibling); }
+      }
+    }
+
+    // Esc leaves, unless it belongs to something else: a text field being edited, an input
+    // method, a dialog open above the canvas, or a handler that already took it.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || e.isComposing) return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.("input, textarea, select, [contenteditable]") || document.querySelector(".overlay")) return;
+      setFull(false);
+    };
     // In the browser's full screen Esc never reaches the page: it ends full screen, and this follows.
     const onChange = () => { if (!document.fullscreenElement) setFull(false); };
     window.addEventListener("keydown", onKey);
     document.addEventListener("fullscreenchange", onChange);
     return () => {
+      left = true;
       window.removeEventListener("keydown", onKey);
       document.removeEventListener("fullscreenchange", onChange);
-      if (document.fullscreenElement) void document.exitFullscreen().catch(() => { /* already left */ });
+      for (const el of covered) el.removeAttribute("inert");
+      leaveBrowserFullScreen();
     };
   }, [full]);
 
@@ -533,6 +561,13 @@ export function Canvas({ config, models, onExit }: Props) {
                   : <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" />}
               </svg>
             </button>
+          )}
+          {/* The build box is covered in full screen, so a build's progress or failure shows here. */}
+          {full && (building || buildError) && (
+            <div className={"canvas-full-status" + (buildError && !building ? " failed" : "")} role="status" onPointerDown={(e) => e.stopPropagation()}>
+              {building ? "Building the threat model…" : buildError}
+              {building && <button className="btn ghost mini" onClick={() => abortRef.current?.abort()}>stop</button>}
+            </div>
           )}
           {hasNodes && (
             <div className="canvas-zoom" onPointerDown={(e) => e.stopPropagation()}>

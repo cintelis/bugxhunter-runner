@@ -39,7 +39,7 @@ if [ -n "${OPENROUTER_MODELS:-}${BEDROCK_MODELS:-}${RECON_EXECUTOR_MODEL:-}${REC
     // (No apostrophes in this script: it sits inside a single-quoted shell string, and one
     // ends it, so node runs only what comes before and prints nothing.)
     const bedrock = (env.BEDROCK_MODELS || "").split(",").map((s) => s.trim()).filter(Boolean)
-      .filter((id) => !/(^|\.)openai\.gpt-(?!oss)/.test(id));
+      .filter((id) => !/(^|[.\/])openai\.gpt-(?!oss)/.test(id));
     if (bedrock.length) {
       // GLM 5.3 is 1M in, 128K out; anything else gets the conservative default.
       const glm = /^(global|us)\.zai\.glm-5\.3$/;

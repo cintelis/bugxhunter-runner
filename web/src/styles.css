@@ -531,7 +531,7 @@ select {
 .cf-add .btn { flex: none; }
 /* The model that builds: wide enough for a long model name (it was cut short at 260px), without
    running the whole row. A build error, when there is one, has the rest. */
-.canvas-builder { flex: 0 1 400px; min-width: 140px; max-width: 400px; margin-left: 8px; font-size: 12px; text-overflow: ellipsis; }
+.canvas-builder { flex: 1 1 220px; min-width: 140px; max-width: 400px; margin-left: 8px; font-size: 12px; text-overflow: ellipsis; }
 /* The build box's hide button: its top right corner. The text keeps clear of it. */
 .canvas-build-box { position: relative; }
 .canvas-build-box .canvas-box-hide { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; font-size: 13px; }
@@ -556,6 +556,13 @@ select {
 .canvas-stage:hover .canvas-full-btn, .canvas-full-btn:focus-visible, .canvas-full-btn.on { opacity: 1; }
 .canvas-full-btn:hover { border-color: var(--cyan); color: var(--cyan); }
 @media (hover: none) { .canvas-full-btn { opacity: 1; } } /* touch: nothing to hover with */
+/* A build's progress or failure while full screen, where the build box is covered. */
+.canvas-full-status {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 3; max-width: min(70%, 720px);
+  display: flex; align-items: center; gap: 10px; padding: 6px 12px; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; font-family: var(--mono); font-size: 11.5px; color: var(--muted);
+}
+.canvas-full-status.failed { color: var(--amber); border-color: var(--amber); }
 .canvas-zoom { position: absolute; right: 12px; bottom: 12px; z-index: 2; display: flex; gap: 4px; align-items: center; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 4px; font-family: var(--mono); font-size: 11px; }
 .canvas-zoom button { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; min-width: 28px; height: 26px; cursor: pointer; font-family: inherit; }
 .canvas-zoom button:hover { border-color: var(--cyan); color: var(--cyan); }

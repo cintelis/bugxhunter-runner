@@ -24,7 +24,8 @@ function inlineConfig(env: Record<string, string>): Record<string, any> | null {
   return out ? JSON.parse(out) : null;
 }
 
-describe("the agent entrypoint's inline config", () => {
+// It is a POSIX shell script for a Linux container: there is no `sh` to run it with on Windows.
+describe.skipIf(process.platform === "win32")("the agent entrypoint's inline config", () => {
   it("keeps the node script inside one shell string", () => {
     const body = block.slice(block.indexOf("node -e '") + "node -e '".length, block.lastIndexOf("')"));
     expect(body).not.toContain("'");
@@ -50,6 +51,8 @@ describe("the agent entrypoint's inline config", () => {
     const cfg = inlineConfig({ BEDROCK_MODELS: "global.zai.glm-5.3,global.openai.gpt-6.2-astra,openai.gpt-oss-120b-1:0" })!;
     expect(Object.keys(cfg.provider.bedrock.models)).toEqual(["global.zai.glm-5.3", "openai.gpt-oss-120b-1:0"]);
     expect(inlineConfig({ BEDROCK_MODELS: "global.openai.gpt-6.2-astra" })).toEqual({});
+    // Named by ARN too.
+    expect(inlineConfig({ BEDROCK_MODELS: "arn:aws:bedrock:us-east-1::foundation-model/openai.gpt-6.2-astra" })).toEqual({});
   });
 
   it("turns OPENROUTER_MODELS into a provider, alongside Bedrock", () => {
