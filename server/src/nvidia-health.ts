@@ -21,7 +21,8 @@ const PROBE_GAP_MS = Number(process.env.OPEN_RUNNER_NVIDIA_PROBE_GAP_MS ?? 1500)
 interface State {
   checkedAt: string | null;
   /** Upstream id (no `nim/` prefix) → when it was first seen answering 404. */
-  retired: Record<string, string>;
+  /** Model id to when it was found retired. A Map: the ids come from requests, and must never name a property. */
+  retired: Map<string, string>;
 }
 
 let state: State | null = null;
@@ -30,10 +31,11 @@ let probing: Promise<void> | null = null;
 function load(): State {
   if (state) return state;
   try {
-    const s = JSON.parse(fs.readFileSync(HEALTH_FILE, "utf8")) as Partial<State>;
-    state = { checkedAt: s.checkedAt ?? null, retired: s.retired && typeof s.retired === "object" ? s.retired : {} };
+    const s = JSON.parse(fs.readFileSync(HEALTH_FILE, "utf8")) as { checkedAt?: string | null; retired?: unknown };
+    const saved = s.retired && typeof s.retired === "object" ? Object.entries(s.retired as Record<string, unknown>) : [];
+    state = { checkedAt: s.checkedAt ?? null, retired: new Map(saved.map(([id, at]) => [id, String(at)])) };
   } catch {
-    state = { checkedAt: null, retired: {} };
+    state = { checkedAt: null, retired: new Map() };
   }
   return state;
 }
@@ -42,28 +44,29 @@ function save() {
   try {
     fs.mkdirSync(path.dirname(HEALTH_FILE), { recursive: true });
     const tmp = `${HEALTH_FILE}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(load(), null, 2));
+    const s = load();
+    fs.writeFileSync(tmp, JSON.stringify({ checkedAt: s.checkedAt, retired: Object.fromEntries(s.retired) }, null, 2));
     fs.renameSync(tmp, HEALTH_FILE);
   } catch (e) {
     console.error("[nvidia] could not save model health:", (e as Error).message);
   }
 }
 
-export const isRetired = (id: string) => id in load().retired;
-export const retiredIds = () => Object.keys(load().retired).sort();
+export const isRetired = (id: string) => load().retired.has(id);
+export const retiredIds = () => [...load().retired.keys()].sort();
 
 export function markRetired(id: string) {
   const s = load();
-  if (s.retired[id]) return;
-  s.retired[id] = new Date().toISOString();
-  console.log(`[nvidia] ${id} answers 404, hiding it from the Playground`);
+  if (s.retired.has(id)) return;
+  s.retired.set(id, new Date().toISOString());
+  // The id can come from a request: quoted and escaped, so it cannot break the log line.
+  console.log(`[nvidia] ${JSON.stringify(id)} answers 404, hiding it from the Playground`);
   save();
 }
 
 export function markAlive(id: string) {
   const s = load();
-  if (!s.retired[id]) return;
-  delete s.retired[id];
+  if (!s.retired.delete(id)) return;
   save();
 }
 

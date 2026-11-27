@@ -39,7 +39,8 @@ export interface ChatMsg {
   tool_calls?: import("../../shared/scx").ToolCall[];
   tool_call_id?: string;
   /** UI-only: live token usage attached to assistant turns. */
-  usage?: { prompt?: number; completion?: number; reasoning?: number };
+  /** `cached` and `cacheWrite` are the parts of `prompt` read from and written to the provider's prompt cache. */
+  usage?: { prompt?: number; completion?: number; reasoning?: number; cached?: number; cacheWrite?: number };
   /** UI-only: timings for an assistant turn, in ms (ttft = time to first token). */
   timing?: { ttft?: number; total: number };
   /** UI-only: why an assistant turn ended ("stop", "length", "tool_calls"...), to say so when it was cut off. */

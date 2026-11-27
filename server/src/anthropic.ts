@@ -16,8 +16,13 @@
  *    fallback (`fallbacks: "default"`), so a declined request is re-run on the model
  *    Anthropic recommends for that category instead of just failing. A decline that
  *    still stands is reported as an error that names the category.
- *  - Prompt caching is on (top-level `cache_control`), so a long conversation's
- *    history is not billed in full on every turn.
+ *  - Prompt caching is on. The system prompt (with the tools, which render before it)
+ *    has its own breakpoint, so chats that share a preset read it from cache; the
+ *    conversation is cached up to its last turn, so history is not billed in full on
+ *    every turn. Knowledge-base passages change every turn, so they go after the last
+ *    breakpoint, never into the system prompt. What was read and written is reported
+ *    in `usage.prompt_tokens_details`. Entries last an hour from their last use
+ *    (ANTHROPIC_CACHE_TTL=5m for five minutes).
  *
  * The agent does not use this module: OpenCode talks to Claude natively, through
  * the runner's key-injecting proxy (see index.ts and providers.ts).
@@ -43,6 +48,23 @@ const FALLBACK_BETA = "server-side-fallback-2026-07-01";
 
 /** Image types the Messages API accepts. */
 const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+
+/**
+ * ANTHROPIC_CACHE_TTL as a cache lifetime: "1h" (the default) or "5m". Throws on anything else.
+ * An entry's time runs from its last use. One hour costs twice the input price to write, five
+ * minutes 1.25 times; a read costs a fraction either way. A person reading a long reply often
+ * takes more than five minutes, and an entry that has lapsed is written again in full, so the
+ * Playground defaults to the hour.
+ */
+export function readCacheTtl(value: string | undefined): "5m" | "1h" {
+  const v = value?.trim().toLowerCase();
+  if (!v) return "1h";
+  if (v !== "5m" && v !== "1h") throw new Error(`ANTHROPIC_CACHE_TTL: "${value}" is not 5m or 1h.`);
+  return v;
+}
+
+/** Every breakpoint in a request carries the same lifetime (a longer one may not follow a shorter one). */
+const CACHE = { type: "ephemeral" as const, ttl: readCacheTtl(process.env.ANTHROPIC_CACHE_TTL) };
 
 const JSON_ONLY = "Reply with one valid JSON object and nothing else: no prose before or after it, no code fences.";
 
@@ -96,6 +118,11 @@ function parseArgs(args: string): Record<string, unknown> {
 /**
  * An OpenAI-shaped Playground request as a Claude Messages request.
  * `model` is the bare Claude id; `modelMax` is its output limit, if known.
+ *
+ * `params.turnContext` is text for this turn only (knowledge-base passages). It is sent
+ * as the last block of the last user turn, after the conversation's cache breakpoint:
+ * the next request will not carry it, and anything before a breakpoint must come back
+ * unchanged for the cache to be read.
  */
 export function toAnthropicRequest(params: ChatParams, model: string, modelMax?: number | null): StreamParams {
   const system: string[] = [];
@@ -136,11 +163,31 @@ export function toAnthropicRequest(params: ChatParams, model: string, modelMax?:
   if (messages[0]?.role === "assistant") messages.unshift({ role: "user", content: [{ type: "text", text: "(conversation start)" }] });
   if (params.response_format?.type === "json_object") system.push(JSON_ONLY);
 
-  const tools = params.tools?.map((t) => ({
+  const systemText = system.join("\n\n");
+  const tools = params.tools?.map((t, i, all) => ({
     name: t.function.name,
     ...(t.function.description ? { description: t.function.description } : {}),
     input_schema: { type: "object" as const, ...(t.function.parameters ?? {}) },
+    // Tools render before the system prompt, so its breakpoint covers them; with no system prompt they get their own.
+    ...(!systemText && i === all.length - 1 ? { cache_control: CACHE } : {}),
   }));
+
+  // The conversation's breakpoint: automatic (the last block) unless this turn carries context
+  // of its own, which then follows a breakpoint placed on the block before it.
+  const context = typeof params.turnContext === "string" ? params.turnContext.trim() : "";
+  let automatic = true;
+  if (context) {
+    const last = messages[messages.length - 1];
+    if (last?.role === "user") {
+      const blocks = last.content as BlockParam[];
+      const tail = blocks[blocks.length - 1] as BlockParam & { cache_control?: typeof CACHE };
+      tail.cache_control = CACHE;
+      blocks.push({ type: "text", text: context });
+      automatic = false;
+    } else {
+      messages.push({ role: "user", content: [{ type: "text", text: context }] });
+    }
+  }
   const stops = (Array.isArray(params.stop) ? params.stop : params.stop ? [params.stop] : []).filter((s) => typeof s === "string" && s.trim());
   const cap = modelMax && modelMax > 0 ? modelMax : 128_000;
   const maxTokens = Math.max(1, Math.min(params.max_tokens && params.max_tokens > 0 ? params.max_tokens : DEFAULT_MAX_TOKENS, cap));
@@ -150,8 +197,8 @@ export function toAnthropicRequest(params: ChatParams, model: string, modelMax?:
     max_tokens: maxTokens,
     messages,
     stream: true,
-    cache_control: { type: "ephemeral" },
-    ...(system.length ? { system: system.join("\n\n") } : {}),
+    ...(automatic ? { cache_control: CACHE } : {}),
+    ...(systemText ? { system: [{ type: "text" as const, text: systemText, cache_control: CACHE }] } : {}),
     ...(tools?.length ? { tools, tool_choice: params.tool_choice === "none" ? { type: "none" as const } : { type: "auto" as const } } : {}),
     ...(stops.length ? { stop_sequences: stops } : {}),
     ...(FALLBACK_MODELS.has(model) ? { betas: [FALLBACK_BETA], fallbacks: "default" as const } : {}),
@@ -199,9 +246,20 @@ function turnToolCalls(msg: Message) {
     .map((t) => ({ id: t.id, type: "function" as const, function: { name: t.name, arguments: JSON.stringify(t.input ?? {}) } }));
 }
 
-function usageOf(u: Message["usage"]) {
-  const prompt = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
-  return { prompt_tokens: prompt, completion_tokens: u.output_tokens ?? 0, total_tokens: prompt + (u.output_tokens ?? 0) };
+/**
+ * Claude's usage in OpenAI form. `prompt_tokens` is the whole prompt; of it, `cached_tokens`
+ * were read from the cache (billed at a fraction) and `cache_write_tokens` were written to it
+ * (billed at a premium). The rest was billed at the normal input rate.
+ */
+export function usageOf(u: Pick<Message["usage"], "input_tokens" | "output_tokens" | "cache_read_input_tokens" | "cache_creation_input_tokens">) {
+  const read = u.cache_read_input_tokens ?? 0, written = u.cache_creation_input_tokens ?? 0;
+  const prompt = (u.input_tokens ?? 0) + read + written;
+  return {
+    prompt_tokens: prompt,
+    completion_tokens: u.output_tokens ?? 0,
+    total_tokens: prompt + (u.output_tokens ?? 0),
+    prompt_tokens_details: { cached_tokens: read, cache_write_tokens: written },
+  };
 }
 
 /** An SDK error as an SCXError the routes already know how to report. */

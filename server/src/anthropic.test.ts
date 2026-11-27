@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AnthropicChatClient, finishReason, normaliseAnthropic, refusalMessage, toAnthropicRequest } from "./anthropic.js";
+import { AnthropicChatClient, finishReason, normaliseAnthropic, readCacheTtl, refusalMessage, toAnthropicRequest, usageOf } from "./anthropic.js";
 import { SCXError, type ChatParams } from "./scx.js";
 
 describe("toAnthropicRequest", () => {
@@ -13,10 +13,10 @@ describe("toAnthropicRequest", () => {
         { role: "user", content: "hi" },
       ],
     }, "claude-haiku-5-5", 64_000);
-    expect(req.system).toBe("Be terse.\n\nKnowledge: ...");
+    expect(req.system).toEqual([{ type: "text", text: "Be terse.\n\nKnowledge: ...", cache_control: { type: "ephemeral", ttl: "1h" } }]);
     expect(req.messages).toEqual([{ role: "user", content: [{ type: "text", text: "hi" }] }]);
     for (const k of ["temperature", "top_p", "seed", "presence_penalty"]) expect(req).not.toHaveProperty(k);
-    expect(req.cache_control).toEqual({ type: "ephemeral" });
+    expect(req.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
   });
 
   it("caps max_tokens at the model's limit and defaults it when unset", () => {
@@ -55,7 +55,7 @@ describe("toAnthropicRequest", () => {
         { role: "tool", tool_call_id: "c2", content: "" },
       ],
     }, "m");
-    expect(req.tools).toEqual([{ name: "lookup", description: "Look up", input_schema: { type: "object", properties: { q: { type: "string" } } } }]);
+    expect(req.tools).toEqual([{ name: "lookup", description: "Look up", input_schema: { type: "object", properties: { q: { type: "string" } } }, cache_control: { type: "ephemeral", ttl: "1h" } }]);
     expect(req.tool_choice).toEqual({ type: "auto" }); // forced tool use is rejected by current models
     expect(req.messages).toEqual([
       { role: "user", content: [{ type: "text", text: "find it" }] },
@@ -76,13 +76,95 @@ describe("toAnthropicRequest", () => {
       messages: [{ role: "assistant", content: "Hello!" }, { role: "user", content: "go" }],
     }, "m");
     expect(req.messages[0].role).toBe("user");
-    expect(req.system).toMatch(/JSON object/);
+    expect(JSON.stringify(req.system)).toMatch(/JSON object/);
+  });
+
+  // --- Prompt caching: what is sent before a breakpoint must come back unchanged ---
+
+  /** A request as the cache sees it: breakpoints removed, since moving one is not a change of content. */
+  const bare = (v: unknown): unknown => JSON.parse(JSON.stringify(v, (k, val) => (k === "cache_control" ? undefined : val)));
+  const tool = (name: string) => ({ type: "function" as const, function: { name, parameters: { type: "object", properties: {} } } });
+
+  it("marks the system prompt, and the last tool when there is no system prompt", () => {
+    const user: ChatParams["messages"] = [{ role: "user", content: "hi" }];
+    const withSystem = toAnthropicRequest({ model: "x", tools: [tool("a"), tool("b")], messages: [{ role: "system", content: "S" }, ...user] }, "m");
+    expect(withSystem.system).toEqual([{ type: "text", text: "S", cache_control: { type: "ephemeral", ttl: "1h" } }]);
+    expect(withSystem.tools?.some((t) => "cache_control" in t)).toBe(false); // tools render first: the system breakpoint covers them
+    const toolsOnly = toAnthropicRequest({ model: "x", tools: [tool("a"), tool("b")], messages: user }, "m");
+    expect(toolsOnly).not.toHaveProperty("system");
+    expect(toolsOnly.tools?.map((t) => "cache_control" in t)).toEqual([false, true]);
+  });
+
+  it("sends the next turn with the previous request as an unchanged prefix", () => {
+    const system = { role: "system" as const, content: "You review code." };
+    const first = toAnthropicRequest({ model: "x", tools: [tool("a")], messages: [system, { role: "user", content: "one" }] }, "m");
+    const second = toAnthropicRequest({ model: "x", tools: [tool("a")], messages: [
+      system, { role: "user", content: "one" }, { role: "assistant", content: "answer" }, { role: "user", content: "two" },
+    ] }, "m");
+    expect(first.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+    expect(bare(second.system)).toEqual(bare(first.system));
+    expect(bare(second.tools)).toEqual(bare(first.tools));
+    expect(bare(second.messages.slice(0, first.messages.length))).toEqual(bare(first.messages));
+  });
+
+  it("puts this turn's context after the breakpoint, and out of the system prompt", () => {
+    const system = { role: "system" as const, content: "You review code." };
+    const first = toAnthropicRequest({ model: "x", turnContext: "KB for one", messages: [system, { role: "user", content: "one" }] }, "m");
+    expect(first.system).toEqual([{ type: "text", text: "You review code.", cache_control: { type: "ephemeral", ttl: "1h" } }]);
+    expect(first.messages).toEqual([{ role: "user", content: [
+      { type: "text", text: "one", cache_control: { type: "ephemeral", ttl: "1h" } },
+      { type: "text", text: "KB for one" },
+    ] }]);
+    expect(first).not.toHaveProperty("cache_control"); // the automatic breakpoint would land on the context and cache it for nothing
+
+    // The next turn has other context and no longer carries the first: everything up to the
+    // first request's breakpoint is still there, unchanged, so that entry is read.
+    const second = toAnthropicRequest({ model: "x", turnContext: "KB for two", messages: [
+      system, { role: "user", content: "one" }, { role: "assistant", content: "answer" }, { role: "user", content: "two" },
+    ] }, "m");
+    const cachedByFirst = [{ role: "user", content: [{ type: "text", text: "one" }] }];
+    expect(bare(second.system)).toEqual(bare(first.system));
+    expect(bare(second.messages.slice(0, 1))).toEqual(cachedByFirst);
+    expect(JSON.stringify(second)).not.toContain("KB for one");
+  });
+
+  it("puts the context after tool results in a tool loop", () => {
+    const req = toAnthropicRequest({ model: "x", turnContext: "KB", messages: [
+      { role: "user", content: "find it" },
+      { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "a", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "c1", content: "A" },
+    ] }, "m");
+    expect(req.messages[2]).toEqual({ role: "user", content: [
+      { type: "tool_result", tool_use_id: "c1", content: "A", cache_control: { type: "ephemeral", ttl: "1h" } },
+      { type: "text", text: "KB" },
+    ] });
   });
 
   it("asks for server-side fallback only on models that take it", () => {
     const msgs: ChatParams["messages"] = [{ role: "user", content: "hi" }];
     expect(toAnthropicRequest({ model: "x", messages: msgs }, "claude-opus-5-5")).toMatchObject({ fallbacks: "default", betas: ["server-side-fallback-2026-07-01"] });
     expect(toAnthropicRequest({ model: "x", messages: msgs }, "claude-haiku-5-5")).not.toHaveProperty("fallbacks");
+  });
+});
+
+describe("readCacheTtl", () => {
+  it("defaults to one hour, takes 5m or 1h, and refuses anything else", () => {
+    expect(readCacheTtl(undefined)).toBe("1h");
+    expect(readCacheTtl("  ")).toBe("1h");
+    expect(readCacheTtl("5m")).toBe("5m");
+    expect(readCacheTtl(" 1H ")).toBe("1h");
+    expect(() => readCacheTtl("30m")).toThrow(/ANTHROPIC_CACHE_TTL/);
+  });
+});
+
+describe("usageOf", () => {
+  it("counts cached and written tokens in the prompt, and reports them apart", () => {
+    expect(usageOf({ input_tokens: 40, output_tokens: 7, cache_read_input_tokens: 9000, cache_creation_input_tokens: 300 })).toEqual({
+      prompt_tokens: 9340, completion_tokens: 7, total_tokens: 9347,
+      prompt_tokens_details: { cached_tokens: 9000, cache_write_tokens: 300 },
+    });
+    expect(usageOf({ input_tokens: 10, output_tokens: 5, cache_read_input_tokens: null, cache_creation_input_tokens: null }).prompt_tokens_details)
+      .toEqual({ cached_tokens: 0, cache_write_tokens: 0 });
   });
 });
 

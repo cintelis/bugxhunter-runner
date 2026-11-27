@@ -65,6 +65,8 @@ export interface ChatCompletion {
     completion_tokens: number;
     total_tokens: number;
     completion_tokens_details?: { reasoning_tokens?: number };
+    /** Of the prompt: tokens read from the provider's prompt cache, and tokens written to it. */
+    prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
   };
 }
 

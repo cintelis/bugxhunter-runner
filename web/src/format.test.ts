@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { cutOffNotice, formatBytes, formatTiming, formatTokens } from "./format";
+import { cacheNote, cutOffNotice, formatBytes, formatTiming, formatTokens } from "./format";
+
+describe("cacheNote", () => {
+  it("says what was read from and written to the prompt cache, and nothing when neither was", () => {
+    expect(cacheNote({ cached: 9800, cacheWrite: 1200 })).toBe(" (9800 cached, 1200 written)");
+    expect(cacheNote({ cached: 9800 })).toBe(" (9800 cached)");
+    expect(cacheNote({ cacheWrite: 1200, cached: 0 })).toBe(" (1200 written)");
+    expect(cacheNote({ cached: 0, cacheWrite: 0 })).toBe("");
+    expect(cacheNote(undefined)).toBe("");
+  });
+});
 
 describe("cutOffNotice", () => {
   it("explains an empty reply: the limit went on reasoning", () => {

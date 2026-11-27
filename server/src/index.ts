@@ -336,25 +336,30 @@ app.get("/api/models", async (_req, res) => {
  * Otherwise returns the full completion JSON.
  */
 app.post("/api/chat", async (req, res) => {
-  const { rag, ragTopK, ...params } = req.body as ChatParams & { rag?: boolean; ragTopK?: number };
+  // `turnContext` is the runner's own field (set below for Claude): one sent by the browser is dropped.
+  const { rag, ragTopK, turnContext: _dropped, ...params } = req.body as ChatParams & { rag?: boolean; ragTopK?: number };
   let retrieved: { text: string; score: number; doc: string }[] = [];
   try {
-    // RAG: retrieve context for the latest user turn and inject it as a system preamble.
+    const { client, model, provider } = clientFor(String(params.model ?? ""));
+    // RAG: retrieve context for the latest user turn. For Claude it rides at the end of that
+    // turn (anthropic.ts), because a system prompt that changes every turn would throw away
+    // the cached conversation; the other providers get it as a system preamble.
+    let turnContext: string | undefined;
     if (rag && kb.size) {
       const lastUser = [...params.messages].reverse().find((m) => m.role === "user");
       const query = typeof lastUser?.content === "string" ? lastUser.content : "";
       if (query) {
         retrieved = await kb.search(query, ragTopK ?? 4);
         const block = buildContextBlock(retrieved);
-        if (block) {
+        if (block && provider === "anthropic") turnContext = block;
+        else if (block) {
           const sys = params.messages.find((m) => m.role === "system");
           if (sys && typeof sys.content === "string") sys.content = `${sys.content}\n\n${block}`;
           else params.messages.unshift({ role: "system", content: block });
         }
       }
     }
-    const { client, model, provider } = clientFor(String(params.model ?? ""));
-    const call = { ...params, model };
+    const call = { ...params, model, ...(turnContext ? { turnContext } : {}) };
     // Keep the NVIDIA list honest: a 404 or 410 means the model was retired upstream.
     const track = <T>(p: Promise<T>) => provider !== "nvidia" ? p : p.then(
       (v) => { nvidiaHealth.markAlive(model); return v; },
