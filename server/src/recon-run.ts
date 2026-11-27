@@ -380,6 +380,7 @@ export async function startRecon(o: ReconStart): Promise<ReconState> {
       state.status = "finished";
       state.stopped = runner.wasAborted ? "aborted" : result.stopped;
       state.findings = result.findings;
+      state.chains = result.chains;
       state.rounds = result.rounds;
       if (state.stopped === "error") state.error = lastError;
       state.finishedAt = Date.now();

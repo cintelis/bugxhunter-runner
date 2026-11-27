@@ -185,11 +185,39 @@ export interface ReconEnv {
 
 /** A finding the verifier confirmed, or marked as depending on a non-production setting. */
 export interface ReconFinding {
+  /** "F1", "F2", …: how an attack path names the finding. */
+  id?: string;
   title: string;
   severity: "low" | "medium" | "high" | "critical";
   standardId?: string;
   repro: string;
   verdict: "real" | "config-dependent" | "rejected";
+  prodCaveat?: string;
+  env: ReconEnv["kind"];
+}
+
+/**
+ * An attack path: findings of the run put together and tried end to end. `demonstrated`
+ * means every step has its evidence; `partial` means it stopped at `blockedAt` and is a
+ * lead, not a finding.
+ */
+export interface ReconChain {
+  /** "P1", "P2", …. */
+  id?: string;
+  title: string;
+  /** For a demonstrated path, never below the worst finding it uses. */
+  severity: ReconFinding["severity"];
+  /** Config-dependent when any finding it uses is. */
+  verdict: "real" | "config-dependent";
+  standardId?: string;
+  /** What an attacker ends up with. */
+  impact: string;
+  /** Ids of the findings it uses. */
+  links: string[];
+  steps: { action: string; evidence?: string }[];
+  status: "demonstrated" | "partial";
+  blockedAt?: number;
+  blockedWhy?: string;
   prodCaveat?: string;
   env: ReconEnv["kind"];
 }
@@ -214,6 +242,8 @@ export interface ReconState {
   /** Approvals the gate answered itself (allowed, denied) and left for the person (asked). */
   gate: { allowed: number; asked: number; denied: number };
   findings: ReconFinding[];
+  /** Attack paths from the chain pass that follows the main loop. Empty until that pass runs. */
+  chains?: ReconChain[];
   error?: string;
   startedAt: number;
   finishedAt?: number;

@@ -38,6 +38,47 @@ export interface ReconHarness {
   maxRounds?: number;
   tools?: "full" | "core";
   effort?: ReconEffort;
+  /** The chain pass that follows the main loop (executor role only). Absent field = its default. */
+  chainPass?: ChainPassHarness;
+}
+
+/**
+ * The chain pass: after the main loop, the verified findings are combined into attack
+ * paths, each is tried end to end, and the ones that hold are reported with the findings
+ * they use. These are its caps; it gets no permission the main loop does not have.
+ */
+export interface ChainPassHarness {
+  enabled?: boolean;
+  /** Paths proposed and tried, at most. */
+  maxCandidates?: number;
+  /** Executor rounds spent demonstrating one path, at most. */
+  maxRoundsPerChain?: number;
+  /** Share of the token budget the main loop leaves unspent for the pass, in percent. */
+  reservePercent?: number;
+}
+
+export const CHAIN_PASS_DEFAULTS: Required<ChainPassHarness> = { enabled: true, maxCandidates: 3, maxRoundsPerChain: 3, reservePercent: 15 };
+/** Upper bounds: a profile or a request can lower the caps, never lift them past these. */
+export const CHAIN_PASS_LIMITS = { maxCandidates: 5, maxRoundsPerChain: 5, reservePercent: 50 } as const;
+
+/** The chain pass settings with the defaults filled in. */
+export function resolveChainPass(c?: ChainPassHarness): Required<ChainPassHarness> {
+  return { ...CHAIN_PASS_DEFAULTS, ...(c ?? {}) };
+}
+
+function parseChainPass(raw: unknown): ChainPassHarness | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as Record<string, unknown>;
+  const c: ChainPassHarness = {};
+  const int = (v: unknown, min: number, max: number) => (typeof v === "number" && Number.isInteger(v) && v >= min && v <= max ? v : undefined);
+  if (typeof r.enabled === "boolean") c.enabled = r.enabled;
+  const candidates = int(r.maxCandidates, 1, CHAIN_PASS_LIMITS.maxCandidates);
+  const rounds = int(r.maxRoundsPerChain, 1, CHAIN_PASS_LIMITS.maxRoundsPerChain);
+  const reserve = int(r.reservePercent, 0, CHAIN_PASS_LIMITS.reservePercent);
+  if (candidates !== undefined) c.maxCandidates = candidates;
+  if (rounds !== undefined) c.maxRoundsPerChain = rounds;
+  if (reserve !== undefined) c.reservePercent = reserve;
+  return Object.keys(c).length ? c : undefined;
 }
 
 /** A profile assigns a model to each role and, optionally, a harness to each. */
@@ -83,6 +124,8 @@ export function parseReconHarness(raw: unknown): ReconHarness | undefined {
   if (typeof r.maxRounds === "number" && Number.isInteger(r.maxRounds) && r.maxRounds >= 1) h.maxRounds = r.maxRounds;
   if (r.tools === "full" || r.tools === "core") h.tools = r.tools;
   if (r.effort === "low" || r.effort === "medium" || r.effort === "high") h.effort = r.effort;
+  const chainPass = parseChainPass(r.chainPass);
+  if (chainPass) h.chainPass = chainPass;
   return Object.keys(h).length ? h : undefined;
 }
 
@@ -615,11 +658,58 @@ export interface EnvFidelity {
 }
 
 export interface ReconFinding {
+  /** "F1", "F2", …: given when the run keeps the finding, so an attack path can name it. */
+  id?: string;
   title: string;
   severity: "low" | "medium" | "high" | "critical";
   standardId?: string;
   repro: string;
   verdict: "real" | "config-dependent" | "rejected";
+  prodCaveat?: string;
+  env: EnvFidelity["kind"];
+}
+
+/** One step of an attack path: what was done, and the request and response that show it. */
+export interface ReconChainStep {
+  action: string;
+  evidence?: string;
+}
+
+/**
+ * An attack path the chain pass proposed, before anything was run: findings of this run
+ * (and what was seen along the way) put in an order that would reach `goal`.
+ */
+export interface ChainCandidate {
+  title: string;
+  goal: string;
+  /** Ids of the findings it builds on. Every one exists in the run. */
+  links: string[];
+  steps: string[];
+  /** The step (from 1) the proposer could not vouch for, if it named one. */
+  unproven?: number;
+}
+
+/**
+ * An attack path the verifier looked at. `demonstrated`: every step has its evidence.
+ * `partial`: it stopped at `blockedAt`, and is a lead, never a finding.
+ */
+export interface ReconChain {
+  /** "P1", "P2", …: given when the run keeps the path. */
+  id?: string;
+  title: string;
+  /** For a demonstrated path, never below the worst finding it uses. */
+  severity: ReconFinding["severity"];
+  /** Config-dependent when the verifier says so, or when any finding it uses is. */
+  verdict: "real" | "config-dependent";
+  standardId?: string;
+  /** What an attacker ends up with. */
+  impact: string;
+  links: string[];
+  steps: ReconChainStep[];
+  status: "demonstrated" | "partial";
+  /** The step (from 1) a partial path stopped at, and why. */
+  blockedAt?: number;
+  blockedWhy?: string;
   prodCaveat?: string;
   env: EnvFidelity["kind"];
 }

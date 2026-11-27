@@ -20,7 +20,8 @@
 
 import {
   routeModel, harnessFor, classifyCommand, commandHazard, allCapped, originOf, escalateAfter, STATUS_LINE,
-  type ReconFinding, type EnvFidelity, type ReconHarness, type RouteSignals, type GateContext,
+  type ReconFinding, type ReconChain, type ReconChainStep, type ChainCandidate,
+  type EnvFidelity, type ReconHarness, type RouteSignals, type GateContext,
 } from "./recon.js";
 
 type Severity = ReconFinding["severity"];
@@ -112,6 +113,8 @@ export class ReconRun {
   /** Consecutive turns the executor reported stuck — the escalation signal. */
   attempts = 0;
   readonly findings: ReconFinding[] = [];
+  /** Attack paths from the chain pass: demonstrated ones and partial leads. */
+  readonly chains: ReconChain[] = [];
 
   constructor(private readonly harness: ReconHarness = {}) {}
 
@@ -120,9 +123,25 @@ export class ReconRun {
   recordStuck(): void { this.attempts += 1; }
   resetAttempts(): void { this.attempts = 0; }
 
-  /** Keep every finding the verifier didn't reject. */
+  /**
+   * Keep every finding the verifier didn't reject, and number it (F1, F2, …) so an attack
+   * path can name it. The id is set on the finding itself: the run's live view holds the
+   * same object.
+   */
   addFindings(fs: readonly ReconFinding[]): void {
-    for (const f of fs) if (f.verdict !== "rejected") this.findings.push(f);
+    for (const f of fs) {
+      if (f.verdict === "rejected") continue;
+      f.id = `F${this.findings.length + 1}`;
+      this.findings.push(f);
+    }
+  }
+
+  /** Keep the attack paths the verifier looked at, numbered P1, P2, …. */
+  addChains(cs: readonly ReconChain[]): void {
+    for (const c of cs) {
+      c.id = `P${this.chains.length + 1}`;
+      this.chains.push(c);
+    }
   }
 
   /** Uncached input tokens left, or undefined when the harness sets no budget. */
@@ -184,6 +203,8 @@ export interface ReconDriverOptions {
 
 export interface ReconRunResult {
   findings: ReconFinding[];
+  /** Attack paths from the chain pass (none until the pass runs). */
+  chains: ReconChain[];
   rounds: number;
   tokens: number;
   stopped: "done" | "idle" | "budget" | "rounds" | "stuck" | "rate-limited" | "error";
@@ -256,6 +277,7 @@ export function parseVerifierFindings(text: string, env: EnvFidelity["kind"]): R
   for (const raw of jsonObjects(text ?? "")) {
     let o: unknown;
     try { o = JSON.parse(raw); } catch { continue; }
+    if (isChainVerdict(o)) continue; // an attack path is not a finding: parseVerifierChains reads it
     const verdict = VERDICTS.find((v) => v === String(get(o, "verdict")).toLowerCase());
     const severity = SEVERITIES.find((s) => s === String(get(o, "severity")).toLowerCase());
     const repro = clipText(get(o, "repro"), 4000);
@@ -266,6 +288,135 @@ export function parseVerifierFindings(text: string, env: EnvFidelity["kind"]): R
       standardId: clipText(get(o, "standard_id") ?? get(o, "standardId"), 60),
       prodCaveat: clipText(get(o, "prod_caveat") ?? get(o, "prodCaveat"), 1000),
     });
+  }
+  return out;
+}
+
+/* ─────────────── attack paths (the chain pass reads these; pure) ─────────────── */
+
+const MAX_CHAIN_STEPS = 8;
+
+/** The verifier marks a path's verdict `"kind": "chain"`; one that lists the findings it links counts too. */
+function isChainVerdict(o: unknown): boolean {
+  return String(get(o, "kind")).toLowerCase() === "chain" || Array.isArray(get(o, "links"));
+}
+
+/** "F2" from "F2", "f2", " 2 " or 2; undefined for anything else. */
+function findingId(v: unknown): string | undefined {
+  const m = /^\s*f?\s*(\d{1,4})\s*$/i.exec(typeof v === "number" ? String(v) : typeof v === "string" ? v : "");
+  return m ? `F${Number(m[1])}` : undefined;
+}
+
+/** The ids in `raw` that name a finding of this run, each once, in the order given. Unknown ones are dropped. */
+function knownLinks(raw: unknown, findings: readonly ReconFinding[]): string[] {
+  const known = new Set(findings.map((f) => f.id).filter((id): id is string => Boolean(id)));
+  const out: string[] = [];
+  for (const v of Array.isArray(raw) ? raw : []) {
+    const id = findingId(v);
+    if (id && known.has(id) && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+/** A step given as text, or as an object with its action and evidence. */
+function chainStep(v: unknown): ReconChainStep | undefined {
+  const action = clipText(typeof v === "string" ? v : get(v, "action") ?? get(v, "step") ?? get(v, "what"), 600);
+  if (!action) return undefined;
+  const evidence = typeof v === "string" ? undefined : clipText(get(v, "evidence") ?? get(v, "repro"), 2000);
+  return evidence ? { action, evidence } : { action };
+}
+
+/**
+ * The paths the proposer suggested, from its reply: `{"paths": [...]}` or the path objects
+ * on their own. A path is kept only if it has two or more steps and builds on at least one
+ * finding of this run; ids that name no finding are dropped. At most `max` are returned, in
+ * the order given (the proposer ranks them). Like every model reply here, the text stays
+ * data: it is clipped, and nothing in it is acted on except through the gate.
+ */
+export function parseChainProposal(text: string, findings: readonly ReconFinding[], max: number): ChainCandidate[] {
+  const out: ChainCandidate[] = [];
+  const take = (o: unknown) => {
+    if (out.length >= max) return;
+    const steps = (Array.isArray(get(o, "steps")) ? (get(o, "steps") as unknown[]) : [])
+      .map((s) => chainStep(s)?.action).filter((s): s is string => Boolean(s)).slice(0, MAX_CHAIN_STEPS);
+    const links = knownLinks(get(o, "links") ?? get(o, "findings"), findings);
+    const goal = clipText(get(o, "goal") ?? get(o, "impact"), 400);
+    if (steps.length < 2 || !links.length || !goal) return;
+    const unproven = Number(get(o, "unproven") ?? get(o, "unproven_step"));
+    out.push({
+      title: clipText(get(o, "title"), 200) ?? goal.slice(0, 80),
+      goal, links, steps,
+      ...(Number.isInteger(unproven) && unproven >= 1 && unproven <= steps.length ? { unproven } : {}),
+    });
+  };
+  for (const raw of jsonObjects(text ?? "")) {
+    let o: unknown;
+    try { o = JSON.parse(raw); } catch { continue; }
+    const paths = get(o, "paths") ?? get(o, "chains");
+    if (Array.isArray(paths)) paths.forEach(take);
+    else take(o);
+  }
+  return out;
+}
+
+/**
+ * The rules an attack path must meet whatever the verifier wrote:
+ *  - a path with a step that has no evidence is partial, stopped at that step;
+ *  - it is config-dependent if any finding it uses is;
+ *  - a demonstrated path is never rated below the worst finding it uses (that finding
+ *    stands on its own, so the path that contains it cannot be less serious).
+ */
+export function applyChainRules(chain: ReconChain, findings: readonly ReconFinding[]): ReconChain {
+  const used = findings.filter((f) => f.id && chain.links.includes(f.id));
+  const out: ReconChain = { ...chain };
+  const gap = out.steps.findIndex((s) => !s.evidence);
+  if (out.status === "demonstrated" && gap >= 0) {
+    out.status = "partial";
+    out.blockedAt = gap + 1;
+    out.blockedWhy = "no evidence for this step";
+  }
+  if (out.status === "demonstrated") { delete out.blockedAt; delete out.blockedWhy; }
+  if (used.some((f) => f.verdict === "config-dependent")) {
+    out.verdict = "config-dependent";
+    out.prodCaveat ??= used.map((f) => f.prodCaveat).filter(Boolean).join(" ") || "Depends on a finding that depends on a non-production setting.";
+  }
+  if (out.status === "demonstrated") {
+    const floor = worstSeverity(used);
+    if (floor && SEVERITY_RANK[floor] > SEVERITY_RANK[out.severity]) out.severity = floor;
+  }
+  return out;
+}
+
+/**
+ * The verifier's verdicts on attack paths, from its reply. One is read only if it is valid
+ * JSON marked as a path, with a known verdict and severity, two or more steps, the impact,
+ * and at least one finding of this run among its links. A rejected path is dropped, and so
+ * is anything unparseable: nothing is promoted on a guess. The rules above are then applied.
+ */
+export function parseVerifierChains(text: string, env: EnvFidelity["kind"], findings: readonly ReconFinding[]): ReconChain[] {
+  const out: ReconChain[] = [];
+  for (const raw of jsonObjects(text ?? "")) {
+    let o: unknown;
+    try { o = JSON.parse(raw); } catch { continue; }
+    if (!isChainVerdict(o)) continue;
+    const verdict = VERDICTS.find((v) => v === String(get(o, "verdict")).toLowerCase());
+    const severity = SEVERITIES.find((s) => s === String(get(o, "severity")).toLowerCase());
+    const steps = (Array.isArray(get(o, "steps")) ? (get(o, "steps") as unknown[]) : [])
+      .map(chainStep).filter((s): s is ReconChainStep => Boolean(s)).slice(0, MAX_CHAIN_STEPS);
+    const links = knownLinks(get(o, "links"), findings);
+    const impact = clipText(get(o, "impact") ?? get(o, "goal"), 600);
+    if (!verdict || verdict === "rejected" || !severity || steps.length < 2 || !links.length || !impact) continue;
+    const blockedAt = Number(get(o, "blocked_at") ?? get(o, "blockedAt"));
+    const partial = String(get(o, "status")).toLowerCase() === "partial";
+    out.push(applyChainRules({
+      title: clipText(get(o, "title"), 200) ?? impact.slice(0, 80),
+      severity, verdict, impact, links, steps, env,
+      status: partial ? "partial" : "demonstrated",
+      ...(partial && Number.isInteger(blockedAt) && blockedAt >= 1 && blockedAt <= steps.length ? { blockedAt } : {}),
+      ...(partial ? { blockedWhy: clipText(get(o, "blocked_why") ?? get(o, "blockedWhy"), 300) ?? "not demonstrated" } : {}),
+      standardId: clipText(get(o, "standard_id") ?? get(o, "standardId"), 60),
+      prodCaveat: clipText(get(o, "prod_caveat") ?? get(o, "prodCaveat"), 1000),
+    }, findings));
   }
   return out;
 }
@@ -315,5 +466,5 @@ export async function driveRecon(opts: ReconDriverOptions): Promise<ReconRunResu
 }
 
 function finish(run: ReconRun, stopped: ReconRunResult["stopped"]): ReconRunResult {
-  return { findings: run.findings, rounds: run.rounds, tokens: run.spentTokens, stopped };
+  return { findings: run.findings, chains: run.chains, rounds: run.rounds, tokens: run.spentTokens, stopped };
 }
