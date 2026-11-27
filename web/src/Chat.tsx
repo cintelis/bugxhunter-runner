@@ -4,7 +4,7 @@ import { dictate, speechSupported } from "./voice";
 import { BootSequence, TerminalBar } from "./Terminal";
 import { PaperclipIcon } from "./icons";
 import { DEFAULT_STARTERS, presetFor } from "./presets";
-import { cutOffNotice, formatTiming } from "./format";
+import { cacheNote, cutOffNotice, formatTiming } from "./format";
 import { FlagText } from "./FlagText";
 import { ATTACH_ACCEPT, AttachChips, useImageAttach } from "./imageAttach";
 import { RichReply } from "./DrawioBlock";
@@ -303,7 +303,7 @@ function MessageRow({ msg, streaming, onToolResult, onFix }: {
             {msg.timing && msg.usage && " · "}
             {msg.usage && (
               <>
-                {msg.usage.prompt ?? 0} in · {msg.usage.completion ?? 0} out
+                {msg.usage.prompt ?? 0} in{cacheNote(msg.usage)} · {msg.usage.completion ?? 0} out
                 {msg.usage.reasoning ? ` · ${msg.usage.reasoning} reasoning` : ""} tokens
               </>
             )}

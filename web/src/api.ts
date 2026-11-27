@@ -127,6 +127,8 @@ export async function runChat(req: ChatRequest, h: StreamHandlers): Promise<void
           prompt: data.usage.prompt_tokens,
           completion: data.usage.completion_tokens,
           reasoning: data.usage.completion_tokens_details?.reasoning_tokens,
+          cached: data.usage.prompt_tokens_details?.cached_tokens,
+          cacheWrite: data.usage.prompt_tokens_details?.cache_write_tokens,
         });
       }
     }
@@ -165,6 +167,8 @@ async function chatOnce(req: ChatRequest, h: StreamHandlers): Promise<void> {
       prompt: data.usage.prompt_tokens,
       completion: data.usage.completion_tokens,
       reasoning: data.usage.completion_tokens_details?.reasoning_tokens,
+      cached: data.usage.prompt_tokens_details?.cached_tokens,
+      cacheWrite: data.usage.prompt_tokens_details?.cache_write_tokens,
     });
   }
   h.onDone(choice?.finish_reason ?? null);

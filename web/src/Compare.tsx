@@ -5,7 +5,7 @@ import { reasoningEffortFor } from "./types";
 import { Markdown } from "./Markdown";
 import { TerminalBar } from "./Terminal";
 import { PaperclipIcon } from "./icons";
-import { formatTiming } from "./format";
+import { cacheNote, formatTiming } from "./format";
 import { isChatModel } from "./modelFilter";
 import { userContent } from "./wire";
 import { ATTACH_ACCEPT, AttachChips, useImageAttach } from "./imageAttach";
@@ -181,7 +181,7 @@ export function Compare({ config, models, onExit }: Props) {
               {(c.timing || c.usage) && (
                 <div className="msg-meta">
                   {c.timing && formatTiming(c.timing, c.usage?.completion, c.usage?.reasoning)}
-                  {c.usage && `${c.timing ? " · " : ""}${c.usage.prompt ?? 0} in · ${c.usage.completion ?? 0} out tokens`}
+                  {c.usage && `${c.timing ? " · " : ""}${c.usage.prompt ?? 0} in${cacheNote(c.usage)} · ${c.usage.completion ?? 0} out tokens`}
                 </div>
               )}
             </section>

@@ -326,7 +326,11 @@ Things that differ from the OpenAI-style providers:
   as an error naming the category. For authorised security work, Anthropic's
   [Cyber Verification Program](https://support.claude.com/en/articles/14604842-real-time-cyber-safeguards-on-claude-opus-and-sonnet)
   can lift cyber-category declines.
-- **Prompt caching** is on, so repeated history in a long chat is billed at the cached rate.
+- **Prompt caching** is on, so repeated history in a long chat is billed at the cached rate, and
+  chats that share a preset share its cached system prompt. Each reply's token line shows it:
+  `9340 in (9000 cached, 300 written)`. Entries last five minutes from their last use. Knowledge-base
+  passages are sent with the question, not in the system prompt, so they do not reset the cache.
+  Changing the system prompt, the tools or JSON mode mid-chat does.
 
 ## GitHub repositories (read-only)
 

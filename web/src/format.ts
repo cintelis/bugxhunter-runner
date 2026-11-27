@@ -12,6 +12,18 @@ export function formatTokens(n: number) {
   return String(n);
 }
 
+/**
+ * " (9800 cached, 1200 written)" after the prompt count, when the provider reported its prompt
+ * cache: how much of the prompt was read from it, and how much this turn added to it. Empty
+ * when it reported neither, so a provider without a cache shows nothing.
+ */
+export function cacheNote(u: { cached?: number; cacheWrite?: number } | undefined) {
+  const parts: string[] = [];
+  if (u?.cached) parts.push(`${u.cached} cached`);
+  if (u?.cacheWrite) parts.push(`${u.cacheWrite} written`);
+  return parts.length ? ` (${parts.join(", ")})` : "";
+}
+
 const secs = (ms: number) => (ms < 10_000 ? (ms / 1000).toFixed(1) : Math.round(ms / 1000)) + "s";
 
 /**
