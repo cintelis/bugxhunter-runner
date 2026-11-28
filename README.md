@@ -3,18 +3,37 @@
 [![CI](https://github.com/cintelis/bugxhunter-runner/actions/workflows/ci.yml/badge.svg)](https://github.com/cintelis/bugxhunter-runner/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/cintelis/bugxhunter-runner/actions/workflows/codeql.yml/badge.svg)](https://github.com/cintelis/bugxhunter-runner/actions/workflows/codeql.yml)
 [![Built with Claude Code](https://img.shields.io/badge/built_with-Claude_Code-0a0e14?logo=anthropic&logoColor=00e5ff)](https://claude.com/claude-code)
-[![Reviewed by Claude Mythos 5.1](https://img.shields.io/badge/reviewed_by-Claude_Mythos_5.1-0a0e14?logo=anthropic&logoColor=faf9f5)](https://www.anthropic.com/claude/mythos)
+[![Reviewed by Claude Mythos 5.2](https://img.shields.io/badge/reviewed_by-Claude_Mythos_5.2-0a0e14?logo=anthropic&logoColor=faf9f5)](https://www.anthropic.com/claude/mythos)
 
 The [BugXHunter](https://bugxhunter.com) security-testing agent runner: a web UI for the
-[OpenCode](https://opencode.ai) coding agent, running on open-weight models (GLM-5.3 by default)
-through [SCX.ai](https://platform.scx.ai). The UI follows bugxhunter.com's design system — a
-macOS-style terminal window, the red-team palette (GitHub-dark surfaces with red, amber, cyan and
-green accents) and Fira Code throughout. Started from the `sovgov-poc` chatbot designer.
+[OpenCode](https://opencode.ai) coding agent, on the model you choose. The default is the
+open-weight GLM-5.3 through [SCX.ai](https://platform.scx.ai); Claude through the Anthropic API,
+OpenRouter and Amazon Bedrock models work too, and the Playground adds NVIDIA's. It runs on your own machine, with the
+agent in a sandboxed container if you use the Docker install, and your keys in an encrypted
+vault.
+
+The UI follows bugxhunter.com's design system — a macOS-style terminal window, the red-team
+palette (GitHub-dark surfaces with red, amber, cyan and green accents) and Fira Code throughout.
+Started from the `sovgov-poc` chatbot designer.
+
+It has three parts:
 
 - **Runner** — point it at a project folder and drive OpenCode's `build` (edits + shell) or
   `plan` (read-only) agent. Every file edit and shell command waits for your approval.
   Markdown replies, collapsible tool calls and reasoning, per-turn token counts, and a
   **Changes** view of what the agent edited (git repos only — OpenCode tracks changes via git).
+- **[Supervised recon](#supervised-recon)** — in the Runner, a test of a target you are
+  authorised to test, driven round after round by the runner's code:
+  - Read-only requests to the target run on their own; everything else waits for you.
+  - A separate verifier rules on every finding, and its quotes are checked against what the
+    target really returned.
+  - Findings are followed up and combined into **attack paths**, shown end to end.
+  - Finished runs are **remembered** per target, encrypted: the next run starts from them, and
+    a **retest** says what has been fixed.
+  - A browser extension captures a session you logged in with, so a run can test **behind a
+    login**, 2FA included.
+  - **Concurrency mode** tests several targets at once, one worker each, with one list of
+    approvals.
 - **Playground** — chat with any SCX, Anthropic (Claude), NVIDIA, OpenRouter or Amazon Bedrock model directly (no agent), with
   tool-calling, JSON mode, an embeddings-backed knowledge base and browser voice. Also:
   - **Security presets** (code review, threat modelling, AI system review, pentest planning,
@@ -41,6 +60,18 @@ green accents) and Fira Code throughout. Started from the `sovgov-poc` chatbot d
     (Docker: the `runner-data` volume), never in browser storage.
   - Retired NVIDIA models (their endpoints answer 404) are found and hidden automatically.
 
+## Contents
+
+- Getting it running: [Install](#install) · [Run from source](#run-from-source) ·
+  [Docker](#docker-sandboxed-agent--login) · [Key vault](#key-vault)
+- Models: [OpenRouter](#other-models-via-openrouter) · [Amazon Bedrock](#glm-53-on-amazon-bedrock) ·
+  [Claude](#claude-via-the-anthropic-api)
+- Testing: [GitHub repositories](#github-repositories-read-only) ·
+  [Security-testing tools](#security-testing-tools-authorised-use-only) ·
+  [Supervised recon](#supervised-recon) · [Sigilant](#through-sigilant-governed-runs)
+- Reference: [Configuration](#configuration-environment-variables) · [Releases](#releases) ·
+  [Development](#development) · [Releasing](#releasing) · [Layout](#layout)
+
 ## Screenshots
 
 The agent working in a project — live tool calls, reasoning, and a markdown summary:
@@ -52,7 +83,7 @@ vault's state and lock live in the sidebar footer:
 
 ![BugXHunter — Runner landing view](docs/images/landing.jpg)
 
-Playground — compare SCX models directly with full generation controls:
+Playground — compare models side by side, with full generation controls:
 
 ![BugXHunter — Playground](docs/images/playground.jpg)
 
@@ -70,7 +101,8 @@ npx bugxhunter docker     # the sandboxed stack instead (needs Docker Desktop): 
 options (`--port`, `--dir`, `--no-open`; `docker --slim|--full`, `docker down|logs|ps`,
 `docker export <path> [dest]`; `vault reset`). The current
 folder becomes the default project. Then, in the sidebar: set up the [vault](#key-vault) with a
-passkey, add your SCX.ai key as `SCX_API`, and [connect GitHub](#github-repositories-read-only).
+passkey, add a model key (an SCX.ai key as `SCX_API` for the default models; an Anthropic,
+OpenRouter or Bedrock key works too), and [connect GitHub](#github-repositories-read-only).
 The package is published by the release workflow with npm provenance: `npm audit signatures`
 confirms it was built from this repository.
 
@@ -78,8 +110,9 @@ confirms it was built from this repository.
 
 - Node 22+
 - OpenCode on `PATH`: `npm install` here provides it, or `npm i -g opencode-ai`
-- An SCX.ai key: in the [vault](#key-vault) (preferred), else `opencode auth login` (choose
-  **Other**, provider id `scx`) or `SCX_API` in a `.env` here.
+- A model key. For the default models, an SCX.ai key: in the [vault](#key-vault) (preferred),
+  else `opencode auth login` (choose **Other**, provider id `scx`) or `SCX_API` in a `.env`
+  here. For Claude, OpenRouter or Bedrock models instead, see their sections below.
 
 ## Run from source
 
@@ -404,96 +437,73 @@ you run this in — Docker's bridge NAT doesn't restrict outbound on its own.
 
 ## Supervised recon
 
-The Runner's **recon** button starts a supervised test of one target. You give the target (one
-host or URL), an objective, the environment (local, staging or production) and how it differs
-from production, and confirm you are authorised to test it. The runner then drives the session
-round after round:
+The Runner's **recon** button starts a supervised test of a target you are authorised to test.
+The agent does the probing; the runner's code decides what runs without you, what waits for you,
+and what counts as a finding. The security model is in
+[docs/recon-security.md](docs/recon-security.md).
+
+> Memory, retest, the evidence check, leads, logged-in targets and concurrency mode are new.
+> They are covered by tests against scripted agents and have had little use against real
+> targets and models yet: expect rough edges, and read a finding's reproduction before you
+> rely on it.
+
+| You want to | Use |
+|---|---|
+| Test one target | [A run](#a-run) |
+| Know a finding rests on a real response | [The evidence check](#the-evidence-check) |
+| See how findings combine | [Attack paths](#attack-paths) |
+| Not lose what was noticed along the way | [Leads](#leads) |
+| Build on earlier runs, and keep results across restarts | [Memory](#memory) |
+| Check what has been fixed | [Retest](#retest) |
+| Test behind a login, 2FA included | [Logged-in targets](#logged-in-targets) |
+| Test several targets at once | [Concurrency mode](#concurrency-mode) |
+| Choose the models | [Recon models](#recon-models) |
+
+### A run
+
+You give the target (one host or URL), an objective, the environment (local, staging or
+production) and how it differs from production, and confirm you are authorised to test it. The
+runner then drives the session round after round:
 
 1. **Route.** Each round the executor runs on the model its profile gives it. After two stuck
-   rounds, or a High or Critical finding, the next round runs on the escalation model; a model
-   that answers "rate limited" is routed around for a minute.
-2. **Probe, under the gate.** Every shell command the executor (or a subagent) wants to run raises
+   rounds, or a High or Critical finding or attack path, the next round runs on the escalation
+   model. A model that answers "rate limited" is routed around for a minute.
+2. **Probe, under the gate.** Every shell command the executor or a subagent wants to run raises
    an approval. The gate answers the ones it can prove safe: a `curl` GET or HEAD to exactly the
    in-scope origin, an `nmap` version scan of the in-scope host, piped into read filters with
-   allow-listed flags. A handful of shapes that would wreck or hijack the agent's own machine are
-   rejected. Everything else waits for you, as an approval card. "Always allow" is off during a
-   run, and the recon agents cannot use webfetch or websearch.
-3. **Verify.** The executor hands each candidate to the `recon-verify` subagent, which rejects it
-   without reproduction evidence and marks it *config-dependent* when it relies on a setting that
-   differs from production. Only its verdicts become findings.
-4. **Follow up.** From the second round on, once something is verified, each round starts from
-   what the findings so far unlock (a credential, a token, an identifier, a level of access) and
-   takes that next step, if there is one inside the scope, before it moves to a fresh hypothesis.
-   A sequence that reaches something worse goes to `recon-verify` as an attack path and is
-   recorded as soon as it is ruled on.
+   allow-listed flags. A handful of shapes that would wreck or hijack the agent's own machine
+   are rejected. Everything else waits for you, as an approval card. "Always allow" is off
+   during a run, and the recon agents cannot use webfetch or websearch.
+3. **Verify.** The executor hands each candidate to the `recon-verify` subagent, which rejects
+   it without reproduction evidence and marks it *config-dependent* when it relies on a setting
+   that differs from production. Only its verdicts become findings, and its quotes of the
+   response are [checked](#the-evidence-check) against what the run's commands really returned.
+4. **Follow up.** Once something is verified, each round starts from what the findings so far
+   unlock (a credential, a token, an identifier, a level of access), then from the open
+   [leads](#leads), and only then moves to a fresh hypothesis. A sequence that reaches something
+   worse than the finding it builds on goes to `recon-verify` as an
+   [attack path](#attack-paths).
 5. **Stop.** The run ends when the executor reports the surface exhausted, a round finds nothing
    new, the round or token cap is reached, it stays stuck after escalating, every model is
    rate-limited, a round fails, or you press stop.
-6. **Chain.** When the loop ends with two or more findings, a chain pass tries to combine them
-   into attack paths the loop did not already record. One turn on the escalation model proposes up to three paths, each naming the
-   findings it builds on (`F1`, `F2`, …). The executor then has up to three rounds per path to
-   show it end to end, under the same gate and scope, and hands it to `recon-verify`, which
-   rejects a path unless every step has its evidence and each step used what the one before
-   returned. A path that holds is recorded as *demonstrated*, rated on what the attacker ends up
-   with and never below the worst finding it uses; it is config-dependent if any of those is. A
-   path that stops (a write you declined, a step that did not work, the rounds running out) is
-   recorded as *partial*, with the step and the reason: a lead, not a finding. The pass does not
-   run after an error, rate limits or a stop. It spends what is left of the token budget and no
-   more: once a run has two findings, the main loop leaves 15% of the budget for it.
+6. **Chain.** A run that ends with two or more findings gets a [chain pass](#attack-paths).
 
-A strip above the composer shows the round (or the chain pass's turn), tokens, model and how many
-approvals the gate answered. The results appear in the transcript: attack paths first, then the
-findings, each numbered and marked with the paths it is part of, then the unproven paths with the
-step each stopped at. The start dialog has a checkbox to leave the chain pass out of a run. Gate decisions and the run's start and end go to
-the audit log (`recon.gate`, `recon.started`, `recon.finished`). A run that is still going lives in the runner's
-memory: restarting the runner ends it (the session and its transcript stay).
+A strip above the composer shows the round (or the chain pass's turn), tokens, model and how
+many approvals the gate answered. The results appear in the transcript, in this order: attack
+paths, the findings (each numbered `F1`, `F2`, … and marked with the paths it is part of and
+how its evidence fared), unproven paths with the step each stopped at, and the leads.
 
-**Memory.** A finished run is kept, encrypted with the vault key, in `recon/` beside the vault
-(Docker: the `runner-data` volume, which the agent container cannot read). Only an id and the
-finish time are in the clear. Two things use it:
+Gate decisions and the run's start and end go to the audit log (`recon.gate`, `recon.started`,
+`recon.finished`). A run that is still going lives in the runner's memory: restarting the runner
+ends it. The session and its transcript stay, and so does a finished run (see
+[Memory](#memory)).
 
-- The next run on the same host and port starts from what earlier runs verified there. The
-  opening prompt lists those findings and attack paths as leads: the executor re-tests each with
-  one probe, and one counts again only after `recon-verify` has ruled on the new evidence. The
-  start dialog shows what is remembered about the target you typed, with a checkbox to start
-  cold and a link to forget that target.
-- A session shows its last finished run again after the runner restarts.
+### The evidence check
 
-Nothing is kept without a vault. If the vault is locked when a run finishes, the run waits in
-memory and is written at the next unlock; a restart before that loses it. The newest 300 runs
-are kept.
-
-**Concurrency mode.** Type several targets in the start dialog, one per line, and the run
-becomes a batch: one worker per target, up to three at a time by default (five at most), the
-next target starting as each one finishes. It is off unless you give more than one target.
-
-- A worker is an ordinary recon run on a session of its own, named `recon <target>` in the
-  session list. Its gate is bound to its own target: a request to another target of the same
-  batch is not auto-approved, it waits for you.
-- Every approval any worker is waiting on comes to one list, each marked with its target.
-- Each worker has its own token budget and round limit. A budget for the whole batch is
-  optional; a running worker counts against it for its whole budget, so the ceiling holds.
-- Each worker starts from what is remembered about its target and uses the logged-in session
-  captured for it, if there is one. Workers do not share what they find with each other.
-- *stop all* stops every worker and starts nothing more. One batch runs at a time. A batch
-  lives in the runner's memory: a restart ends it, and what each finished worker found is
-  kept per target as for any run.
-
-All workers share the one agent (in Docker, one container with 4 GB and 2 CPUs), which is the
-practical limit on how many are worth running at once.
-
-**Leads.** The executor keeps a list of what it noticed and did not get to: an identifier, a
-hidden parameter, an error that leaks something. It writes a `RECON-LEAD:` line, the run numbers
-it (`L1`, `L2`, …), and each later round is given the open ones back, oldest first, to follow
-before anything new or to close with a reason. If the executor reports the surface exhausted
-while leads are open, it is sent back to them once. The panel lists the leads; they are the
-executor's notes and nothing in the list is a finding. What the newest run left open is handed
-to the next run on that target.
-
-**Evidence check.** The verifier is a model, and it only sees the executor's account of a
-response. So it must quote the response, and the runner looks each quote up in what the run's
-own shell commands really returned, which it reads from the agent's event stream and not from
-anything a model wrote. Each finding then carries one of three marks:
+The verifier is a model, and it only sees the executor's account of a response. So it must
+quote the response, and the runner looks each quote up in what the run's own shell commands
+really returned. It reads that from the agent's event stream, not from anything a model wrote.
+Each finding then carries one of three marks:
 
 - *evidence matched*: every quote was found in this run's output.
 - *evidence not matched*: a quote was not found there. It was paraphrased or made up; check
@@ -502,20 +512,80 @@ anything a model wrote. Each finding then carries one of three marks:
 
 A match shows the text was really returned to this run. It does not show the finding is right:
 that is still the verifier's judgement and yours. Whitespace is ignored in the comparison, case
-is not, and a quote shorter than 12 characters counts for nothing. In a retest, a ruling whose
-quotes are not in the output changes nothing: it is recorded as *cannot confirm*.
+is not, and a quote shorter than 12 characters counts for nothing. An unmatched finding is
+marked, not removed. Attack-path steps are not checked yet.
 
-**Retest.** When something is remembered about the target, the start dialog offers *Retest
-only*. That run explores nothing: it takes the remembered findings one at a time, sends the
+### Attack paths
+
+An attack path is a sequence in which what one step returns is what the next step needs, and
+which reaches something worse than any single finding. Paths are recorded two ways:
+
+- **During the run.** When following a finding up reaches something worse, the executor hands
+  the whole sequence to `recon-verify`, and the path is recorded as soon as it is ruled on.
+- **In the chain pass.** When the loop ends with two or more findings, one turn on the
+  escalation model proposes up to three paths the loop did not already record, each naming the
+  findings it builds on. The executor then has up to three rounds per path to show it end to
+  end, under the same gate and scope.
+
+`recon-verify` rejects a path unless every step has its evidence and each step used what the
+one before returned. A path that holds is *demonstrated*, rated on what the attacker ends up
+with and never below the worst finding it uses; it is config-dependent if any of those is. A
+path that stops (a write you declined, a step that did not work, the rounds running out) is
+*partial*, with the step and the reason: a lead, not a finding.
+
+The chain pass does not run after an error, rate limits or a stop. It spends what is left of
+the token budget and no more: once a run has two findings, the main loop leaves 15% of the
+budget for it. The start dialog has a checkbox to leave the chain pass out of a run.
+
+### Leads
+
+The executor keeps a list of what it noticed and did not get to: an identifier, a hidden
+parameter, an error that leaks something. It writes a `RECON-LEAD:` line, the run numbers it
+(`L1`, `L2`, …), and each later round is given the open ones back, oldest first, to follow
+before anything new or to close with a reason. If the executor reports the surface exhausted
+while leads are open, it is sent back to them once.
+
+The panel lists the leads. They are the executor's notes: nothing in the list is a finding.
+What the newest run left open is handed to the next run on that target.
+
+### Memory
+
+A finished run is kept, encrypted with the vault key, in `recon/` beside the vault (Docker: the
+`runner-data` volume, which the agent container cannot read). Only an id and the finish time
+are in the clear. Two things use it:
+
+- **The next run on the same host and port starts from it.** The opening prompt lists what
+  earlier runs verified there, the attack paths they recorded and the leads the last one left
+  open. They are leads for this run: the executor re-tests each with one probe, and one counts
+  again only after `recon-verify` has ruled on the new evidence. The start dialog shows what
+  is remembered about the target you typed, with a checkbox to start cold and a link to forget
+  that target.
+- **A session shows its last finished run again** after the runner restarts.
+
+Nothing is kept without a vault. If the vault is locked when a run finishes, the run waits in
+the runner's memory and is written at the next unlock; a restart before that loses it. The
+newest 300 runs are kept.
+
+### Retest
+
+When something is remembered about the target, the start dialog offers *Retest only*. That run
+explores nothing. It takes the remembered findings one at a time, worst first, sends the
 original request again, and hands the old evidence and the new response to `recon-verify`,
-which rules *still reproducible*, *fixed* or *cannot confirm*. An error, a timeout or a
-logged-out answer is not a fix, and a ruling with no evidence is recorded as *cannot confirm*.
-What still reproduces is a finding of the retest run, with the new evidence. A finding ruled
-fixed is no longer offered to later runs, unless a later run finds it again.
+which rules:
 
-**Logged-in targets.** By default a run tests what answers without an account. To test behind a
-login, capture the session of a browser you logged in with yourself, so a captcha, an emailed
-code or 2FA is no obstacle:
+- *still reproducible*: it is a finding of the retest run, with the new evidence.
+- *fixed*: the same request now gets an answer that shows the weakness is gone. The finding is
+  no longer offered to later runs, unless a later run finds it again.
+- *cannot confirm*: anything else. An error, a timeout or a logged-out answer is not a fix.
+
+A ruling with no evidence, or one whose quotes are not in the run's output, is recorded as
+*cannot confirm*. The executor's own word never marks a finding fixed.
+
+### Logged-in targets
+
+By default a run tests what answers without an account. To test behind a login, capture the
+session of a browser you logged in with yourself, so a captcha, an emailed code or 2FA is no
+obstacle:
 
 1. In the start dialog, type the target and choose *capture one from your browser*. It shows a
    pairing code and a link to download the extension (`web/public/bxh-extension`). Install it
@@ -528,23 +598,54 @@ code or 2FA is no obstacle:
 
 The extension asks for access to a site only when you press a button on it, and sends that
 site's cookies (and the header, if seen) to your runner and nowhere else. The runner keeps the
-session encrypted with the vault key in `sessions/` beside the vault, one per target. For a run
-it is written into the project folder as a cookie jar and a header file
-(`.bugxhunter/session-…/`), and removed when the run ends. The executor is told the file
-names, not the values: the gate lets `curl` read exactly those two files on a read to the
-target, and asks if the request would print them (`-v`) or goes anywhere else. Untick the box
-to run logged out, or forget the session, in the same dialog.
+session encrypted with the vault key in `sessions/` beside the vault, one per target.
+
+For a run, the session is written into the project folder as a cookie jar and a header file
+(`.bugxhunter/session-…/`) and removed when the run ends. The executor is told the file names,
+not the values. The gate lets `curl` read exactly those two files on a read to the target, and
+asks if the request would print them (`-v`) or goes anywhere else. Untick the box to run
+logged out, or forget the session, in the same dialog.
 
 Use a test account. The agent's container can read those files while a run is going, and a
 `GET` sent as a logged-in user can do more than one sent as a stranger.
 
-**Models.** `RECON_PROFILE` picks a profile: `recon-open` (SCX models only), `recon-balanced`
-(GLM executor, Claude for triage, verification and escalation) or `recon-quality`. With no
-Anthropic key the default is `recon-open`, otherwise `recon-balanced`. `RECON_EXECUTOR_MODEL`,
-`RECON_TRIAGE_MODEL`, `RECON_VERIFY_MODEL` and `RECON_ESCALATE_MODEL` (`provider/model`) override
-one role. In Docker the subagents are defined in `docker/opencode.json` on SCX models; the
-per-role variables in `.env` reach both containers, so set them there to put a role on Claude.
-The security model is in [docs/recon-security.md](docs/recon-security.md).
+### Concurrency mode
+
+Type several targets in the start dialog, one per line, and the run becomes a batch: one
+worker per target, up to three at a time by default (five at most, fifty targets), the next
+target starting as each one finishes. It is off unless you give more than one target.
+
+- **A worker is an ordinary recon run** on a session of its own, named `recon <target>` in the
+  session list. Its gate is bound to its own target: a request to another target of the same
+  batch is not auto-approved, it waits for you.
+- **One approval list.** Every approval any worker is waiting on comes to one list, each marked
+  with its target.
+- **Budgets.** Each worker has its own token budget and round limit. A budget for the whole
+  batch is optional; a running worker counts against it for its whole budget, so the ceiling
+  holds, and a target that cannot be afforded is skipped with the reason.
+- **Memory and sessions per target.** Each worker starts from what is remembered about its
+  target and uses the logged-in session captured for it, if there is one. Workers do not share
+  what they find with each other.
+- **Stop.** *stop all* stops every worker and starts nothing more.
+
+One batch runs at a time. A batch lives in the runner's memory: a restart ends it, and what
+each finished worker found is kept per target as for any run. All workers share the one agent
+(in Docker, one container with 4 GB and 2 CPUs), which is the practical limit on how many are
+worth running at once. The audit log records `recon.batch.started` and `recon.batch.finished`
+beside each worker's own events.
+
+### Recon models
+
+`RECON_PROFILE` picks a profile: `recon-open` (SCX models only), `recon-balanced` (GLM executor,
+Claude for triage, verification and escalation) or `recon-quality`. With no Anthropic key the
+default is `recon-open`, otherwise `recon-balanced`. `RECON_EXECUTOR_MODEL`,
+`RECON_TRIAGE_MODEL`, `RECON_VERIFY_MODEL` and `RECON_ESCALATE_MODEL` (`provider/model`)
+override one role.
+
+In Docker the subagents are defined in `docker/opencode.json` on SCX models; the per-role
+variables in `.env` reach both containers, so set them there to put a role on Claude. The
+verifier's prompt lives in the agent image, so a release that changes how it rules needs the
+new agent image, not only the runner.
 
 ## Through Sigilant (governed runs)
 
@@ -707,11 +808,17 @@ publisher** on npmjs.com set to this repository and `release.yml`, once; no npm 
 | Path | Role |
 |---|---|
 | `server/src/opencode.ts` | Starts/stops the OpenCode server, one SDK client per project folder, event mapping |
-| `server/src/index.ts` | Express: `/api/agent/*` (OpenCode) and `/api/chat`, `/api/models`, `/api/kb` (SCX) |
-| `server/src/recon.ts`, `recon-driver.ts`, `recon-run.ts` | Supervised recon: the model router and approval gate, the driver loop, and the OpenCode side of a turn (`web/src/ReconPanel.tsx` is its UI) |
+| `server/src/index.ts` | Express: `/api/agent/*` (OpenCode, recon), `/api/chat`, `/api/models`, `/api/kb` (the Playground), `/api/vault`, and `/api/capture/session` (the browser extension's post) |
+| `server/src/recon.ts`, `recon-driver.ts`, `recon-run.ts` | Supervised recon: the model router, the approval gate and the agents' prompts; the driver loop (main loop, chain pass, retest, leads) and its parsers; the OpenCode side of a turn |
+| `server/src/recon-evidence.ts` | What a run's commands really returned, and the check of the verifier's quotes against it |
+| `server/src/recon-memory.ts`, `recon-session.ts` | Finished runs per target, and captured logged-in sessions with their pairing codes: both sealed with the vault key |
+| `server/src/recon-batch.ts` | Concurrency mode: the queue of targets, the cap on workers and the batch's token ceiling |
+| `web/src/ReconPanel.tsx`, `BatchPanel.tsx`, `reconView.ts` | Recon's start dialog and results, the batch panel, and the wording both show (kept apart so it can be tested) |
+| `web/public/bxh-extension/` | The browser extension that sends a logged-in session to the runner; served as a zip (`server/src/zip.ts`) |
 | `server/src/scx.ts`, `rag.ts` | SCX client and in-memory knowledge base (Playground) |
 | `server/src/providers.ts`, `anthropic.ts`, `nvidia-health.ts` | Anthropic / NVIDIA / OpenRouter providers (Claude via the official SDK); hides NVIDIA models whose endpoints are retired |
 | `server/src/bedrock.ts` | Amazon Bedrock: which AWS credentials the runner uses (OIDC role, profile, compute role) and the SigV4 signing of each call |
+| `server/src/vault.ts`, `auth.ts` | The key vault (passkey-wrapped, sealed at rest) and sign-in |
 | `server/src/playground-store.ts` | Saved Playground sessions, sealed with the vault key |
 | `server/src/render.ts`, `docker/render-server.py`, `docker/drawio_outline.py` | The render service (diagrams, `.drawio` outlines) and the runner's client for it |
 | `web/src/Canvas.tsx`, `web/src/canvas/` | The threat-model canvas |
@@ -727,7 +834,7 @@ publisher** on npmjs.com set to this repository and `release.yml`, once; no npm 
 ## AI assistance
 
 BugXHunter was built with [Claude Code](https://claude.com/claude-code), and the codebase was
-reviewed and hardened by [Claude Mythos 5.1](https://www.anthropic.com/claude/mythos) (bug fixes,
+reviewed and hardened by [Claude Mythos 5.2](https://www.anthropic.com/claude/mythos) (bug fixes,
 the security hardening, tests and CI). The app shows this with Anthropic's Claude wordmark, used
 as published. It is a model credit, not an endorsement by Anthropic; the maintainers are
 responsible for the code.
