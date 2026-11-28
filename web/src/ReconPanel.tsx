@@ -12,7 +12,7 @@ import { reconMemoryForget, reconMemoryGet, reconSessionForget, reconSessionGet,
 import { Dialog } from "./Dialog";
 import { formatTokens } from "./format";
 import {
-  chainPassNote, keptNote, memoryNote, memorySummary, pathsUsing, progressLabel, RETEST_LABEL, retestStopReason, retestSummary,
+  chainPassNote, keptNote, memoryNote, memorySummary, pathsUsing, progressLabel, proofBadge, RETEST_LABEL, retestStopReason, retestSummary,
   sessionNote, sessionSummary, splitPaths, stoppedAt,
 } from "./reconView";
 import type { ReconChain, ReconEnv, ReconFinding, ReconMemoryTarget, ReconPairing, ReconRetest, ReconSessionInfo, ReconState } from "../../shared/agent";
@@ -323,6 +323,11 @@ function RetestResults({ recon }: { recon: ReconState }) {
   );
 }
 
+function ProofBadge({ proof }: { proof: ReconFinding["proof"] }) {
+  const b = proofBadge(proof);
+  return b ? <span className={`badge proof-${b.kind}`} title={b.title}>{b.text}</span> : null;
+}
+
 function RetestCard({ r }: { r: ReconRetest }) {
   return (
     <div className={`recon-finding recon-retest ${r.result}`}>
@@ -331,6 +336,7 @@ function RetestCard({ r }: { r: ReconRetest }) {
         <span className={`badge sev-${r.severity}`}>{r.severity}</span>
         <span className="recon-finding-title">{r.title}</span>
         {r.standardId && <span className="badge">{r.standardId}</span>}
+        <ProofBadge proof={r.proof} />
         <span className="recon-in-paths">last verified {new Date(r.lastVerified).toISOString().slice(0, 10)}</span>
       </div>
       {r.note && <div className="hint">{r.note}</div>}
@@ -381,6 +387,7 @@ function FindingCard({ f, paths }: { f: ReconFinding; paths: string[] }) {
         <span className="recon-finding-title">{f.title}</span>
         {f.standardId && <span className="badge">{f.standardId}</span>}
         {f.verdict === "config-dependent" && <span className="badge sev-medium">config-dependent</span>}
+        <ProofBadge proof={f.proof} />
         {paths.length > 0 && <span className="recon-in-paths" title="Attack paths that build on this finding">in {paths.join(", ")}</span>}
       </div>
       <pre className="recon-repro">{f.repro}</pre>

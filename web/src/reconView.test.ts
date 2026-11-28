@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  chainPassNote, keptNote, memoryNote, memorySummary, pathsUsing, progressLabel, retestStopReason, retestSummary,
+  chainPassNote, keptNote, memoryNote, memorySummary, pathsUsing, progressLabel, proofBadge, retestStopReason, retestSummary,
   sessionNote, sessionSummary, splitPaths, stoppedAt,
 } from "./reconView";
 import type { ReconChain } from "../../shared/agent";
@@ -121,5 +121,15 @@ describe("retest notes", () => {
     expect(retestStopReason({ mode: "retest", stopped: "done" })).toBe("every remembered finding was retested");
     expect(retestStopReason({ mode: "retest", stopped: "budget" })).toBeNull();
     expect(retestStopReason({ stopped: "done" })).toBeNull();
+  });
+});
+
+describe("proofBadge", () => {
+  it("says how the quotes fared, and nothing for a finding from before they were checked", () => {
+    expect(proofBadge("quoted")).toMatchObject({ text: "evidence matched", kind: "ok" });
+    expect(proofBadge("unmatched")).toMatchObject({ text: "evidence not matched", kind: "warn" });
+    expect(proofBadge("unmatched")!.title).toContain("did not return");
+    expect(proofBadge("unquoted")).toMatchObject({ text: "no quotes", kind: "none" });
+    expect(proofBadge(undefined)).toBeNull();
   });
 });

@@ -108,7 +108,7 @@ describe("the sealed store", () => {
     const files = fs.readdirSync(path.join(dir, "sessions"));
     expect(files).toHaveLength(1); // the second capture replaced the first
     const raw = fs.readFileSync(path.join(dir, "sessions", files[0]), "utf8");
-    for (const secret of ["s3cr3t-value", "example.com", "sid", "tok-123"]) expect(raw).not.toContain(secret);
+    for (const secret of ["s3cr3t-value", "example.com", "tok-123"]) expect(raw).not.toContain(secret); // nothing as short as a cookie name: three letters turn up in ciphertext by chance
     expect(sessions.sessionInfo("app.staging.example.com:443")).toEqual({
       target: "app.staging.example.com:443", capturedAt: NOW + 5, cookies: 2, authorization: false, firstExpiry: (Math.floor(NOW / 1000) + 60) * 1000,
     });

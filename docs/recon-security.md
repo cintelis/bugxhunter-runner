@@ -158,6 +158,14 @@ You never *lose* protection by staying in Monitor; Enforce only adds the network
     they go to the model provider. A read sent as a logged-in user can also have effects a
     logged-out one cannot (a `GET /logout`, a badly designed `GET` that changes state). Both
     are why the dialog says to use a test account.
+- **Quotes are checked against the run's own output, not against a model's account of it.** The
+  record is every `bash` tool result of the run and its subagents, taken from OpenCode's event
+  stream by the runner. A model cannot write to it. It is held in memory for the run (the last
+  8 MB of output, 400 kB per command) and is not stored. What the check establishes is narrow:
+  the quoted text was returned to this run. It does not establish that the request was the one
+  claimed, or that the text means what the verifier says. An unmatched quote marks the finding;
+  it does not remove it, because a verifier that paraphrases a real response is a more likely
+  cause than one that invents it. Attack-path steps are not checked yet.
 - **A retest changes a finding's status only on evidence.** The verifier rules on each retest; the
   executor's own word never marks a finding fixed. The code then holds the ruling to one rule: a
   "fixed" or "still reproducible" with no request and response attached is recorded as "cannot
