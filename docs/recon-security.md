@@ -19,12 +19,27 @@ boundary is structural isolation. Three layers, strongest last:
 
 Default **ASK**. A command is auto-**allowed** only if it is *shell-neutral* (contains no shell
 metacharacters — so running it via a shell or via `argv` is identical) **and** every stage
-positively validates against a tiny allowlist. The one exception to "no metacharacters" is a
-quoted query string: `?` inside quotes of either kind, and `&` inside double quotes, where a
-shell reads them as plain text. Without it every request with a query string waited for a
-person, which a live run showed to be about half of all requests. `&` inside single quotes
-still asks (cmd.exe does not treat `'` as a quote), and so does everything else inside quotes:
-`$`, a backtick, a backslash, `;`, `|` and brackets. The allowlist:
+positively validates against a tiny allowlist. The one exception to "no metacharacters" is
+text inside quotes that a shell reads as plain text, in a POSIX shell and in cmd.exe both:
+
+- `?` inside quotes of either kind (a query string);
+- inside **double** quotes, what a URL or a search pattern is made of: `& < > ( ) { } [ ] * | ; ~`,
+  and a backslash before an ordinary character (`\.`, `\d`).
+
+Without it every request with a query string, and every search of a response for a pattern,
+waited for a person: in live runs that was most of what was asked. Still refused inside
+quotes: `$`, a backtick and `!` (a shell expands them there too), a backslash before a quote,
+another backslash, `$` or a backtick (it would move where the string ends), and all of the
+above inside single quotes, which cmd.exe does not treat as quotes. A double quote inside
+single quotes is refused for the same reason, as is a space inside single quotes (cmd.exe
+would split the string into several arguments) and `^` outside double quotes (its escape
+character). `%` is allowed only as URL encoding, because cmd.exe expands `%NAME%` even inside
+double quotes. Only printable ASCII, space and tab are accepted, so the gate and the shell
+split words in the same places. Pipe stages are split outside quotes only. A curl command
+names one URL; one with `{}` or `[]` asks (curl would expand it into many requests), as does
+one with a backslash or `@` (where URL parsers have disagreed about the host), a `Host`
+header, or more than three retries. An independent review of these rules found no way past
+them under bash or sh; the cmd.exe cases above are what it found. The allowlist:
 
 - a **`curl` GET/HEAD to exactly the in-scope origin** — host **and** port checked with the WHATWG
   `URL` parser, no userinfo, no redirects (`-L`), flags from a positive allowlist (unknown flag → ask);
@@ -32,7 +47,14 @@ still asks (cmd.exe does not treat `'` as a quote), and so does everything else 
 - pure **read filters** (`grep`/`head`/`cut`/`jq`/…) *downstream of a fetch* (reading piped stdin),
   each with its own positive flag allowlist (unknown flag → ask, so `rg --pre`, `sort -o`,
   `sort --compress-program`, `grep -r`/`-f` and `jq --rawfile` all ask) and no more operands than
-  it needs to read stdin, so none can name a file.
+  it needs to read stdin, so none can name a file;
+- a read filter as the *first* stage over **one saved tool output**: OpenCode writes an output
+  that is too long to show into `…/opencode/tool-output/tool_<id>` and tells the agent the
+  path; `rg "pattern" <that path>` then runs without asking. The path must be written out in
+  full, be the last argument and the only file. What is in it is the output of a command an
+  agent on this runner already ran, so reading it sends nothing anywhere. The folder is
+  shared by every session on the runner, so on a runner used for several engagements one
+  agent could read another's saved output if it learned its random id.
 
 Everything else **asks** and the human reads the real command. A small **deny floor**
 (`commandHazard`, wrapper-aware: it unwraps `sudo`/`env`/`bash -c` first) hard-blocks shapes that

@@ -386,9 +386,13 @@ describe("recon profiles and agents", () => {
     const agents = reconAgents();
     expect(agents.recon.permission).toMatchObject({ bash: "ask", edit: "deny", webfetch: "deny", websearch: "deny" });
     expect(agents.recon).not.toHaveProperty("tools"); // `tools: { bash: true }` would auto-allow the shell
-    for (const name of ["recon-triage", "recon-verify", "recon-escalate"] as const) {
+    for (const name of ["recon-triage", "recon-escalate"] as const) {
       expect(agents[name].permission).toMatchObject({ bash: "deny", edit: "deny", task: "deny", webfetch: "deny", websearch: "deny" });
     }
+    // The verifier may send the candidate's own read again: its shell asks, so the gate answers, and nothing else is open to it.
+    expect(agents["recon-verify"].permission).toEqual({ bash: "ask", edit: "deny", task: "deny", webfetch: "deny", websearch: "deny" });
+    expect(agents["recon-verify"]).not.toHaveProperty("tools");
+    expect(agents["recon-verify"].prompt).toContain("do not explore");
   });
 
   it("docker/opencode.json carries the same agents, on the open-weight profile", () => {

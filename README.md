@@ -481,7 +481,9 @@ runner then drives the session round after round:
    the runner, usually mounted by a leftover compose override).
 3. **Verify.** The executor hands each candidate to the `recon-verify` subagent, which rejects
    it without reproduction evidence and marks it *config-dependent* when it relies on a setting
-   that differs from production. Only its verdicts become findings, and its quotes of the
+   that differs from production. The verifier sends the candidate's own request again when it
+   is a read, under the same gate as the executor, and rules on the response it got itself;
+   when it cannot, it rules on what it was shown and says it did not reproduce it. Only its verdicts become findings, and its quotes of the
    response are [checked](#the-evidence-check) against what the run's commands really returned.
 4. **Follow up.** Once something is verified, each round starts from what the findings so far
    unlock (a credential, a token, an identifier, a level of access), then from the open
@@ -620,13 +622,13 @@ obstacle:
    pairing code and a link to download the extension (`web/public/bxh-extension`). Install it
    once: unzip, open `chrome://extensions` in Chrome or Edge, turn on Developer mode, *Load
    unpacked*.
-2. Open the target in a tab and log in. If the app sends a token in a header as well as
-   cookies, press *Start watching this site* in the extension first, then reload a page that
-   needs the login. It then sees the `Authorization` header and custom login headers by name
-   (`X-Auth-Token`, `X-CSRF-Token`, `X-Api-Key` and the like). A run that says it is logged
-   out with cookies alone is the sign to do this.
-3. Paste the code into the extension and press *Send session to BugXHunter*. The code works
-   once, for that target, for ten minutes.
+2. Open the target in a tab, log in, and open a page that needs the login.
+3. Paste the code into the extension and press *Send session to BugXHunter*. It reloads the
+   tab once, so that it sees the login headers the app sends with a request (`Authorization`,
+   and custom ones by name: `X-Auth-Token`, `X-CSRF-Token`, `X-Api-Key` and the like), and
+   sends them with the cookies. The code works once, for that target, for ten minutes. If the
+   app sends its token only on a step a reload does not repeat, press *Start watching this
+   site* first, do that step, then send.
 
 The extension asks for access to a site only when you press a button on it, and sends that
 site's cookies (and the header, if seen) to your runner and nowhere else. The runner keeps the
