@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/cintelis/bugxhunter-runner/security/advisories/new
+    about: Privately, through GitHub. Please do not open a public issue for a vulnerability in BugXHunter.
+  - name: How to contribute
+    url: https://github.com/cintelis/bugxhunter-runner/blob/master/CONTRIBUTING.md
+    about: Setting up, what a pull request needs, and which changes get a closer look.

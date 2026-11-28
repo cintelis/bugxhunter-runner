@@ -1,0 +1,60 @@
+name: Bug report
+description: Something does not work as the README says it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A security problem in BugXHunter itself does not belong here: report it privately, as SECURITY.md describes.
+        Leave out keys, cookies, tokens and anything about a target you are testing.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you saw instead. Include the exact error text.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start with `npx bugxhunter docker`
+        2. Open the Runner and ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The badge in the sidebar, or `bugxhunter --version`
+      placeholder: 0.13.0
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How it is installed
+      options:
+        - npx bugxhunter (agent on this machine)
+        - npx bugxhunter docker
+        - Docker Compose from a checkout or a release archive
+        - From source (npm run dev / npm start)
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and browser
+      placeholder: Windows 11, Edge 142
+  - type: input
+    id: model
+    attributes:
+      label: Model and provider, if a model is involved
+      placeholder: scx/GLM-5.3
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant lines from the terminal or `bugxhunter docker logs`, with secrets removed.
+      render: text

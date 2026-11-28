@@ -640,6 +640,9 @@ To use a release, verify it first (`scripts/verify-release.sh vX.Y.Z`, see
 
 ## Development
 
+To contribute, read [CONTRIBUTING.md](CONTRIBUTING.md) first: it covers setup, what a pull
+request needs and which changes get a closer look.
+
 ```bash
 npm run check        # typecheck + lint + unit tests (what CI runs)
 npm run typecheck    # tsc, both workspaces
