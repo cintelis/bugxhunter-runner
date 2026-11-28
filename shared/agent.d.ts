@@ -194,6 +194,13 @@ export interface ReconFinding {
   verdict: "real" | "config-dependent" | "rejected";
   prodCaveat?: string;
   env: ReconEnv["kind"];
+  /** Excerpts of the response the verifier quoted as proof. */
+  quotes?: string[];
+  /**
+   * How those quotes fared against what the run's commands really returned: `quoted` (all
+   * found), `unmatched` (one was not), `unquoted` (none given). Absent on older findings.
+   */
+  proof?: "quoted" | "unmatched" | "unquoted";
 }
 
 /**
@@ -286,6 +293,8 @@ export interface ReconRetest {
   note?: string;
   /** When the finding was last verified before this retest (ms). */
   lastVerified: number;
+  /** How the ruling's quotes fared against the run's real output. */
+  proof?: "quoted" | "unmatched" | "unquoted";
 }
 
 /** GET /api/agent/recon/session: the logged-in session held for a target, without any value. */

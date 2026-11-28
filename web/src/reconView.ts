@@ -1,6 +1,16 @@
 // What the recon panel says about a run's attack paths, kept apart from the markup so it can be tested.
 import type { ReconChain, ReconMemoryTarget, ReconRetest, ReconSessionInfo, ReconState } from "../../shared/agent";
 
+/** The badge and the hover text for how a verdict's quotes fared; null when they were not checked at all. */
+export function proofBadge(proof: "quoted" | "unmatched" | "unquoted" | undefined): { text: string; kind: "ok" | "warn" | "none"; title: string } | null {
+  switch (proof) {
+    case "quoted": return { text: "evidence matched", kind: "ok", title: "Every excerpt the verifier quoted was found in what this run's commands returned." };
+    case "unmatched": return { text: "evidence not matched", kind: "warn", title: "The verifier quoted text that this run's commands did not return: it was paraphrased, or made up. Check the reproduction yourself." };
+    case "unquoted": return { text: "no quotes", kind: "none", title: "The verifier quoted nothing that could be checked against this run's output." };
+    default: return null;
+  }
+}
+
 export const RETEST_LABEL: Record<ReconRetest["result"], string> = {
   "still-reproducible": "still reproducible",
   fixed: "fixed",

@@ -25,6 +25,7 @@ import {
 } from "./recon-driver.js";
 import { activeProfileName, originOf, type EnvFidelity, type ReconChain, type ReconFinding, type ReconHarness, type ReconRecall, type ReconSessionUse, type PriorFinding, type ReconRetest } from "./recon.js";
 import { httpError } from "./errors.js";
+import { EvidenceLog, type Proof } from "./recon-evidence.js";
 
 /** The agent the driver prompts, and the subagent whose replies are verdicts. */
 export const EXECUTOR_AGENT = "recon";
@@ -93,6 +94,9 @@ export class OpencodeReconRunner implements ReconSessionRunner {
   private readonly toolInputs = new Map<string, Record<string, unknown>>();
   private readonly handledPermissions = new Set<string>();
   private readonly verified = new Set<string>();
+  /** What the run's shell commands really returned, from the event stream: what quotes are held to. */
+  readonly evidence = new EvidenceLog();
+  private readonly recorded = new Set<string>();
   private readonly capped = new Map<string, number>();
 
   constructor(
@@ -147,6 +151,9 @@ export class OpencodeReconRunner implements ReconSessionRunner {
   }
 
   get wasAborted(): boolean { return this.aborted; }
+
+  /** Hold quotes to what this run's commands really returned. */
+  proof(quotes: readonly string[]): Proof { return this.evidence.check(quotes); }
 
   /** Does this run own `sessionID` (the root or one of its subagent sessions)? */
   owns(sessionID: string): boolean { return this.family.has(sessionID); }
@@ -258,6 +265,11 @@ export class OpencodeReconRunner implements ReconSessionRunner {
     const st = obj(part.state);
     if (part.callID && st.input && typeof st.input === "object") this.toolInputs.set(part.callID, st.input);
     if (st.status !== "completed" && st.status !== "error") return;
+    // Every shell command of the run, the subagents' included: its output is the record quotes are checked against.
+    if (part.tool === "bash" && part.callID && typeof st.output === "string" && !this.recorded.has(part.callID)) {
+      this.recorded.add(part.callID);
+      this.evidence.add(st.output);
+    }
     if (part.sessionID !== this.sessionID || !this.turn) return;
     this.turn.toolsCompleted.add(part.callID);
     // The verifier's reply is the output of the executor's `task` call to it.
@@ -265,7 +277,7 @@ export class OpencodeReconRunner implements ReconSessionRunner {
     const input = obj(st.input);
     if ((input.subagent_type ?? input.agent) !== VERIFY_AGENT || typeof st.output !== "string") return;
     this.verified.add(part.callID);
-    this.turn.findings.push(...parseVerifierFindings(st.output, this.env));
+    this.turn.findings.push(...parseVerifierFindings(st.output, this.env).map((f) => ({ ...f, proof: this.evidence.check(f.quotes) })));
     this.turn.verifierOutputs.push(st.output);
   }
 
@@ -381,6 +393,7 @@ export async function startRecon(o: ReconStart): Promise<ReconState> {
 
   let lastError: string | undefined;
   const seam: ReconSessionRunner = {
+    proof: (quotes) => runner.proof(quotes),
     async runTurn(args) {
       try {
         const res = await runner.runTurn(args);

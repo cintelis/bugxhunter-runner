@@ -463,6 +463,21 @@ Nothing is kept without a vault. If the vault is locked when a run finishes, the
 memory and is written at the next unlock; a restart before that loses it. The newest 300 runs
 are kept.
 
+**Evidence check.** The verifier is a model, and it only sees the executor's account of a
+response. So it must quote the response, and the runner looks each quote up in what the run's
+own shell commands really returned, which it reads from the agent's event stream and not from
+anything a model wrote. Each finding then carries one of three marks:
+
+- *evidence matched*: every quote was found in this run's output.
+- *evidence not matched*: a quote was not found there. It was paraphrased or made up; check
+  the reproduction yourself.
+- *no quotes*: nothing was quoted that could be checked.
+
+A match shows the text was really returned to this run. It does not show the finding is right:
+that is still the verifier's judgement and yours. Whitespace is ignored in the comparison, case
+is not, and a quote shorter than 12 characters counts for nothing. In a retest, a ruling whose
+quotes are not in the output changes nothing: it is recorded as *cannot confirm*.
+
 **Retest.** When something is remembered about the target, the start dialog offers *Retest
 only*. That run explores nothing: it takes the remembered findings one at a time, sends the
 original request again, and hands the old evidence and the new response to `recon-verify`,

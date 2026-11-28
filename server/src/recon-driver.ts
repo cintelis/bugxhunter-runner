@@ -24,6 +24,7 @@ import {
   type EnvFidelity, type ReconHarness, type RouteSignals, type GateContext,
   type ReconRecall, type ReconSessionUse, type PriorFinding, type ReconRetest,
 } from "./recon.js";
+import { readQuotes, type Proof } from "./recon-evidence.js";
 
 type Severity = ReconFinding["severity"];
 const SEVERITY_RANK: Record<Severity, number> = { low: 0, medium: 1, high: 2, critical: 3 };
@@ -205,6 +206,8 @@ export interface ReconSessionRunner {
    * permission as it streams in. Resolves when the turn goes idle.
    */
   runTurn(args: { prompt: string; model: string; gate: (p: ReconPermission) => GateDecision }): Promise<ReconTurnResult>;
+  /** Hold quotes to what this run's commands really returned. Absent when the runner keeps no record. */
+  proof?(quotes: readonly string[]): Proof;
 }
 
 export interface ReconDriverOptions {
@@ -258,6 +261,10 @@ export interface ReconRunResult {
 
 const STATUS_REMINDER = `End your turn with one final line: "${STATUS_LINE}: continue", "${STATUS_LINE}: stuck" or "${STATUS_LINE}: done".`;
 
+/** Why the executor must hand responses over as they came back: the verifier's quotes are looked up in the run's real output. */
+export const EVIDENCE_RULE =
+  "EVIDENCE: when you hand anything to recon-verify, paste the request or command and the response exactly as it came back, not a summary of it. The verifier quotes the response, and those quotes are checked against what the commands of this run really returned: a finding whose quotes are not found there is marked as not matched.";
+
 /** Build the executor's seed prompt: scope fence + env-fidelity gate + objective. */
 export function buildReconKickoff(opts: Pick<ReconDriverOptions, "objective" | "scope" | "env" | "prior" | "session">): string {
   const { objective, scope, env, prior, session } = opts;
@@ -269,6 +276,7 @@ export function buildReconKickoff(opts: Pick<ReconDriverOptions, "objective" | "
     ...(session && (session.cookieFile || session.headerFile) ? [buildSessionBlock(session)] : []),
     ...(prior && (prior.findings.length || prior.paths.length) ? [buildPriorBlock(prior)] : []),
     `Work one hypothesis at a time with the smallest low-impact probe. Read-only probes run freely; anything that changes state pauses for human approval. When you have a candidate, hand it to the recon-verify subagent — do not promote it yourself.`,
+    EVIDENCE_RULE,
     STATUS_REMINDER,
   ].join("\n\n");
 }
@@ -312,6 +320,7 @@ export function buildRetestKickoff(opts: Pick<ReconDriverOptions, "scope" | "env
     `SCOPE (authorisation fence): test only ${scope}. Anything outside it is out of bounds — do not touch it.`,
     `ENVIRONMENT: this is a ${env.kind} instance. ${env.divergences}`,
     ...(session && (session.cookieFile || session.headerFile) ? [buildSessionBlock(session)] : []),
+    EVIDENCE_RULE,
     "RETEST RUN: this run only re-checks findings that earlier runs verified on this target. You are given them one at a time. Do not explore, and test nothing but the finding you are given. Read-only probes run freely; anything that changes state pauses for human approval.",
   ].join("\n\n");
 }
@@ -342,10 +351,10 @@ const RETEST_ROUNDS = 2;
 async function driveRetest(run: ReconRun, opts: ReconDriverOptions, gate: (p: ReconPermission) => GateDecision): Promise<{ stopped: ReconRunResult["stopped"]; retests: ReconRetest[] }> {
   const todo = opts.retest ?? [];
   const retests: ReconRetest[] = [];
-  const record = (f: PriorFinding, r: Pick<ReconRetest, "result" | "evidence" | "note">) => {
+  const record = (f: PriorFinding, r: Pick<ReconRetest, "result" | "evidence" | "note" | "proof">) => {
     retests.push({ title: f.title, severity: f.severity, ...(f.standardId ? { standardId: f.standardId } : {}), lastVerified: f.seen, ...r });
     if (r.result === "still-reproducible" && r.evidence) {
-      run.addFindings([{ title: f.title, severity: f.severity, standardId: f.standardId, verdict: f.verdict, repro: r.evidence, env: opts.env.kind }]);
+      run.addFindings([{ title: f.title, severity: f.severity, standardId: f.standardId, verdict: f.verdict, repro: r.evidence, env: opts.env.kind, ...(r.proof ? { proof: r.proof } : {}) }]);
     }
     opts.onRetest?.(retests);
   };
@@ -371,7 +380,12 @@ async function driveRetest(run: ReconRun, opts: ReconDriverOptions, gate: (p: Re
       run.recordRound();
       run.recordUsage(res.tokensUsed);
       const rulings = (res.verifierOutputs ?? []).flatMap(parseVerifierRetests);
-      if (rulings.length) { record(f, rulings[rulings.length - 1]); ruled = true; break; }
+      if (rulings.length) {
+        const last = rulings[rulings.length - 1];
+        record(f, applyRetestProof(last, opts.runner.proof?.(last.quotes ?? [])));
+        ruled = true;
+        break;
+      }
       if (res.stuck) { why = "the executor could not run the retest"; break; }
       if (res.done) { why = "the verifier did not rule on it"; break; }
       if (!res.madeProgress) { why = "the executor made no progress on it"; break; }
@@ -469,9 +483,11 @@ export function parseVerifierFindings(text: string, env: EnvFidelity["kind"]): R
     const severity = SEVERITIES.find((s) => s === String(get(o, "severity")).toLowerCase());
     const repro = clipText(get(o, "repro"), 4000);
     if (!verdict || !severity || !repro) continue;
+    const quotes = readQuotes(get(o, "quotes"));
     out.push({
       title: clipText(get(o, "title"), 200) ?? repro.slice(0, 80),
       severity, verdict, repro, env,
+      ...(quotes.length ? { quotes } : {}),
       standardId: clipText(get(o, "standard_id") ?? get(o, "standardId"), 60),
       prodCaveat: clipText(get(o, "prod_caveat") ?? get(o, "prodCaveat"), 1000),
     });
@@ -483,6 +499,23 @@ export function parseVerifierFindings(text: string, env: EnvFidelity["kind"]): R
 
 const RETEST_RESULTS: readonly ReconRetest["result"][] = ["still-reproducible", "fixed", "cannot-confirm"];
 
+/** One ruling as the verifier wrote it, with the quotes it gave. */
+export type RetestRuling = Pick<ReconRetest, "result" | "evidence" | "note"> & { quotes?: string[] };
+
+/**
+ * Hold a ruling to the run's real output. Quotes that are not in it mean the verifier ruled
+ * on text this run never received, so the finding's status does not change. A ruling with no
+ * quotes stands as written, marked `unquoted`.
+ */
+export function applyRetestProof(ruling: RetestRuling, proof: Proof | undefined): Pick<ReconRetest, "result" | "evidence" | "note" | "proof"> {
+  const { quotes: _quotes, ...r } = ruling;
+  if (!proof) return r;
+  if (proof === "unmatched" && r.result !== "cannot-confirm") {
+    return { result: "cannot-confirm", evidence: r.evidence, note: `the verifier said "${r.result}", but quoted text this run's commands did not return`, proof };
+  }
+  return { ...r, proof };
+}
+
 function isRetestVerdict(o: unknown): boolean {
   return String(get(o, "kind")).toLowerCase() === "retest";
 }
@@ -492,8 +525,8 @@ function isRetestVerdict(o: unknown): boolean {
  * "still-reproducible" that carries no evidence is kept as "cannot-confirm": the status
  * of a finding does not change on a bare claim.
  */
-export function parseVerifierRetests(text: string): Pick<ReconRetest, "result" | "evidence" | "note">[] {
-  const out: Pick<ReconRetest, "result" | "evidence" | "note">[] = [];
+export function parseVerifierRetests(text: string): RetestRuling[] {
+  const out: RetestRuling[] = [];
   for (const raw of jsonObjects(text ?? "")) {
     let o: unknown;
     try { o = JSON.parse(raw); } catch { continue; }
@@ -503,8 +536,9 @@ export function parseVerifierRetests(text: string): Pick<ReconRetest, "result" |
     if (!result) continue;
     const evidence = clipText(get(o, "evidence"), 4000);
     const note = clipText(get(o, "note"), 400);
+    const quotes = readQuotes(get(o, "quotes"));
     out.push(evidence || result === "cannot-confirm"
-      ? { result, evidence, note }
+      ? { result, evidence, note, ...(quotes.length ? { quotes } : {}) }
       : { result: "cannot-confirm", note: `the verifier said "${result}" without evidence` });
   }
   return out;

@@ -886,6 +886,9 @@ mark.flag {
 .recon-findings .recon-title-lead::before { content: "[?] "; }
 .recon-note { margin-top: 12px; }
 .recon-from { margin-bottom: 12px; }
+.badge.proof-ok { color: var(--green); border-color: var(--green); }
+.badge.proof-warn { color: var(--amber); border-color: var(--amber); }
+.badge.proof-none { color: var(--muted); }
 .badge.retest-fixed { color: var(--green); border-color: var(--green); }
 .badge.retest-still-reproducible { color: var(--red); border-color: var(--red); }
 .badge.retest-cannot-confirm { color: var(--amber); border-color: var(--amber); }

@@ -214,6 +214,30 @@ describe("OpencodeReconRunner — one turn against a scripted event stream", () 
     expect(await failed).toBe("vault is sealed");
   });
 
+  it("holds the verifier's quotes to what the run's commands really returned", async () => {
+    const { runner, emit } = await started();
+    const turn = runner.runTurn({ prompt: "go", model: "m", gate });
+    const verdict = (title: string, quotes: string[]) => JSON.stringify({ title, verdict: "real", severity: "low", repro: "r", quotes });
+    await emit(
+      assistant("m1"),
+      { type: "session.created", properties: { info: { id: "ses_kid", parentID: ROOT } } },
+      tool("b1", "bash", "completed", { command: "curl -s http://target/runs/2" }, 'HTTP/1.1 200 OK\n{"owner": "alice@example.com",\n   "id": 2}'),
+      tool("b2", "bash", "completed", { command: "curl -s http://target/status" }, "debug_token=abcdef0123456789", "ses_kid"), // a subagent's command counts
+      tool("b3", "bash", "completed", { command: "curl -s http://other/x" }, "from another session entirely", "ses_other"),
+      tool("v1", "task", "completed", { subagent_type: "recon-verify" }, verdict("Matched", ['{"owner": "alice@example.com", "id": 2}', "debug_token=abcdef0123456789"])),
+      tool("v2", "task", "completed", { subagent_type: "recon-verify" }, verdict("Invented", ['{"owner": "alice@example.com", "id": 2}', '"role": "admin", "id": 1'])),
+      tool("v3", "task", "completed", { subagent_type: "recon-verify" }, verdict("Other session", ["from another session entirely"])),
+      tool("v4", "task", "completed", { subagent_type: "recon-verify" }, verdict("Nothing quoted", ["200", ""])),
+      idle(),
+    );
+    const res = await turn;
+    expect(res.findings.map((f) => [f.title, f.proof])).toEqual([
+      ["Matched", "quoted"], ["Invented", "unmatched"], ["Other session", "unmatched"], ["Nothing quoted", "unquoted"],
+    ]);
+    expect(runner.evidence.size).toBe(2);
+    expect(runner.proof(["HTTP/1.1 200 OK"])).toBe("quoted");
+  });
+
   it("stop aborts the turn in OpenCode and fails it", async () => {
     const { runner, emit, aborted } = await started();
     const turn = runner.runTurn({ prompt: "go", model: "m", gate }).catch((e: Error) => e.message);
