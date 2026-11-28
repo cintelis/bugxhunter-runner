@@ -318,6 +318,8 @@ export interface ReconStart {
   retest?: readonly PriorFinding[];
   /** The target's captured logged-in session, already written into the project folder. Removed when the run ends. */
   session?: ReconSessionUse;
+  /** Called once, with the final state, when the run has ended (a batch starts its next worker on this). */
+  onFinished?: (state: ReconState) => void;
   /** Keeps the finished run for later ones, and says whether it could. */
   remember?: (state: ReconState) => ReconState["kept"];
 }
@@ -432,6 +434,7 @@ export async function startRecon(o: ReconStart): Promise<ReconState> {
       if (o.remember) {
         try { state.kept = o.remember(state); } catch { state.kept = "off"; }
       }
+      try { o.onFinished?.(state); } catch { /* the listener's failure is not the run's */ }
       o.log?.("recon.finished", {
         session: o.sessionID, stopped: state.stopped, rounds: state.rounds, tokens: state.tokens,
         gate: state.gate, findings: state.findings, chainPass: state.chainPass, chains: state.chains, error: state.error,

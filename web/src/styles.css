@@ -886,6 +886,18 @@ mark.flag {
 .recon-findings .recon-title-lead::before { content: "[?] "; }
 .recon-note { margin-top: 12px; }
 .recon-from { margin-bottom: 12px; }
+.recon-batch-options { margin-bottom: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; }
+.recon-batch-options .field input { max-width: 180px; }
+.batch-panel { margin: 14px 0; }
+.batch-approvals { margin: 12px 0; }
+.batch-workers { display: grid; gap: 6px; margin-top: 10px; }
+.batch-worker { border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; }
+.batch-worker > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; cursor: pointer; font-size: 12.5px; color: var(--muted); }
+.batch-worker .batch-target { color: var(--text); }
+.badge.batch-running, .badge.batch-starting { color: var(--cyan); border-color: var(--cyan); }
+.badge.batch-finished { color: var(--green); border-color: var(--green); }
+.badge.batch-failed { color: var(--red); border-color: var(--red); }
+.badge.batch-skipped, .badge.batch-queued { color: var(--muted); }
 .recon-leads { list-style: none; margin: 8px 0 0; padding: 0; font-size: 13px; }
 .recon-leads li { margin-bottom: 5px; }
 .recon-leads li.closed { color: var(--muted); }

@@ -301,6 +301,44 @@ describe("startRecon — the run registry", () => {
     expect(log).toEqual(["recon.started", "recon.gate", "recon.finished"]);
   });
 
+  it("two runs on two sessions go side by side on one event stream, each seeing only its own", async () => {
+    // Both runs hear every event of the project, as they do from OpenCode: the same events go to both.
+    const a = fakeBackend(), b = fakeBackend();
+    const both = async (...evts: unknown[]) => { await a.emit(...evts); await b.emit(...evts); };
+    const finished: string[] = [];
+    sessions.push("ses_p", "ses_q");
+    await startRecon({ sessionID: "ses_p", scope: "http://one.test", objective: "x", env: ENV, backend: a.backend, onFinished: (s) => finished.push(`${s.sessionID}:${s.stopped}`) });
+    await startRecon({ sessionID: "ses_q", scope: "http://two.test", objective: "x", env: ENV, backend: b.backend, onFinished: (s) => finished.push(`${s.sessionID}:${s.stopped}`) });
+    await tick();
+    expect(a.prompts[0].text).toContain("test only http://one.test");
+    expect(b.prompts[0].text).toContain("test only http://two.test");
+
+    await both(
+      assistant("p1", { input: 10, output: 5 }, "ses_p"),
+      assistant("q1", { input: 100, output: 50 }, "ses_q"),
+      // Each worker asks to read the OTHER worker's target: neither gate has that host in scope.
+      tool("pc", "bash", "running", { command: "curl -s http://two.test/x" }, undefined, "ses_p"),
+      asked("per_p", "bash", "pc", "ses_p"),
+      tool("qc", "bash", "running", { command: "curl -s http://two.test/x" }, undefined, "ses_q"),
+      asked("per_q", "bash", "qc", "ses_q"),
+      tool("pv", "task", "completed", { subagent_type: "recon-verify" }, '{"title":"Only on one","verdict":"real","severity":"low","repro":"r"}', "ses_p"),
+      text("pt", "p1", "RECON-STATUS: done", "ses_p"),
+      idle("ses_p"),
+    );
+    await tick();
+    // The same command: left for the person on the worker whose target it is not, allowed on the one whose it is.
+    expect(a.replies).toEqual([]);
+    expect(b.replies).toEqual([{ sessionID: "ses_q", permissionID: "per_q", response: "once" }]);
+    expect(reconState("ses_p")).toMatchObject({ status: "finished", stopped: "done", tokens: 15, gate: { allowed: 0, asked: 1 } });
+    expect(reconState("ses_p")!.findings.map((f) => f.title)).toEqual(["Only on one"]);
+    expect(reconState("ses_q")).toMatchObject({ status: "running", tokens: 150, gate: { allowed: 1, asked: 0 }, findings: [] });
+    expect(finished).toEqual(["ses_p:done"]);
+
+    await both(text("qt", "q1", "RECON-STATUS: done", "ses_q"), idle("ses_q"));
+    await tick();
+    expect(finished).toEqual(["ses_p:done", "ses_q:done"]);
+  });
+
   it("stopRecon ends a run as 'aborted'", async () => {
     const f = fakeBackend();
     sessions.push("ses_b");

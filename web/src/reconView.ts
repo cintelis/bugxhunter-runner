@@ -1,5 +1,25 @@
 // What the recon panel says about a run's attack paths, kept apart from the markup so it can be tested.
-import type { ReconChain, ReconMemoryTarget, ReconRetest, ReconSessionInfo, ReconState } from "../../shared/agent";
+import type { ReconBatchState, ReconBatchWorker, ReconChain, ReconMemoryTarget, ReconRetest, ReconSessionInfo, ReconState } from "../../shared/agent";
+
+/** The targets typed into the start dialog: one per line (commas work too), blanks dropped. */
+export function targetLines(text: string): string[] {
+  return text.split(/[\r\n,]+/).map((t) => t.trim()).filter(Boolean);
+}
+
+/** A batch in a few words: "2 running, 1 queued, 3 finished, 1 failed". */
+export function batchSummary(b: Pick<ReconBatchState, "workers">): string {
+  const n = (...s: ReconBatchWorker["status"][]) => b.workers.filter((w) => s.includes(w.status)).length;
+  const parts = [[n("starting", "running"), "running"], [n("queued"), "queued"], [n("finished"), "finished"], [n("failed"), "failed"], [n("skipped"), "skipped"]] as const;
+  return `${b.workers.length} target${b.workers.length === 1 ? "" : "s"}: ${parts.filter(([c]) => c > 0).map(([c, label]) => `${c} ${label}`).join(", ")}`;
+}
+
+/** What to say beside a worker that is not simply running: why it failed or was skipped, or how its run ended. */
+export function workerNote(w: Pick<ReconBatchWorker, "status" | "reason" | "recon">): string | null {
+  if (w.status === "failed") return `could not start: ${w.reason ?? "unknown reason"}`;
+  if (w.status === "skipped") return `not started: ${w.reason ?? "skipped"}`;
+  if (w.status === "finished" && w.recon?.stopped) return `ended: ${w.recon.stopped}`;
+  return null;
+}
 
 /** The badge and the hover text for how a verdict's quotes fared; null when they were not checked at all. */
 export function proofBadge(proof: "quoted" | "unmatched" | "unquoted" | undefined): { text: string; kind: "ok" | "warn" | "none"; title: string } | null {
