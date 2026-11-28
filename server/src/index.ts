@@ -25,6 +25,7 @@ import {
 import type { PendingRequests, ReconBatchApproval, ReconState, SessionSummary, SlashCommand, StoredMessage, Todo } from "../../shared/agent.js";
 import { mountAuth, authRequired, issueSession } from "./auth.js";
 import { permissionGone } from "./errors.js";
+import { cveLookupEnabled, lookupKnownVulns } from "./recon-cve.js";
 import { audit, followOpencode, LOG_DIR } from "./audit.js";
 import { saveAttachments, type Attachment } from "./attachments.js";
 import * as vault from "./vault.js";
@@ -871,6 +872,8 @@ async function launchRecon(directory: string, sessionID: string, b: ReconLaunch,
     prior: retest || b.useMemory === false ? undefined : reconMemory.recall(scope),
     remember: reconMemory.remember,
     onFinished,
+    // What OSV and NVD list today for the components the run fingerprints. Only a name and a version leave the runner.
+    lookupVulns: cveLookupEnabled() ? (components) => lookupKnownVulns(components) : undefined,
   }).catch((e) => { session?.cleanup(); throw e; }); // the run never started: do not leave the session lying in the project
 }
 

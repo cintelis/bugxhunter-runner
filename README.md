@@ -452,6 +452,7 @@ and what counts as a finding. The security model is in
 | Test one target | [A run](#a-run) |
 | Know a finding rests on a real response | [The evidence check](#the-evidence-check) |
 | See how findings combine | [Attack paths](#attack-paths) |
+| Check what the target runs against today's known vulnerabilities | [Known vulnerabilities](#known-vulnerabilities) |
 | Not lose what was noticed along the way | [Leads](#leads) |
 | Build on earlier runs, and keep results across restarts | [Memory](#memory) |
 | Check what has been fixed | [Retest](#retest) |
@@ -540,6 +541,30 @@ path that stops (a write you declined, a step that did not work, the rounds runn
 The chain pass does not run after an error, rate limits or a stop. It spends what is left of
 the token budget and no more: once a run has two findings, the main loop leaves 15% of the
 budget for it. The start dialog has a checkbox to leave the chain pass out of a run.
+
+### Known vulnerabilities
+
+A run starts by fingerprinting what the target runs: the web server, framework, CMS and
+client-side libraries, each with its version where one shows. The executor names each one
+(`RECON-COMPONENT: nginx 1.18.0`, or `RECON-COMPONENT: jquery 3.4.1 npm` for a package), and
+the runner looks it up, as the databases stand that day:
+
+- a package in an ecosystem goes to [OSV](https://osv.dev) (npm, PyPI, Packagist, RubyGems,
+  Go, Maven, NuGet and others);
+- anything else goes to [NVD](https://nvd.nist.gov), matched on product and version.
+
+What is listed comes back to the executor at the top of its next turn, worst first, and
+shows in the panel under **Known vulnerabilities**. A listing is about a version, not about
+the target: the executor checks whether it can apply and probes read-only where a probe can
+settle it, and only what the verifier confirms becomes a finding. It is told never to run a
+public exploit.
+
+The runner makes these calls, not the agent: the recon agents have no web access, and a
+model's own memory of CVEs ends at its training date. Only a product name and a version
+leave the runner, never the target's address or a response. NVD allows five requests in 30
+seconds without a key, so one lookup asks it about five components at most and spaces the
+requests; the rest are shown as not checked. Set `RECON_CVE_LOOKUP=off` to turn the lookup
+off, for a runner with no outside access.
 
 ### Leads
 
@@ -708,6 +733,7 @@ nobody is there to unlock.
 | `OPEN_RUNNER_RECON_DIR` | `recon/` beside the vault | Finished recon runs (what later runs on the same target start from), sealed with the vault key |
 | `OPEN_RUNNER_WORKSPACE` | `/workspace` (local: `~/bugxhunter/repos`) | Remote mode: projects must live under this folder. Both modes: where GitHub clones land |
 | `SCX_PROXY_TOKEN` | unset | Enables the `/scx/v1` key proxy for the sandboxed agent |
+| `RECON_CVE_LOOKUP` | on | `off` stops a run from looking up [known vulnerabilities](#known-vulnerabilities) in OSV and NVD |
 | `RECON_PROFILE` | `recon-balanced` (`recon-open` without an Anthropic key) | Model profile for [supervised recon](#supervised-recon); `RECON_PROFILES_FILE` adds your own (JSON) |
 | `RECON_EXECUTOR_MODEL`, `RECON_TRIAGE_MODEL`, `RECON_VERIFY_MODEL`, `RECON_ESCALATE_MODEL` | from the profile | One recon role's model, as `provider/model` |
 | `RECON_ESCALATE_AFTER` | `2` | Stuck rounds before the executor moves to the escalation model |

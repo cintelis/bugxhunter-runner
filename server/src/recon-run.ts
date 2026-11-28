@@ -26,6 +26,7 @@ import {
 import { activeProfileName, originOf, reconAgents, type EnvFidelity, type ReconChain, type ReconFinding, type ReconHarness, type ReconRecall, type ReconSessionUse, type PriorFinding, type ReconRetest, type ReconLead } from "./recon.js";
 import { httpError } from "./errors.js";
 import { EvidenceLog, type Proof } from "./recon-evidence.js";
+import type { LookupResult, ReconComponent, ReconKnownVuln } from "./recon-cve.js";
 
 /** The agent the driver prompts, and the subagent whose replies are verdicts. */
 export const EXECUTOR_AGENT = "recon";
@@ -332,6 +333,8 @@ export interface ReconStart {
   session?: ReconSessionUse;
   /** Called once, with the final state, when the run has ended (a batch starts its next worker on this). */
   onFinished?: (state: ReconState) => void;
+  /** Looks up known vulnerabilities for fingerprinted components (recon-cve.ts). Absent: the lookup is off. */
+  lookupVulns?: (components: readonly ReconComponent[]) => Promise<LookupResult>;
   /** Keeps the finished run for later ones, and says whether it could. */
   remember?: (state: ReconState) => ReconState["kept"];
 }
@@ -429,9 +432,15 @@ export async function startRecon(o: ReconStart): Promise<ReconState> {
   };
   const onRetest = (retests: readonly ReconRetest[]) => { state.retests = [...retests]; };
   const onLeads = (leads: readonly ReconLead[]) => { state.leads = leads.map((l) => ({ ...l })); };
+  const onKnown = (r: { components: readonly ReconComponent[]; known: readonly ReconKnownVuln[]; unchecked: readonly string[] }) => {
+    state.components = [...r.components];
+    state.known = [...r.known];
+    if (r.unchecked.length) state.uncheckedComponents = [...r.unchecked];
+    o.log?.("recon.cve", { session: o.sessionID, components: r.components.length, known: r.known.length, unchecked: r.unchecked.length });
+  };
   // A path recorded during the main loop: shown at once, and the run stays in its main phase.
   const onChains = (chains: readonly ReconChain[]) => { state.chains = [...chains]; };
-  void driveRecon({ objective, scope, env: o.env, runner: seam, harness, rateLimited: () => runner.rateLimited(), onChainPass, onChains, prior: o.prior, session: o.session, retest: o.retest, onRetest, onLeads })
+  void driveRecon({ objective, scope, env: o.env, runner: seam, harness, rateLimited: () => runner.rateLimited(), onChainPass, onChains, prior: o.prior, session: o.session, retest: o.retest, onRetest, onLeads, onKnown, lookupVulns: o.retest?.length ? undefined : o.lookupVulns })
     .then((result) => {
       snapshot(run); // last live numbers before the status flips
       state.status = "finished";
