@@ -2,9 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   agentCreateSession, agentPrompt, agentReplyPermission, agentAbort, agentDiff, openAgentEvents, agentAnswerQuestion,
   agentLoadSession, agentCommands, agentRunCommand, agentCompact, agentPending, reconStart, reconGet, reconStop,
+  reconBatchStart, reconBatchGet, reconBatchStop,
   type AgentEvent, type AgentStatus, type FileDiff, type Todo, type SlashCommand, type FileUpload, type StoredMessage,
 } from "./agentApi";
-import type { FilePart, MessagePart, PermissionRequest, ReconState, ToolPart } from "../../shared/agent";
+import type { FilePart, MessagePart, PermissionRequest, ReconBatchApproval, ReconBatchState, ReconState, ToolPart } from "../../shared/agent";
+import { BatchPanel } from "./BatchPanel";
 import { ReconDialog, ReconFindings, ReconStrip, type ReconRequest } from "./ReconPanel";
 import { Markdown } from "./Markdown";
 import { FlagText } from "./FlagText";
@@ -92,6 +94,9 @@ export function AgentPanel({
   // `idle` between rounds is not the end of the turn (see reconActive).
   const [recon, setRecon] = useState<ReconState | null>(null);
   const [showRecon, setShowRecon] = useState(false);
+  // Concurrency mode: a batch of recon runs on sessions of their own, and the approvals they wait on.
+  const [batch, setBatch] = useState<ReconBatchState | null>(null);
+  const [batchApprovals, setBatchApprovals] = useState<ReconBatchApproval[]>([]);
   const reconActive = useRef(false);
 
   // Type-ahead queue: prompts entered while a turn is running, sent on idle.
@@ -323,9 +328,49 @@ export function AgentPanel({
     }
   }
 
+  // A batch outlives the page: pick up one that is running in this project, and follow it while it runs.
+  const batchRunning = batch?.status === "running";
+  useEffect(() => {
+    reconBatchGet().then((r) => { if (r.batch?.status === "running" && r.directory === directory) { setBatch(r.batch); setBatchApprovals(r.approvals); } }).catch(() => {});
+  }, [directory]);
+  useEffect(() => {
+    if (!batchRunning || !batch) return;
+    const id = batch.id;
+    const t = setInterval(() => {
+      reconBatchGet(id).then((r) => {
+        if (!r.batch) return;
+        setBatch(r.batch);
+        setBatchApprovals(r.approvals);
+        if (r.batch.status !== "running") onSessionsChanged();
+      }).catch(() => {});
+    }, 2000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- restart only when the batch starts or ends
+  }, [batchRunning, batch?.id]);
+
+  async function replyBatch(a: ReconBatchApproval, response: "once" | "reject") {
+    setBatchApprovals((cur) => cur.filter((x) => x.permissionID !== a.permissionID));
+    try {
+      await agentReplyPermission({ sessionID: a.sessionID, permissionID: a.permissionID, response, directory });
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    }
+  }
+
   async function startRecon(req: ReconRequest) {
     setError(null);
     setNotice(null);
+    if (req.targets && req.targets.length > 1) {
+      // Each worker gets a session of its own; this one stays as it is.
+      const b = await reconBatchStart({
+        directory, targets: req.targets, objective: req.objective, env: req.env, authorised: true,
+        maxWorkers: req.maxWorkers, totalBudgetTokens: req.totalBudgetTokens, chainPass: req.chainPass,
+      });
+      setBatch(b);
+      setBatchApprovals([]);
+      onSessionsChanged();
+      return;
+    }
     const sid = await ensureSession();
     const r = await reconStart({ sessionID: sid, directory, ...req, authorised: true });
     const id = `local-${localSeq.current++}`;
@@ -568,6 +613,12 @@ export function AgentPanel({
           {messages.map((m) => <AgentRow key={m.id} msg={m} />)}
 
           {recon && <ReconFindings recon={recon} />}
+
+          {batch && (
+            <BatchPanel batch={batch} approvals={batchApprovals} onReply={replyBatch}
+              onStop={() => { void reconBatchStop(batch.id).then((b) => { if (b) setBatch(b); }); }}
+              onDismiss={() => { setBatch(null); setBatchApprovals([]); }} />
+          )}
 
           {perms.map((p) => (
             <div className="perm-card" key={p.permissionID}>

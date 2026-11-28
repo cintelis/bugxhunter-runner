@@ -158,6 +158,17 @@ You never *lose* protection by staying in Monitor; Enforce only adds the network
     they go to the model provider. A read sent as a logged-in user can also have effects a
     logged-out one cannot (a `GET /logout`, a badly designed `GET` that changes state). Both
     are why the dialog says to use a test account.
+- **Concurrency adds workers, not permissions.** A batch is a queue in the runner's code, not a
+  model: it creates a session per target and starts the same supervised run on each. Every
+  worker has its own gate, built from its own target, so the allowlist of one never covers
+  another's host, and "always allow" stays off as in any run. Approvals are still one command
+  at a time and still a person's; the batch only gathers them in one list and names the target
+  on each, so an approval cannot be mistaken for another worker's. What grows is the amount a
+  person is asked to read at once: more workers mean more cards, and the risk is approving
+  without reading. The cap of five workers, and three by default, is there for that as much
+  as for the agent's memory. The statement of authorisation covers every target listed, and
+  the audit log records the batch and each worker's run (`recon.batch.started`,
+  `recon.batch.finished`, and the usual `recon.*` events per session).
 - **A lead is a note, and buys nothing.** The executor's `RECON-LEAD:` lines are read by the
   program, clipped, capped (8 a turn, 40 a run) and given back to the same executor in later
   prompts. They never become findings, never reach the verifier as evidence, and change no

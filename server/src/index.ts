@@ -22,7 +22,7 @@ import {
   SessionFamily, childSessions, markInterrupted,
   DEFAULT_DIRECTORY, DEFAULT_MODEL, REMOTE_URL, REPO_ROOT, ALLOWED_ROOTS,
 } from "./opencode.js";
-import type { PendingRequests, SessionSummary, SlashCommand, StoredMessage, Todo } from "../../shared/agent.js";
+import type { PendingRequests, ReconBatchApproval, ReconState, SessionSummary, SlashCommand, StoredMessage, Todo } from "../../shared/agent.js";
 import { mountAuth, authRequired, issueSession } from "./auth.js";
 import { audit, followOpencode, LOG_DIR } from "./audit.js";
 import { saveAttachments, type Attachment } from "./attachments.js";
@@ -30,6 +30,8 @@ import * as vault from "./vault.js";
 import * as playground from "./playground-store.js";
 import * as reconMemory from "./recon-memory.js";
 import * as reconSession from "./recon-session.js";
+import { batchDirectory, batchState, parseTargets, startBatch, stopBatch } from "./recon-batch.js";
+import { resolveHarness } from "./recon-driver.js";
 import { zip } from "./zip.js";
 import * as nvidiaHealth from "./nvidia-health.js";
 import * as render from "./render.js";
@@ -825,27 +827,119 @@ app.post("/api/agent/recon", async (req, res) => {
         ? "The agent container has no recon agent. Rebuild or pull the agent image for this version."
         : "OpenCode has no recon agent. Restart BugXHunter." } });
     }
-    // Retest mode re-checks what is remembered about the target; with nothing remembered there is nothing to do.
-    const retest = b.mode === "retest" ? reconMemory.recall(String(b.scope ?? ""))?.findings ?? [] : undefined;
-    if (retest && !retest.length) return res.status(400).json({ error: { message: "Nothing is remembered about this target to retest (or the vault is locked)." } });
-    setAnthropicAvailable(configured("anthropic"));
-    // The captured session becomes two files in the project folder for this run; startRecon removes them when it ends.
-    const session = b.useSession === false ? undefined : reconSession.materialise(String(b.scope ?? ""), directory);
-    const state = await startRecon({
-      session,
-      sessionID: b.sessionID,
-      scope: String(b.scope ?? ""),
-      objective: String(b.objective ?? ""),
-      env: parseEnvFidelity(b.env),
-      harness: parseReconHarness({ maxRounds: b.maxRounds, budgetTokens: b.budgetTokens, chainPass: b.chainPass }),
-      backend: await reconBackend(directory),
-      log: (event, data) => audit(event, { directory, ...data }),
-      // What earlier runs verified here, unless this run is to start cold. It is always kept for the next one.
-      retest,
-      prior: retest || b.useMemory === false ? undefined : reconMemory.recall(String(b.scope ?? "")),
-      remember: reconMemory.remember,
-    }).catch((e) => { session?.cleanup(); throw e; }); // the run never started: do not leave the session lying in the project
-    res.json({ recon: state });
+    res.json({ recon: await launchRecon(directory, b.sessionID, b) });
+  } catch (e) {
+    sendError(res, e);
+  }
+});
+
+interface ReconLaunch {
+  scope?: string; objective?: string; env?: unknown; maxRounds?: number; budgetTokens?: number; chainPass?: unknown;
+  useMemory?: boolean; useSession?: boolean; mode?: string;
+}
+
+/**
+ * Start one recon run on a session: what the start route does once the request is checked,
+ * and what a batch does for each of its targets.
+ */
+async function launchRecon(directory: string, sessionID: string, b: ReconLaunch, onFinished?: (state: ReconState) => void): Promise<ReconState> {
+  const scope = String(b.scope ?? "");
+  // Retest mode re-checks what is remembered about the target; with nothing remembered there is nothing to do.
+  const retest = b.mode === "retest" ? reconMemory.recall(scope)?.findings ?? [] : undefined;
+  if (retest && !retest.length) throw httpError(400, "Nothing is remembered about this target to retest (or the vault is locked).");
+  setAnthropicAvailable(configured("anthropic"));
+  // The captured session becomes two files in the project folder for this run; startRecon removes them when it ends.
+  const session = b.useSession === false ? undefined : reconSession.materialise(scope, directory);
+  return startRecon({
+    session,
+    sessionID,
+    scope,
+    objective: String(b.objective ?? ""),
+    env: parseEnvFidelity(b.env),
+    harness: parseReconHarness({ maxRounds: b.maxRounds, budgetTokens: b.budgetTokens, chainPass: b.chainPass }),
+    backend: await reconBackend(directory),
+    log: (event, data) => audit(event, { directory, ...data }),
+    // What earlier runs verified here, unless this run is to start cold. It is always kept for the next one.
+    retest,
+    prior: retest || b.useMemory === false ? undefined : reconMemory.recall(scope),
+    remember: reconMemory.remember,
+    onFinished,
+  }).catch((e) => { session?.cleanup(); throw e; }); // the run never started: do not leave the session lying in the project
+}
+
+// --- Concurrency mode: several targets, one worker each (recon-batch.ts) ---
+
+/** Start a batch: a recon run per target, a few at a time. */
+app.post("/api/agent/recon/batch", async (req, res) => {
+  try {
+    const b = (req.body ?? {}) as ReconLaunch & { directory?: string; targets?: unknown; authorised?: boolean; maxWorkers?: number; totalBudgetTokens?: number };
+    if (b.authorised !== true) return res.status(400).json({ error: { message: "Confirm that you are authorised to test every target listed." } });
+    const targets = parseTargets(b.targets);
+    parseEnvFidelity(b.env); // refuse a bad environment now, not once per worker
+    if (!String(b.objective ?? "").trim()) return res.status(400).json({ error: { message: "objective is required" } });
+    const directory = await resolveDirectory(b.directory);
+    const agents = await oc<{ name?: string }[]>(`/agent${query({ directory })}`).catch(() => []);
+    if (!agents.some((a) => a?.name === EXECUTOR_AGENT)) {
+      return res.status(409).json({ error: { message: "The agent has no recon agent. Rebuild or pull the agent image for this version, or restart BugXHunter." } });
+    }
+    const client = await getClient(directory);
+    const total = Number(b.totalBudgetTokens);
+    const batch = startBatch({
+      targets, directory, maxWorkers: b.maxWorkers,
+      workerBudgetTokens: resolveHarness(parseReconHarness({ budgetTokens: b.budgetTokens })).budgetTokens!,
+      ...(Number.isFinite(total) && total > 0 ? { totalBudgetTokens: Math.floor(total) } : {}),
+      deps: {
+        async startWorker(target, budgetTokens, onFinished) {
+          const session = unwrap<any>(await client.session.create({ body: { title: `recon ${target}`.slice(0, 120) }, query: { directory } }));
+          // A batch explores: retest stays a single-target choice.
+          await launchRecon(directory, session.id, { ...b, scope: target, budgetTokens, mode: undefined }, onFinished);
+          return { sessionID: session.id };
+        },
+        stopWorker: (sessionID) => stopRecon(sessionID),
+        workerState: (sessionID) => reconState(sessionID),
+        log: (event, data) => audit(event, { directory, ...data }),
+      },
+    });
+    res.json({ batch });
+  } catch (e) {
+    sendError(res, e);
+  }
+});
+
+/** A batch (by id, or the latest), and the approvals its workers are waiting on, each with its target. */
+app.get("/api/agent/recon/batch", async (req, res) => {
+  try {
+    const batch = batchState(typeof req.query.id === "string" && req.query.id ? req.query.id : undefined);
+    if (!batch) return res.json({ batch: null, approvals: [] });
+    const directory = batchDirectory(batch.id)!;
+    const running = batch.workers.filter((w) => (w.status === "running" || w.status === "starting") && w.sessionID);
+    const approvals: ReconBatchApproval[] = [];
+    if (running.length) {
+      const permsRaw = await oc<any[]>(`/permission${query({ directory })}`).catch(() => []);
+      for (const w of running) {
+        const family = new SessionFamily(w.sessionID!, await childSessions(directory, w.sessionID!).catch(() => []));
+        for (const p of permsRaw) {
+          if (!family.has(p.sessionID)) continue;
+          approvals.push({
+            kind: "permission", sessionID: p.sessionID, permissionID: p.id, permType: p.permission ?? p.type,
+            title: p.metadata?.command ?? p.title, pattern: p.patterns ?? p.pattern, callID: p.callID,
+            subagent: family.subagent(p.sessionID), target: w.target,
+          });
+        }
+      }
+    }
+    res.json({ batch, approvals, directory });
+  } catch (e) {
+    sendError(res, e);
+  }
+});
+
+app.post("/api/agent/recon/batch/stop", async (req, res) => {
+  try {
+    const id = String(req.body?.id || "");
+    const batch = await stopBatch(id);
+    if (batch) audit("recon.batch.stop", { batch: id });
+    res.json({ batch });
   } catch (e) {
     sendError(res, e);
   }

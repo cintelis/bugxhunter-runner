@@ -283,6 +283,43 @@ export interface ReconState {
   kept?: "saved" | "pending" | "off";
 }
 
+/** One target of a batch, and the recon run on it once it has started. */
+export interface ReconBatchWorker {
+  target: string;
+  /**
+   * `queued`: waiting for a free worker. `starting` / `running`: a run is going on `sessionID`.
+   * `finished`: the run ended (see `recon.stopped` for how). `failed`: it could not be started.
+   * `skipped`: never started, because the batch was stopped or its token budget was spent.
+   */
+  status: "queued" | "starting" | "running" | "finished" | "failed" | "skipped";
+  /** The worker's session: open it from the session list to read what it did. */
+  sessionID?: string;
+  /** Why it failed or was skipped. */
+  reason?: string;
+  recon?: ReconState;
+}
+
+/** GET /api/agent/recon/batch: several targets tested at once, one worker each (server/src/recon-batch.ts). */
+export interface ReconBatchState {
+  id: string;
+  status: "running" | "finished";
+  /** The person stopped it. */
+  stopped?: boolean;
+  /** How many workers run at once. */
+  maxWorkers: number;
+  /** The token ceiling across all workers, if one was set. */
+  budgetTokens?: number;
+  tokens: number;
+  workers: ReconBatchWorker[];
+  startedAt: number;
+  finishedAt?: number;
+}
+
+/** An approval a batch's worker is waiting on, with the target it is for. */
+export interface ReconBatchApproval extends PermissionRequest {
+  target: string;
+}
+
 /** Something the executor noticed and did not get to at once (server/src/recon.ts). */
 export interface ReconLead {
   id: string;

@@ -12,7 +12,7 @@ import { reconMemoryForget, reconMemoryGet, reconSessionForget, reconSessionGet,
 import { Dialog } from "./Dialog";
 import { formatTokens } from "./format";
 import {
-  chainPassNote, keptNote, memoryNote, memorySummary, pathsUsing, progressLabel, proofBadge, RETEST_LABEL, splitLeads, retestStopReason, retestSummary,
+  chainPassNote, keptNote, memoryNote, memorySummary, pathsUsing, progressLabel, proofBadge, RETEST_LABEL, splitLeads, targetLines, retestStopReason, retestSummary,
   sessionNote, sessionSummary, splitPaths, stoppedAt,
 } from "./reconView";
 import type { ReconChain, ReconEnv, ReconFinding, ReconMemoryTarget, ReconPairing, ReconRetest, ReconSessionInfo, ReconState } from "../../shared/agent";
@@ -29,6 +29,10 @@ export interface ReconRequest {
   useSession: boolean;
   /** "retest": re-check what is remembered about the target instead of exploring it. */
   mode?: "retest";
+  /** Concurrency mode: when more than one target was given, all of them (`scope` is then the first). */
+  targets?: string[];
+  maxWorkers?: number;
+  totalBudgetTokens?: number;
 }
 
 const STOP_REASON: Record<NonNullable<ReconState["stopped"]>, string> = {
@@ -56,29 +60,35 @@ export function ReconDialog({ onStart, onClose }: { onStart: (r: ReconRequest) =
   const [session, setSession] = useState<ReconSessionInfo | null>(null);
   const [useSession, setUseSession] = useState(true);
   const [pairing, setPairing] = useState<ReconPairing | null>(null);
+  const [workers, setWorkers] = useState(3);
+  const [totalBudget, setTotalBudget] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const targets = targetLines(scope);
+  const many = targets.length > 1;
+  /** The one target, when there is exactly one: memory and a captured session are looked up for it. */
+  const single = targets.length === 1 ? targets[0] : "";
 
   // Look up what earlier runs left for this target, once the typing pauses.
   useEffect(() => {
-    const target = scope.trim();
+    const target = single;
     setMemory(null);
     if (!target) return;
     let live = true;
     const t = setTimeout(() => { reconMemoryGet(target).then((m) => { if (live) setMemory(m); }).catch(() => {}); }, 400);
     return () => { live = false; clearTimeout(t); };
-  }, [scope]);
+  }, [single]);
 
   // The logged-in session held for this target; while a pairing code is out, watch for the extension's post.
   useEffect(() => {
-    const target = scope.trim();
+    const target = single;
     setSession(null);
     setPairing(null);
     if (!target) return;
     let live = true;
     const t = setTimeout(() => { reconSessionGet(target).then((s) => { if (live) setSession(s); }).catch(() => {}); }, 400);
     return () => { live = false; clearTimeout(t); };
-  }, [scope]);
+  }, [single]);
   useEffect(() => {
     if (!pairing) return;
     const target = scope.trim();
@@ -117,12 +127,14 @@ export function ReconDialog({ onStart, onClose }: { onStart: (r: ReconRequest) =
     try {
       const nonProdSettings = settings.split(",").map((s) => s.trim()).filter(Boolean);
       await onStart({
-        scope: scope.trim(), objective: objective.trim(),
+        scope: targets[0] ?? "", objective: objective.trim(),
+        ...(many ? { targets, maxWorkers: workers, ...(Number(totalBudget) > 0 ? { totalBudgetTokens: Math.floor(Number(totalBudget)) } : {}) } : {}),
         env: { kind, divergences: divergences.trim(), ...(nonProdSettings.length ? { nonProdSettings } : {}) },
         chainPass: { enabled: chain },
-        useMemory: Boolean(memory) && useMemory,
-        useSession: Boolean(session) && useSession,
-        ...(retest && memory?.findings ? { mode: "retest" as const } : {}),
+        // A batch uses what is remembered and captured for each of its targets.
+        useMemory: many || (Boolean(memory) && useMemory),
+        useSession: many || (Boolean(session) && useSession),
+        ...(!many && retest && memory?.findings ? { mode: "retest" as const } : {}),
       });
       onClose();
     } catch (e) {
@@ -138,10 +150,29 @@ export function ReconDialog({ onStart, onClose }: { onStart: (r: ReconRequest) =
         verifier. Read-only requests to the target run on their own; anything else waits for your approval.
       </p>
       <div className="field">
-        <label htmlFor="recon-scope">Target (one host or URL)</label>
-        <input id="recon-scope" type="text" className="mono" autoFocus spellCheck={false} placeholder="https://staging.example.com"
-          value={scope} onChange={(e) => setScope(e.target.value)} />
+        <label htmlFor="recon-scope">Target (one host or URL; several, one per line, to test them at once)</label>
+        <textarea id="recon-scope" rows={many ? Math.min(6, targets.length + 1) : 1} className="mono" autoFocus spellCheck={false}
+          placeholder="https://staging.example.com" value={scope} onChange={(e) => setScope(e.target.value)} />
       </div>
+      {many && (
+        <div className="recon-batch-options">
+          <div className="hint">
+            Concurrency mode: {targets.length} targets, one worker each. Every worker has its own approvals, bound to its own
+            target, and they all come to one list. Each starts from what is remembered about its target and uses the
+            logged-in session captured for it, if there is one.
+          </div>
+          <div className="field">
+            <label htmlFor="recon-workers">Workers at a time (1 to 5)</label>
+            <input id="recon-workers" type="number" min={1} max={5} value={workers}
+              onChange={(e) => setWorkers(Math.max(1, Math.min(5, Math.floor(Number(e.target.value)) || 1)))} />
+          </div>
+          <div className="field">
+            <label htmlFor="recon-total">Token budget for the whole batch (optional; each worker also has its own)</label>
+            <input id="recon-total" type="number" min={20000} step={10000} placeholder="no ceiling" value={totalBudget}
+              onChange={(e) => setTotalBudget(e.target.value)} />
+          </div>
+        </div>
+      )}
       <div className="field">
         <label htmlFor="recon-objective">Objective</label>
         <textarea id="recon-objective" rows={3} value={objective} onChange={(e) => setObjective(e.target.value)} />
@@ -164,7 +195,7 @@ export function ReconDialog({ onStart, onClose }: { onStart: (r: ReconRequest) =
         <input id="recon-settings" type="text" className="mono" spellCheck={false} placeholder="DEBUG=1, AUTH_DISABLED"
           value={settings} onChange={(e) => setSettings(e.target.value)} />
       </div>
-      {scope.trim() && (
+      {single && (
         <div className="recon-session">
           {session ? (
             <label className="recon-consent recon-option">
@@ -222,11 +253,11 @@ export function ReconDialog({ onStart, onClose }: { onStart: (r: ReconRequest) =
       </label>
       <label className="recon-consent">
         <input type="checkbox" checked={authorised} onChange={(e) => setAuthorised(e.target.checked)} />
-        <span>I am authorised to test this target, and it is the only one in scope.</span>
+        <span>{many ? "I am authorised to test every target listed, and nothing else is in scope." : "I am authorised to test this target, and it is the only one in scope."}</span>
       </label>
       {error && <div className="hint danger">{error}</div>}
       <div className="perm-actions recon-actions">
-        <button className="btn primary sm" disabled={!ready} onClick={start}>{busy ? "starting…" : "start recon"}</button>
+        <button className="btn primary sm" disabled={!ready} onClick={start}>{busy ? "starting…" : many ? `start ${targets.length} workers` : "start recon"}</button>
         <button className="btn sm" disabled={busy} onClick={onClose}>cancel</button>
       </div>
     </Dialog>
