@@ -473,7 +473,11 @@ runner then drives the session round after round:
    in-scope origin (with the URL in double quotes if it has a query string), an `nmap` version
    scan of the in-scope host, piped into read filters with allow-listed flags. A handful of shapes that would wreck or hijack the agent's own machine
    are rejected. Everything else waits for you, as an approval card. "Always allow" is off
-   during a run, and the recon agents cannot use webfetch or websearch.
+   during a run, and the recon agents cannot use webfetch or websearch. The executor is told to
+   write each request as one plain `curl`, and that a rejected command is a no to that command,
+   not to the probe: it should send the probe again in the plain form. A run will not start if
+   the agent server holds a recon agent without instructions (an `opencode.json` older than
+   the runner, usually mounted by a leftover compose override).
 3. **Verify.** The executor hands each candidate to the `recon-verify` subagent, which rejects
    it without reproduction evidence and marks it *config-dependent* when it relies on a setting
    that differs from production. Only its verdicts become findings, and its quotes of the

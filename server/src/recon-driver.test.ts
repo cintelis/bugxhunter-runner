@@ -72,6 +72,13 @@ describe("buildReconKickoff", () => {
       expect(k).toContain(s);
     }
   });
+
+  it("says how to write a command, and that a decline is not a no to the probe", () => {
+    const k = buildReconKickoff({ objective: "o", scope: "http://t", env: ENV });
+    expect(k).toContain("one plain curl command with the URL in double quotes");
+    expect(k).toContain("not to the probe or the lead behind it");
+    expect(k).toContain("Nobody reads your reply while the run is going");
+  });
 });
 
 function fakeRunner(script: ReconTurnResult[]): { runner: ReconSessionRunner; models: string[] } {

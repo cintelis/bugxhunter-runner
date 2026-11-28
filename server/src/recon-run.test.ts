@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { OpencodeReconRunner, startRecon, stopRecon, reconState, inRunningRecon, parseEnvFidelity, type ReconBackend } from "./recon-run.js";
+import { OpencodeReconRunner, agentsWithoutInstructions, startRecon, stopRecon, reconState, inRunningRecon, parseEnvFidelity, type ReconBackend } from "./recon-run.js";
 import { parseTurnStatus, parseVerifierFindings, reconGateDecision, type ReconPermission } from "./recon-driver.js";
 import { reconAgents, activeProfileName, setAnthropicAvailable, DEFAULT_PROFILE, OPEN_PROFILE } from "./recon.js";
 
@@ -258,6 +258,17 @@ describe("startRecon — the run registry", () => {
     const { backend } = fakeBackend();
     await expect(startRecon({ sessionID: "s", scope: "  ", objective: "x", env: ENV, backend })).rejects.toThrow(/scope/);
     await expect(startRecon({ sessionID: "s", scope: "target", objective: " ", env: ENV, backend })).rejects.toThrow(/objective/);
+  });
+
+  it("refuses to start when OpenCode holds a recon agent without instructions", async () => {
+    const { backend } = fakeBackend();
+    const full = Object.keys(reconAgents()).map((name) => ({ name, prompt: "p" }));
+    expect(agentsWithoutInstructions(full)).toEqual([]);
+    expect(agentsWithoutInstructions([...full.slice(1), { name: full[0].name, prompt: "  " }])).toEqual([full[0].name]);
+    expect(agentsWithoutInstructions([{ name: "build", prompt: "p" }])).toEqual(Object.keys(reconAgents()));
+    backend.agents = async () => full.filter((a) => a.name !== "recon-verify");
+    await expect(startRecon({ sessionID: "ses_bare", scope: "target", objective: "x", env: ENV, backend })).rejects.toThrow(/no instructions for recon-verify/);
+    expect(reconState("ses_bare")).toBeNull();
   });
 
   it("runs the loop: kickoff, continue, then stops when the executor says done", async () => {

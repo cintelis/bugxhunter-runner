@@ -23,7 +23,7 @@ import {
   driveRecon, extractReconCommand, parseTurnStatus, parseVerifierFindings, resolveHarness,
   type GateDecision, type ReconPermission, type ReconSessionRunner, type ReconTurnResult,
 } from "./recon-driver.js";
-import { activeProfileName, originOf, type EnvFidelity, type ReconChain, type ReconFinding, type ReconHarness, type ReconRecall, type ReconSessionUse, type PriorFinding, type ReconRetest, type ReconLead } from "./recon.js";
+import { activeProfileName, originOf, reconAgents, type EnvFidelity, type ReconChain, type ReconFinding, type ReconHarness, type ReconRecall, type ReconSessionUse, type PriorFinding, type ReconRetest, type ReconLead } from "./recon.js";
 import { httpError } from "./errors.js";
 import { EvidenceLog, type Proof } from "./recon-evidence.js";
 
@@ -41,6 +41,18 @@ export interface ReconBackend {
   prompt(args: { sessionID: string; agent: string; model: string; text: string }): Promise<void>;
   replyPermission(sessionID: string, permissionID: string, response: "once" | "reject"): Promise<void>;
   abort(sessionID: string): Promise<void>;
+  /** The agents OpenCode has for this project, with the instructions each was given. Optional: a backend that cannot list them is not checked. */
+  agents?(): Promise<{ name: string; prompt?: string }[]>;
+}
+
+/**
+ * The recon agents OpenCode is missing or holds without instructions. A run on such an
+ * install looks healthy and records nothing: the verifier answers in prose, and only a
+ * ruling in the format its instructions ask for is read. Seen live on a Docker install
+ * whose compose override still mounted an opencode.json from before these agents existed.
+ */
+export function agentsWithoutInstructions(agents: readonly { name: string; prompt?: string }[]): string[] {
+  return Object.keys(reconAgents()).filter((name) => !agents.find((a) => a.name === name)?.prompt?.trim());
 }
 
 /** A gate decision, for the audit log. */
@@ -378,6 +390,10 @@ export async function startRecon(o: ReconStart): Promise<ReconState> {
   if (runs.get(o.sessionID)?.state.status === "running") throw httpError(409, "A recon run is already going on this session.");
 
   const harness = resolveHarness(o.harness);
+  const bare = o.backend.agents ? agentsWithoutInstructions(await o.backend.agents()) : [];
+  if (bare.length) {
+    throw httpError(409, `The agent server has no instructions for ${bare.join(", ")}, so a run would record nothing. Its opencode.json is older than this version: in Docker, look for a compose override that mounts its own opencode.json over the image's, and remove or update it.`);
+  }
   const runner = new OpencodeReconRunner(o.backend, o.sessionID, o.env.kind,
     (r) => o.log?.("recon.gate", { ...r, root: o.sessionID }));
   const state: ReconState = {
@@ -427,7 +443,7 @@ export async function startRecon(o: ReconStart): Promise<ReconState> {
       else state.chainPass = result.chainPass; // a retest run has no chain pass to report on
       state.rounds = result.rounds;
       state.chainRounds = result.chainRounds;
-      if (state.stopped === "error") state.error = lastError;
+      if (state.stopped === "error" || state.chainPass === "error") state.error = lastError;
       state.finishedAt = Date.now();
       runner.close();
       try { o.session?.cleanup(); } catch { /* the folder is gone or not ours to remove */ }

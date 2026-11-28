@@ -56,6 +56,9 @@ describe("chainPassNote", () => {
   it("explains each reason a finished run has no paths", () => {
     const note = (chainPass: Parameters<typeof chainPassNote>[0]["chainPass"]) => chainPassNote({ status: "finished", chainPass, chains: [] });
     expect(note("few-findings")).toContain("at least two findings");
+    expect(note("error")).toBe("The chain pass stopped early. What it had recorded is shown.");
+    expect(chainPassNote({ status: "finished", chainPass: "error", chains: [], error: "The response was blocked by the provider's content filter." }))
+      .toBe("The chain pass stopped early: The response was blocked by the provider's content filter. What it had recorded is shown.");
     expect(note("off")).toContain("turned off");
     expect(note("skipped")).toContain("ended before");
     expect(note("budget")).toContain("token budget");

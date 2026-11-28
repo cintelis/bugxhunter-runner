@@ -332,6 +332,14 @@ export function buildOpenLeadsPrompt(leads: readonly ReconLead[]): string {
   ].join("\n\n");
 }
 
+/**
+ * How to write a command, and what a declined one means. From a live run: a model that is
+ * careful about consent reads a decline as "no to this probe" and drops the lead, and asks
+ * its questions in a reply nobody reads while the run is going. Both left the run stuck.
+ */
+export const COMMAND_RULE =
+  "COMMANDS: write each request to the target as one plain curl command with the URL in double quotes, optionally piped into head, grep or jq. That form runs at once. A loop, a shell variable, `;` or `&&`, several requests in one command, or output saved to a file waits for a person instead. If a command is declined, that is a no to the command as it was written, not to the probe or the lead behind it: send the same probe again in the plain form. Nobody reads your reply while the run is going, so a question asked there gets no answer: the approval prompt is the only way a person is asked. For a read-only step inside the scope, take it; for a step that changes state, attempt it and let the approval decide. Give recon-verify this same rule when you hand it a candidate.";
+
 /** Why the executor must hand responses over as they came back: the verifier's quotes are looked up in the run's real output. */
 export const EVIDENCE_RULE =
   "EVIDENCE: when you hand anything to recon-verify, paste the request or command and the response exactly as it came back, not a summary of it. The verifier quotes the response, and those quotes are checked against what the commands of this run really returned: a finding whose quotes are not found there is marked as not matched.";
@@ -348,6 +356,7 @@ export function buildReconKickoff(opts: Pick<ReconDriverOptions, "objective" | "
     ...(session && (session.cookieFile || session.headerFile) ? [buildSessionBlock(session)] : []),
     ...(prior && (prior.findings.length || prior.paths.length || prior.leads?.length) ? [buildPriorBlock(prior)] : []),
     `Work one hypothesis at a time with the smallest low-impact probe. Read-only probes run freely; anything that changes state pauses for human approval. When you have a candidate, hand it to the recon-verify subagent — do not promote it yourself.`,
+    COMMAND_RULE,
     EVIDENCE_RULE,
     STATUS_REMINDER,
   ].join("\n\n");

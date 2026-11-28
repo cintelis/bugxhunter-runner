@@ -24,6 +24,7 @@ import {
 } from "./opencode.js";
 import type { PendingRequests, ReconBatchApproval, ReconState, SessionSummary, SlashCommand, StoredMessage, Todo } from "../../shared/agent.js";
 import { mountAuth, authRequired, issueSession } from "./auth.js";
+import { permissionGone } from "./errors.js";
 import { audit, followOpencode, LOG_DIR } from "./audit.js";
 import { saveAttachments, type Attachment } from "./attachments.js";
 import * as vault from "./vault.js";
@@ -766,13 +767,15 @@ app.post("/api/agent/permission", async (req, res) => {
     // OpenCode stop asking for that command pattern, and the gate would never
     // see it again.
     const reply = response === "always" && inRunningRecon(sessionID) ? "once" : response;
-    unwrap(
-      await client.postSessionIdPermissionsPermissionId({
-        path: { id: sessionID, permissionID },
-        query: { directory },
-        body: { response: reply },
-      }),
-    );
+    const r = await client.postSessionIdPermissionsPermissionId({
+      path: { id: sessionID, permissionID },
+      query: { directory },
+      body: { response: reply },
+    });
+    // Already closed: OpenCode drops a session's other waiting requests when one is rejected,
+    // and the card for a dropped one can still be on screen. There is nothing left to answer.
+    if (permissionGone(r.error)) return res.json({ ok: true, gone: true });
+    unwrap(r);
     res.json({ ok: true });
   } catch (e) {
     sendError(res, e);
@@ -797,6 +800,10 @@ async function reconBackend(directory: string): Promise<ReconBackend> {
     },
     async replyPermission(sessionID, permissionID, response) {
       unwrap(await client.postSessionIdPermissionsPermissionId({ path: { id: sessionID, permissionID }, query: { directory }, body: { response } }));
+    },
+    async agents() {
+      const list = unwrap(await client.app.agents({ query: { directory } })) as { name: string; prompt?: string }[];
+      return list.map((a) => ({ name: a.name, prompt: a.prompt }));
     },
     async abort(sessionID) {
       await client.session.abort({ path: { id: sessionID }, query: { directory } });
