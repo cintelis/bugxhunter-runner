@@ -724,11 +724,13 @@ export interface ReconFinding {
 export interface ReconSessionUse {
   /** The cookie jar, relative to the project folder; absent when the session has no cookies. */
   cookieFile?: string;
-  /** The header file (the Authorization header); absent when none was captured. */
+  /** The header file (the Authorization header and any custom login headers); absent when none was captured. */
   headerFile?: string;
   capturedAt: number;
   cookies: number;
   authorization: boolean;
+  /** Names of the custom login headers in the header file. */
+  headers?: string[];
   /** Removes the files. Called when the run ends. */
   cleanup: () => void;
 }

@@ -57,6 +57,14 @@ export interface CapturedSession {
   cookies: CapturedCookie[];
   /** The value of the Authorization header the app sent, e.g. "Bearer …". */
   authorization?: string;
+  /** Custom login headers the app sent besides Authorization (X-Auth-Token, X-CSRF-Token, …), names in lower case. */
+  headers?: { name: string; value: string }[];
+}
+
+const MAX_HEADERS = 8;
+/** The custom headers a capture may carry: the same rule the extension applies, checked again here. */
+export function isLoginHeader(name: string): boolean {
+  return /^x-[a-z0-9-]{1,60}$/.test(name) && /(token|auth|csrf|xsrf|session|api-?key)/.test(name);
 }
 
 const key = (scope: string): string | undefined => {
@@ -109,8 +117,18 @@ export function parseCapture(raw: unknown, scope: string, now = Date.now()): Cap
   }
   const auth = typeof r.authorization === "string" ? r.authorization.trim() : "";
   const authorization = auth && auth.length <= MAX_VALUE && CLEAN.test(auth) ? auth : undefined;
-  if (!cookies.length && !authorization) throw httpError(400, "Nothing to capture: no cookies for this site and no Authorization header seen. Log in first, then send.");
-  return { target, capturedAt: now, cookies, ...(authorization ? { authorization } : {}) };
+  const headers: { name: string; value: string }[] = [];
+  for (const h of Array.isArray(r.headers) ? r.headers.slice(0, 100) : []) {
+    const o = (h && typeof h === "object" ? h : {}) as Record<string, unknown>;
+    const name = typeof o.name === "string" ? o.name.trim().toLowerCase() : "";
+    const value = typeof o.value === "string" ? o.value.trim() : "";
+    if (!isLoginHeader(name) || !value || value.length > MAX_VALUE || !CLEAN.test(value)) continue;
+    if (headers.some((x) => x.name === name)) continue;
+    headers.push({ name, value });
+    if (headers.length >= MAX_HEADERS) break;
+  }
+  if (!cookies.length && !authorization && !headers.length) throw httpError(400, "Nothing to capture: no cookies for this site and no login header seen. Log in first, then send.");
+  return { target, capturedAt: now, cookies, ...(authorization ? { authorization } : {}), ...(headers.length ? { headers } : {}) };
 }
 
 /* ─────────────── pairing codes ─────────────── */
@@ -146,7 +164,7 @@ export function redeem(token: unknown, raw: unknown, now = Date.now()): ReconSes
   const session = parseCapture(raw, p.scope, now); // a bad capture leaves the code usable: fix and resend
   save(session);
   pairings.delete(id);
-  audit("recon.session.captured", { cookies: session.cookies.length, authorization: Boolean(session.authorization) });
+  audit("recon.session.captured", { cookies: session.cookies.length, authorization: Boolean(session.authorization), headers: headerNames(session) });
   return info(session);
 }
 
@@ -188,10 +206,14 @@ function save(session: CapturedSession): void {
   fs.renameSync(tmp, file(id));
 }
 
+/** The names of the custom headers held: a name is not a secret, a value is. */
+const headerNames = (s: CapturedSession): string[] => (s.headers ?? []).map((h) => h.name);
+
 function info(s: CapturedSession): ReconSessionInfo {
   const expiries = s.cookies.map((c) => c.expires).filter((e): e is number => e !== undefined);
   return {
     target: s.target, capturedAt: s.capturedAt, cookies: s.cookies.length, authorization: Boolean(s.authorization),
+    ...(s.headers?.length ? { headers: headerNames(s) } : {}),
     ...(expiries.length ? { firstExpiry: Math.min(...expiries) * 1000 } : {}),
   };
 }
@@ -244,7 +266,8 @@ export function materialise(scope: string, directory: string, now = Date.now()):
   try { s = find(scope); } catch { return undefined; }
   if (!s) return undefined;
   const live = s.cookies.filter((c) => c.expires === undefined || c.expires * 1000 > now);
-  if (!live.length && !s.authorization) return undefined;
+  const lines = [...(s.authorization ? [`Authorization: ${s.authorization}`] : []), ...(s.headers ?? []).map((h) => `${h.name}: ${h.value}`)];
+  if (!live.length && !lines.length) return undefined;
 
   // One folder per run, so two runs in the same project never share or remove each other's files.
   const rel = `${SESSION_FOLDER}/session-${crypto.randomBytes(4).toString("hex")}`;
@@ -259,15 +282,15 @@ export function materialise(scope: string, directory: string, now = Date.now()):
   }
   // Keeps the folder out of the project's changes and commits. Never replaces one that is there.
   try { fs.writeFileSync(path.join(path.dirname(folder), ".gitignore"), "*\n", { flag: "wx" }); } catch { /* already there */ }
-  const use: ReconSessionUse = { capturedAt: s.capturedAt, cookies: live.length, authorization: Boolean(s.authorization), cleanup: () => fs.rmSync(folder, { recursive: true, force: true }) };
+  const use: ReconSessionUse = { capturedAt: s.capturedAt, cookies: live.length, authorization: Boolean(s.authorization), ...(s.headers?.length ? { headers: headerNames(s) } : {}), cleanup: () => fs.rmSync(folder, { recursive: true, force: true }) };
   if (live.length) {
     fs.writeFileSync(path.join(folder, "cookies.txt"), cookieJar(live, now), { mode: 0o600 });
     use.cookieFile = `${rel}/cookies.txt`;
   }
-  if (s.authorization) {
-    fs.writeFileSync(path.join(folder, "headers.txt"), `Authorization: ${s.authorization}\n`, { mode: 0o600 });
+  if (lines.length) {
+    fs.writeFileSync(path.join(folder, "headers.txt"), lines.join("\n") + "\n", { mode: 0o600 });
     use.headerFile = `${rel}/headers.txt`;
   }
-  audit("recon.session.used", { cookies: live.length, authorization: Boolean(s.authorization) });
+  audit("recon.session.used", { cookies: live.length, authorization: Boolean(s.authorization), headers: headerNames(s) });
   return use;
 }

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "BugXHunter session capture",
-  "version": "0.1.0",
-  "description": "Send the session you logged in with (cookies and Authorization header) for one site to your own BugXHunter runner, for an authorised test.",
+  "version": "0.2.0",
+  "description": "Send the session you logged in with (cookies and login headers) for one site to your own BugXHunter runner, for an authorised test.",
   "minimum_chrome_version": "116",
   "permissions": ["cookies", "storage", "webRequest", "activeTab"],
   "optional_host_permissions": ["http://*/*", "https://*/*"],

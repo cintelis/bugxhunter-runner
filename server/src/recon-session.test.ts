@@ -71,6 +71,25 @@ describe("reading a capture", () => {
     expect(() => sessions.parseCapture(capture({ cookies: [] }), SCOPE, NOW)).toThrow(/Nothing to capture/);
     expect(() => sessions.parseCapture(capture({ cookies: [], authorization: "Bearer a\r\nX-Evil: 1" }), SCOPE, NOW)).toThrow(/Nothing to capture/);
   });
+
+  it("keeps custom login headers by name, and drops any other header or a value that would start a new line", () => {
+    const s = sessions.parseCapture(capture({ headers: [
+      { name: "X-Authenticity-Token", value: " jwt.a.b " },
+      { name: "x-authenticity-token", value: "second" },   // the first one stands
+      { name: "x-csrf-token", value: "c1" },
+      { name: "Cookie", value: "a=b" },                     // not a login header by this rule
+      { name: "authorization", value: "Bearer x" },         // has its own field
+      { name: "x-forwarded-for", value: "127.0.0.1" },
+      { name: "x-evil-token", value: "a\r\nHost: other" },
+      { name: "x-empty-token", value: "" },
+      "junk",
+    ] }), SCOPE, NOW);
+    expect(s.headers).toEqual([{ name: "x-authenticity-token", value: "jwt.a.b" }, { name: "x-csrf-token", value: "c1" }]);
+    expect(sessions.parseCapture(capture(), SCOPE, NOW)).not.toHaveProperty("headers");
+    expect(sessions.parseCapture(capture({ cookies: [], headers: [{ name: "x-auth-token", value: "t" }] }), SCOPE, NOW).cookies).toEqual([]);
+    expect(sessions.isLoginHeader("x-api-key")).toBe(true);
+    expect(sessions.isLoginHeader("host")).toBe(false);
+  });
 });
 
 describe("pairing codes", () => {
@@ -162,6 +181,16 @@ describe("handing the session to a run", () => {
     // Every cookie expired and no header: there is no session to hand over.
     sessions.redeem(sessions.issuePairing(SCOPE, NOW).token, capture({ cookies: [cookie({ expirationDate: NOW / 1000 + 10 })] }), NOW);
     expect(sessions.materialise(SCOPE, project, NOW + 60_000)).toBeUndefined();
+  });
+
+  it("writes custom login headers after Authorization, one per line, and reports their names only", () => {
+    setUpVault();
+    sessions.redeem(sessions.issuePairing(SCOPE, NOW).token, capture({ authorization: "Bearer tok-123", headers: [{ name: "X-Authenticity-Token", value: "jwt.a.b" }] }), NOW);
+    expect(sessions.sessionInfo(SCOPE)).toMatchObject({ authorization: true, headers: ["x-authenticity-token"] });
+    const use = sessions.materialise(SCOPE, project, NOW)!;
+    expect(use.headers).toEqual(["x-authenticity-token"]);
+    expect(fs.readFileSync(path.join(project, use.headerFile!), "utf8")).toBe("Authorization: Bearer tok-123\nx-authenticity-token: jwt.a.b\n");
+    use.cleanup();
   });
 
   it("refuses to follow a .bugxhunter link out of the project", () => {

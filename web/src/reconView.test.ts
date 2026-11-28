@@ -100,6 +100,8 @@ describe("session notes", () => {
 
   it("sums up a captured session, and says when a cookie has run out", () => {
     expect(sessionSummary({ capturedAt: at, cookies: 6, authorization: true }, at)).toBe("captured 2026-11-28 09:10 UTC: 6 cookies and the Authorization header");
+    expect(sessionSummary({ capturedAt: at, cookies: 2, authorization: false, headers: ["x-authenticity-token"] }, at)).toBe("captured 2026-11-28 09:10 UTC: 2 cookies and the x-authenticity-token header");
+    expect(sessionSummary({ capturedAt: at, cookies: 2, authorization: true, headers: ["x-csrf-token"] }, at)).toBe("captured 2026-11-28 09:10 UTC: 2 cookies, the Authorization header and the x-csrf-token header");
     expect(sessionSummary({ capturedAt: at, cookies: 1, authorization: false, firstExpiry: at + 3_600_000 }, at)).toBe("captured 2026-11-28 09:10 UTC: 1 cookie; first cookie expires 2026-11-28 10:10 UTC");
     expect(sessionSummary({ capturedAt: at, cookies: 1, authorization: false, firstExpiry: at - 1 }, at)).toContain("a cookie has expired, capture it again");
   });
