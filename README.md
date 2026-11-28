@@ -470,8 +470,8 @@ runner then drives the session round after round:
    model. A model that answers "rate limited" is routed around for a minute.
 2. **Probe, under the gate.** Every shell command the executor or a subagent wants to run raises
    an approval. The gate answers the ones it can prove safe: a `curl` GET or HEAD to exactly the
-   in-scope origin, an `nmap` version scan of the in-scope host, piped into read filters with
-   allow-listed flags. A handful of shapes that would wreck or hijack the agent's own machine
+   in-scope origin (with the URL in double quotes if it has a query string), an `nmap` version
+   scan of the in-scope host, piped into read filters with allow-listed flags. A handful of shapes that would wreck or hijack the agent's own machine
    are rejected. Everything else waits for you, as an approval card. "Always allow" is off
    during a run, and the recon agents cannot use webfetch or websearch.
 3. **Verify.** The executor hands each candidate to the `recon-verify` subagent, which rejects

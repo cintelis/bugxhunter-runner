@@ -18,8 +18,13 @@ boundary is structural isolation. Three layers, strongest last:
 ### 1. The gate (supervision) — `classifyCommand` + `reconGateDecision`
 
 Default **ASK**. A command is auto-**allowed** only if it is *shell-neutral* (contains no shell
-metacharacters at all — so running it via a shell or via `argv` is identical) **and** every stage
-positively validates against a tiny allowlist:
+metacharacters — so running it via a shell or via `argv` is identical) **and** every stage
+positively validates against a tiny allowlist. The one exception to "no metacharacters" is a
+quoted query string: `?` inside quotes of either kind, and `&` inside double quotes, where a
+shell reads them as plain text. Without it every request with a query string waited for a
+person, which a live run showed to be about half of all requests. `&` inside single quotes
+still asks (cmd.exe does not treat `'` as a quote), and so does everything else inside quotes:
+`$`, a backtick, a backslash, `;`, `|` and brackets. The allowlist:
 
 - a **`curl` GET/HEAD to exactly the in-scope origin** — host **and** port checked with the WHATWG
   `URL` parser, no userinfo, no redirects (`-L`), flags from a positive allowlist (unknown flag → ask);
