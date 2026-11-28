@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   chainPassNote, keptNote, memoryNote, memorySummary, pathsUsing, progressLabel, proofBadge, retestStopReason, retestSummary,
-  sessionNote, sessionSummary, splitLeads, splitPaths, stoppedAt,
+  batchSummary, sessionNote, sessionSummary, splitLeads, splitPaths, stoppedAt, targetLines, workerNote,
 } from "./reconView";
 import type { ReconChain } from "../../shared/agent";
 
@@ -138,5 +138,25 @@ describe("splitLeads", () => {
   it("counts what is open and what was followed or closed", () => {
     expect(splitLeads([{ status: "open" }, { status: "closed" }, { status: "open" }])).toEqual({ open: 2, closed: 1 });
     expect(splitLeads(undefined)).toEqual({ open: 0, closed: 0 });
+  });
+});
+
+describe("concurrency mode", () => {
+  it("reads the targets typed, one per line", () => {
+    expect(targetLines(" https://a.example.com \n\n b.example.com:8443, c.example.com\r\n")).toEqual(["https://a.example.com", "b.example.com:8443", "c.example.com"]);
+    expect(targetLines("  ")).toEqual([]);
+  });
+
+  it("sums a batch up, leaving out what there is none of", () => {
+    const w = (status: "queued" | "starting" | "running" | "finished" | "failed" | "skipped") => ({ target: "t", status });
+    expect(batchSummary({ workers: [w("running"), w("starting"), w("queued"), w("finished"), w("failed")] })).toBe("5 targets: 2 running, 1 queued, 1 finished, 1 failed");
+    expect(batchSummary({ workers: [w("finished")] })).toBe("1 target: 1 finished");
+  });
+
+  it("says why a worker did not run, or how its run ended", () => {
+    expect(workerNote({ status: "failed", reason: "no recon agent" })).toBe("could not start: no recon agent");
+    expect(workerNote({ status: "skipped", reason: "the batch was stopped" })).toBe("not started: the batch was stopped");
+    expect(workerNote({ status: "running" })).toBeNull();
+    expect(workerNote({ status: "finished", recon: { stopped: "budget" } as never })).toBe("ended: budget");
   });
 });

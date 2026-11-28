@@ -463,6 +463,25 @@ Nothing is kept without a vault. If the vault is locked when a run finishes, the
 memory and is written at the next unlock; a restart before that loses it. The newest 300 runs
 are kept.
 
+**Concurrency mode.** Type several targets in the start dialog, one per line, and the run
+becomes a batch: one worker per target, up to three at a time by default (five at most), the
+next target starting as each one finishes. It is off unless you give more than one target.
+
+- A worker is an ordinary recon run on a session of its own, named `recon <target>` in the
+  session list. Its gate is bound to its own target: a request to another target of the same
+  batch is not auto-approved, it waits for you.
+- Every approval any worker is waiting on comes to one list, each marked with its target.
+- Each worker has its own token budget and round limit. A budget for the whole batch is
+  optional; a running worker counts against it for its whole budget, so the ceiling holds.
+- Each worker starts from what is remembered about its target and uses the logged-in session
+  captured for it, if there is one. Workers do not share what they find with each other.
+- *stop all* stops every worker and starts nothing more. One batch runs at a time. A batch
+  lives in the runner's memory: a restart ends it, and what each finished worker found is
+  kept per target as for any run.
+
+All workers share the one agent (in Docker, one container with 4 GB and 2 CPUs), which is the
+practical limit on how many are worth running at once.
+
 **Leads.** The executor keeps a list of what it noticed and did not get to: an identifier, a
 hidden parameter, an error that leaks something. It writes a `RECON-LEAD:` line, the run numbers
 it (`L1`, `L2`, …), and each later round is given the open ones back, oldest first, to follow

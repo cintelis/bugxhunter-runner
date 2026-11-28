@@ -8,7 +8,7 @@
 import type {
   AgentEvent, AgentModel, AgentQuestion, AgentStatus, FileDiff, PendingRequests, SessionSummary, SlashCommand,
   StoredMessage, Todo, Tokens, ProjectEntry, ProjectListing, UploadResult, Workspace, WorkspaceList, ReconEnv, ReconState,
-  ReconMemoryTarget, ReconPairing, ReconSessionInfo,
+  ReconMemoryTarget, ReconPairing, ReconSessionInfo, ReconBatchApproval, ReconBatchState,
 } from "../../shared/agent";
 export type { AgentEvent, AgentModel, AgentQuestion, AgentStatus, FileDiff, PendingRequests, SessionSummary, SlashCommand, StoredMessage, Todo, Tokens, ProjectEntry, ProjectListing, UploadResult, Workspace, WorkspaceList };
 
@@ -219,6 +219,29 @@ export async function reconStart(body: {
   const r = await fetch("/api/agent/recon", { method: "POST", headers: json(), body: JSON.stringify(body) });
   if (!r.ok) throw new Error((await errMsg(r)) || `Could not start recon (${r.status})`);
   return (await r.json()).recon;
+}
+
+// --- concurrency mode: several targets at once (server/src/recon-batch.ts) ---
+
+/** Start a batch: one recon run per target, a few at a time. */
+export async function reconBatchStart(body: {
+  directory: string; targets: string[]; objective: string; env: ReconEnv; authorised: true;
+  maxWorkers?: number; totalBudgetTokens?: number; chainPass?: { enabled: boolean };
+}): Promise<ReconBatchState> {
+  const r = await fetch("/api/agent/recon/batch", { method: "POST", headers: json(), body: JSON.stringify(body) });
+  if (!r.ok) throw new Error((await errMsg(r)) || `Could not start the batch (${r.status})`);
+  return (await r.json()).batch;
+}
+
+/** A batch (the latest when no id is given) and the approvals its workers are waiting on. */
+export async function reconBatchGet(id?: string): Promise<{ batch: ReconBatchState | null; approvals: ReconBatchApproval[]; directory?: string }> {
+  const r = await fetch(`/api/agent/recon/batch${id ? `?id=${encodeURIComponent(id)}` : ""}`);
+  return r.ok ? r.json() : { batch: null, approvals: [] };
+}
+
+export async function reconBatchStop(id: string): Promise<ReconBatchState | null> {
+  const r = await fetch("/api/agent/recon/batch/stop", { method: "POST", headers: json(), body: JSON.stringify({ id }) });
+  return r.ok ? (await r.json()).batch : null;
 }
 
 /** The logged-in session held for a target (counts and dates only), or null. */
