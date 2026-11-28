@@ -23,7 +23,7 @@ import {
   driveRecon, extractReconCommand, parseTurnStatus, parseVerifierFindings, resolveHarness,
   type GateDecision, type ReconPermission, type ReconSessionRunner, type ReconTurnResult,
 } from "./recon-driver.js";
-import { activeProfileName, originOf, type EnvFidelity, type ReconChain, type ReconFinding, type ReconHarness, type ReconRecall, type ReconSessionUse, type PriorFinding, type ReconRetest } from "./recon.js";
+import { activeProfileName, originOf, type EnvFidelity, type ReconChain, type ReconFinding, type ReconHarness, type ReconRecall, type ReconSessionUse, type PriorFinding, type ReconRetest, type ReconLead } from "./recon.js";
 import { httpError } from "./errors.js";
 import { EvidenceLog, type Proof } from "./recon-evidence.js";
 
@@ -410,15 +410,17 @@ export async function startRecon(o: ReconStart): Promise<ReconState> {
     state.chains = [...chains];
   };
   const onRetest = (retests: readonly ReconRetest[]) => { state.retests = [...retests]; };
+  const onLeads = (leads: readonly ReconLead[]) => { state.leads = leads.map((l) => ({ ...l })); };
   // A path recorded during the main loop: shown at once, and the run stays in its main phase.
   const onChains = (chains: readonly ReconChain[]) => { state.chains = [...chains]; };
-  void driveRecon({ objective, scope, env: o.env, runner: seam, harness, rateLimited: () => runner.rateLimited(), onChainPass, onChains, prior: o.prior, session: o.session, retest: o.retest, onRetest })
+  void driveRecon({ objective, scope, env: o.env, runner: seam, harness, rateLimited: () => runner.rateLimited(), onChainPass, onChains, prior: o.prior, session: o.session, retest: o.retest, onRetest, onLeads })
     .then((result) => {
       snapshot(run); // last live numbers before the status flips
       state.status = "finished";
       state.stopped = runner.wasAborted ? "aborted" : result.stopped;
       state.findings = result.findings;
       state.chains = result.chains;
+      if (result.leads.length) state.leads = result.leads;
       if (result.retests) state.retests = result.retests;
       else state.chainPass = result.chainPass; // a retest run has no chain pass to report on
       state.rounds = result.rounds;

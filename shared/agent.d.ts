@@ -265,6 +265,8 @@ export interface ReconState {
   error?: string;
   startedAt: number;
   finishedAt?: number;
+  /** What the executor noticed along the way and has not followed (open), and what came of the ones it has (closed). */
+  leads?: ReconLead[];
   /** "retest": the run re-checked findings of earlier runs instead of exploring. Absent for a normal run. */
   mode?: "retest";
   /** Retest mode: one outcome per finding re-checked so far. */
@@ -279,6 +281,15 @@ export interface ReconState {
    * runner restarts first). `off`: there is no vault, so nothing is kept.
    */
   kept?: "saved" | "pending" | "off";
+}
+
+/** Something the executor noticed and did not get to at once (server/src/recon.ts). */
+export interface ReconLead {
+  id: string;
+  text: string;
+  status: "open" | "closed";
+  outcome?: string;
+  round: number;
 }
 
 /** The outcome of re-checking one finding an earlier run verified (server/src/recon.ts). */

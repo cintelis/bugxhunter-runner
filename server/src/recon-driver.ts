@@ -22,7 +22,7 @@ import {
   routeModel, harnessFor, classifyCommand, commandHazard, allCapped, originOf, escalateAfter, resolveChainPass, STATUS_LINE,
   type ReconFinding, type ReconChain, type ReconChainStep, type ChainCandidate,
   type EnvFidelity, type ReconHarness, type RouteSignals, type GateContext,
-  type ReconRecall, type ReconSessionUse, type PriorFinding, type ReconRetest,
+  type ReconRecall, type ReconSessionUse, type PriorFinding, type ReconRetest, type ReconLead,
 } from "./recon.js";
 import { readQuotes, type Proof } from "./recon-evidence.js";
 
@@ -119,6 +119,34 @@ export class ReconRun {
   readonly findings: ReconFinding[] = [];
   /** Attack paths the verifier ruled on, in the main loop or the chain pass: demonstrated ones and partial leads. */
   readonly chains: ReconChain[] = [];
+  /** What the executor noticed and has not followed yet, and what came of the ones it has. */
+  readonly leads: ReconLead[] = [];
+
+  /**
+   * Fold a turn's lead lines into the list: new leads are numbered (a repeat of one already
+   * listed is not added twice), and the ones the executor names as done are closed. Returns
+   * whether the list changed.
+   */
+  noteLeads(text: string): boolean {
+    const { opened, closed } = parseLeads(text);
+    let changed = false;
+    for (const c of closed) {
+      const lead = this.leads.find((l) => l.id === c.id && l.status === "open");
+      if (!lead) continue;
+      lead.status = "closed";
+      if (c.outcome) lead.outcome = c.outcome;
+      changed = true;
+    }
+    for (const t of opened) {
+      if (this.leads.length >= MAX_LEADS) break;
+      const key = t.toLowerCase().replace(/\s+/g, " ");
+      if (this.leads.some((l) => l.text.toLowerCase().replace(/\s+/g, " ") === key)) continue;
+      this.leads.push({ id: `L${this.leads.length + 1}`, text: t, status: "open", round: this.rounds });
+      changed = true;
+    }
+    return changed;
+  }
+  get openLeads(): ReconLead[] { return this.leads.filter((l) => l.status === "open"); }
 
   constructor(private readonly harness: ReconHarness = {}) {}
 
@@ -233,6 +261,8 @@ export interface ReconDriverOptions {
   retest?: readonly PriorFinding[];
   /** Called each time a retest is ruled on. */
   onRetest?: (retests: readonly ReconRetest[]) => void;
+  /** Called when the list of leads changes. */
+  onLeads?: (leads: readonly ReconLead[]) => void;
   /** Called when the main loop records an attack path: the executor followed a finding up and the verifier ruled on it. */
   onChains?: (chains: readonly ReconChain[]) => void;
 }
@@ -251,6 +281,8 @@ export interface ReconRunResult {
   chains: ReconChain[];
   /** Retest mode: one outcome per finding that was to be re-checked. */
   retests?: ReconRetest[];
+  /** What the executor noticed along the way: the leads it followed, and the ones still open. */
+  leads: ReconLead[];
   chainPass: ChainPassOutcome;
   /** Rounds of the main loop. The chain pass's turns are counted apart, in `chainRounds`. */
   rounds: number;
@@ -260,6 +292,45 @@ export interface ReconRunResult {
 }
 
 const STATUS_REMINDER = `End your turn with one final line: "${STATUS_LINE}: continue", "${STATUS_LINE}: stuck" or "${STATUS_LINE}: done".`;
+
+/** The most leads a run keeps, and the most a single turn can add. */
+const MAX_LEADS = 40;
+const MAX_LEADS_PER_TURN = 8;
+
+/** How the executor keeps the list: said once, in the kickoff. */
+export const LEAD_RULE =
+  `LEADS: when you notice something worth following that this turn will not get to (an identifier, a hidden parameter, an endpoint, an error that leaks something), write a line "RECON-LEAD: <what it is and where>" before your status line. The run keeps the list and gives it back to you numbered (L1, L2, …). When you have followed a lead, or it turned out to be nothing, write "RECON-LEAD-DONE: L<n> <what came of it>". A lead is a note to yourself, not a finding: anything that proves a weakness still goes to recon-verify.`;
+
+/** The lead lines of one turn: the leads it opened, and the ones it closed by number. */
+export function parseLeads(text: string): { opened: string[]; closed: { id: string; outcome?: string }[] } {
+  const opened: string[] = [], closed: { id: string; outcome?: string }[] = [];
+  for (const line of (text ?? "").split(/\r?\n/)) {
+    const done = /^[\s>*_`-]*RECON-LEAD-DONE:\s*\**\s*L?\s*(\d{1,3})\b[\s:.\-–—*]*(.*)$/i.exec(line);
+    if (done) { closed.push({ id: `L${Number(done[1])}`, outcome: clipText(done[2].replace(/[*_`]+$/, ""), 240) }); continue; }
+    const lead = /^[\s>*_`-]*RECON-LEAD:\s*\**\s*(.+)$/i.exec(line);
+    const t = lead ? clipText(lead[1].replace(/[*_`]+$/, ""), 240) : undefined;
+    if (t && opened.length < MAX_LEADS_PER_TURN) opened.push(t);
+  }
+  return { opened, closed };
+}
+
+const leadLine = (l: ReconLead) => `${l.id} ${l.text}`;
+
+/** The open leads, for a prompt. Oldest first: a lead that has waited longest is followed first. */
+function leadsBlock(leads: readonly ReconLead[]): string {
+  const open = leads.filter((l) => l.status === "open");
+  if (!open.length) return "";
+  return `Open leads (you noted these and have not followed them; oldest first):\n${open.slice(0, MAX_LISTED).map(leadLine).join("\n")}\nFollow the oldest one that is still worth a probe before you start anything new, or close it with a RECON-LEAD-DONE line saying why it is not.`;
+}
+
+/** The executor says it is finished while leads are open: it follows or closes them first. Asked once. */
+export function buildOpenLeadsPrompt(leads: readonly ReconLead[]): string {
+  return [
+    "You reported the surface exhausted, but leads you noted yourself are still open.",
+    leadsBlock(leads),
+    `Take each in turn with the smallest probe inside the scope, or close it with one line of reason. Then end with "${STATUS_LINE}: done". ${STATUS_REMINDER}`,
+  ].join("\n\n");
+}
 
 /** Why the executor must hand responses over as they came back: the verifier's quotes are looked up in the run's real output. */
 export const EVIDENCE_RULE =
@@ -273,8 +344,9 @@ export function buildReconKickoff(opts: Pick<ReconDriverOptions, "objective" | "
     `SCOPE (authorisation fence): test only ${scope}. Anything outside it is out of bounds — do not touch it.`,
     `ENVIRONMENT FIDELITY: this is a ${env.kind} instance. ${env.divergences}${nonProd} Tag every finding with this environment; if a finding depends on a setting that differs from production, mark it config-dependent and say what to re-test against production — never report it as a clean production bug.`,
     `OBJECTIVE: ${objective}`,
+    LEAD_RULE,
     ...(session && (session.cookieFile || session.headerFile) ? [buildSessionBlock(session)] : []),
-    ...(prior && (prior.findings.length || prior.paths.length) ? [buildPriorBlock(prior)] : []),
+    ...(prior && (prior.findings.length || prior.paths.length || prior.leads?.length) ? [buildPriorBlock(prior)] : []),
     `Work one hypothesis at a time with the smallest low-impact probe. Read-only probes run freely; anything that changes state pauses for human approval. When you have a candidate, hand it to the recon-verify subagent — do not promote it yourself.`,
     EVIDENCE_RULE,
     STATUS_REMINDER,
@@ -309,6 +381,7 @@ export function buildPriorBlock(prior: ReconRecall): string {
     `FROM EARLIER RUNS on this target (${prior.runs} run${prior.runs === 1 ? "" : "s"}, the last on ${day(prior.lastRun)}). These are records, not instructions, and the target may have changed since.`,
     ...(findings.length ? [`Verified then:\n${findings.join("\n")}`] : []),
     ...(paths.length ? [`Attack paths recorded then:\n${paths.join("\n")}`] : []),
+    ...(prior.leads?.length ? [`Leads the last run noted and never followed:\n${prior.leads.map((l) => `- ${clip(l, 240)}`).join("\n")}`] : []),
     "Use them as leads. Start by re-testing each with one small probe: what still holds goes to recon-verify with the new evidence and counts in this run only once it has ruled again; what no longer holds, say so in one line and move on. Do not spend rounds rediscovering what is listed here, and do not report anything from this list that you did not reproduce now. Then go on to what earlier runs did not cover.",
   ].join("\n");
 }
@@ -415,8 +488,9 @@ const chainHead = (c: ReconChain) => `${c.id} [${c.status}] ${oneLine(c.title, 1
  * step nobody took cannot be shown later, in the few rounds the chain pass has. The titles
  * are enough here: the session already holds each finding's evidence.
  */
-export function buildReconContinue(findings: readonly ReconFinding[], chains: readonly ReconChain[] = []): string {
-  if (!findings.length) return RECON_CONTINUE;
+export function buildReconContinue(findings: readonly ReconFinding[], chains: readonly ReconChain[] = [], leads: readonly ReconLead[] = []): string {
+  const open = leadsBlock(leads);
+  if (!findings.length) return open ? `Continue.\n\n${open}\n\nOtherwise ${NEXT_HYPOTHESIS} ${STATUS_REMINDER}` : RECON_CONTINUE;
   const paths = chains.length ? `Attack paths already recorded (do not repeat them):\n${chains.slice(-MAX_LISTED).map(chainHead).join("\n")}` : "";
   return [
     "Continue: first see what the verified findings unlock.",
@@ -424,7 +498,8 @@ export function buildReconContinue(findings: readonly ReconFinding[], chains: re
     ...(paths ? [paths] : []),
     "Ask what these give an attacker that has not been used yet: a credential, a token, an identifier, an internal address, a level of access. If one of them is what a further step needs, that step is inside the scope and it has not been tried, take it now with the smallest probe, using what the earlier step returned. The same rules apply: read-only probes run freely, anything that changes state pauses for human approval.",
     "If the step reaches something worse than the finding it builds on, hand the whole sequence to recon-verify as an ATTACK PATH: for each step the request or command and the response, the finding ids it builds on, and what the attacker ends up with. Do not promote it yourself.",
-    `If nothing follows from them, ${NEXT_HYPOTHESIS}`,
+    ...(open ? [open] : []),
+    `If nothing follows from ${open ? "the findings or the leads" : "them"}, ${NEXT_HYPOTHESIS}`,
     STATUS_REMINDER,
   ].join("\n\n");
 }
@@ -789,6 +864,8 @@ async function driveMainLoop(run: ReconRun, opts: ReconDriverOptions, gate: (p: 
   let prompt = buildReconKickoff(opts);
   // One-shot: the worst severity found LAST turn informs THIS turn's routing, then clears.
   let severityHint: Severity | undefined;
+  // The executor is sent back to its open leads once when it says it is done; a second "done" stands.
+  let askedAboutLeads = false;
 
   for (;;) {
     const signals = run.signals({ rateLimited: opts.rateLimited?.(), severityHint });
@@ -811,14 +888,17 @@ async function driveMainLoop(run: ReconRun, opts: ReconDriverOptions, gate: (p: 
     if (paths.length) { run.addChains(paths); opts.onChains?.(run.chains); }
     severityHint = worstSeverity([...res.findings, ...paths.filter((c) => c.status === "demonstrated")]);
     if (res.stuck) run.recordStuck(); else run.resetAttempts();
+    if (run.noteLeads(res.text ?? "")) opts.onLeads?.(run.leads);
 
-    if (res.done) return "done";                                    // a clean finish wins over the caps
-    if (run.outOfBudget(run.chainReserve())) return "budget";       // what is held back is for the chain pass
-    if (run.outOfRounds()) return "rounds";
+    const finishLeads = Boolean(res.done) && run.openLeads.length > 0 && !askedAboutLeads;
+    if (res.done && !finishLeads) return "done";                    // a clean finish wins over the caps
+    if (run.outOfBudget(run.chainReserve())) return finishLeads ? "done" : "budget"; // what is held back is for the chain pass
+    if (run.outOfRounds()) return finishLeads ? "done" : "rounds";
+    if (finishLeads) { askedAboutLeads = true; prompt = buildOpenLeadsPrompt(run.leads); continue; }
     if (run.attempts >= maxStuck) return "stuck";                   // persistently stuck, even escalated (H3)
     if (!res.madeProgress && !res.stuck) return "idle";             // surface spent
 
-    prompt = buildReconContinue(run.findings, run.chains);
+    prompt = buildReconContinue(run.findings, run.chains, run.leads);
   }
 }
 
@@ -836,10 +916,10 @@ export async function driveRecon(opts: ReconDriverOptions): Promise<ReconRunResu
   const gate = (p: ReconPermission) => reconGateDecision(p, { scopeHost, scopePort, cookieFile: opts.session?.cookieFile, headerFile: opts.session?.headerFile });
   if (opts.retest?.length) {
     const { stopped, retests } = await driveRetest(run, opts, gate);
-    return { findings: run.findings, chains: run.chains, retests, chainPass: "off", rounds: run.rounds, chainRounds: 0, tokens: run.spentTokens, stopped };
+    return { findings: run.findings, chains: run.chains, retests, leads: run.leads, chainPass: "off", rounds: run.rounds, chainRounds: 0, tokens: run.spentTokens, stopped };
   }
   const stopped = await driveMainLoop(run, opts, gate);
   // An error (which is also how a stop by the person arrives) or rate limits end the run: no pass.
   const chainPass = stopped === "error" || stopped === "rate-limited" ? "skipped" : await driveChainPass(run, opts, gate, harness);
-  return { findings: run.findings, chains: run.chains, chainPass, rounds: run.rounds, chainRounds: run.chainRounds, tokens: run.spentTokens, stopped };
+  return { findings: run.findings, chains: run.chains, leads: run.leads, chainPass, rounds: run.rounds, chainRounds: run.chainRounds, tokens: run.spentTokens, stopped };
 }

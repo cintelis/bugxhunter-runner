@@ -12,7 +12,7 @@ import { reconMemoryForget, reconMemoryGet, reconSessionForget, reconSessionGet,
 import { Dialog } from "./Dialog";
 import { formatTokens } from "./format";
 import {
-  chainPassNote, keptNote, memoryNote, memorySummary, pathsUsing, progressLabel, proofBadge, RETEST_LABEL, retestStopReason, retestSummary,
+  chainPassNote, keptNote, memoryNote, memorySummary, pathsUsing, progressLabel, proofBadge, RETEST_LABEL, splitLeads, retestStopReason, retestSummary,
   sessionNote, sessionSummary, splitPaths, stoppedAt,
 } from "./reconView";
 import type { ReconChain, ReconEnv, ReconFinding, ReconMemoryTarget, ReconPairing, ReconRetest, ReconSessionInfo, ReconState } from "../../shared/agent";
@@ -298,6 +298,7 @@ export function ReconFindings({ recon }: { recon: ReconState }) {
           {partial.map((c, i) => <ChainCard key={c.id ?? i} c={c} />)}
         </div>
       )}
+      <LeadList recon={recon} />
       {note && <div className="hint recon-note">{note}</div>}
       {kept && <div className="hint recon-note">{kept}</div>}
     </div>
@@ -319,6 +320,27 @@ function RetestResults({ recon }: { recon: ReconState }) {
         {retests.map((r, i) => <RetestCard key={i} r={r} />)}
       </div>
       {kept && <div className="hint recon-note">{kept}</div>}
+    </div>
+  );
+}
+
+/** What the executor noticed and has not followed: its own notes, not findings. */
+function LeadList({ recon }: { recon: ReconState }) {
+  const leads = recon.leads ?? [];
+  if (!leads.length) return null;
+  const { open, closed } = splitLeads(leads);
+  return (
+    <div className="recon-section">
+      <div className="perm-title recon-title recon-title-lead">Leads · {open} open, {closed} followed or closed</div>
+      <div className="hint">The executor's own notes of things to follow. Not findings: nothing here was verified.</div>
+      <ul className="recon-leads">
+        {leads.map((l) => (
+          <li key={l.id} className={l.status}>
+            <span className="badge recon-id">{l.id}</span> {l.text}
+            {l.status === "closed" && <span className="recon-in-paths"> · {l.outcome || "closed"}</span>}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

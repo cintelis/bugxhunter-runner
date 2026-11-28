@@ -740,6 +740,24 @@ export interface ReconRecall {
   lastRun: number;
   findings: PriorFinding[];
   paths: PriorPath[];
+  /** Leads the newest run left open: noticed, never followed. */
+  leads?: string[];
+}
+
+/**
+ * Something the executor noticed and did not get to: an id, a hidden parameter, an error
+ * that leaks something. The run keeps the list, so a lead is followed or closed rather
+ * than forgotten when the conversation moves on.
+ */
+export interface ReconLead {
+  /** "L1", "L2", …: how the executor names it when it closes it. */
+  id: string;
+  text: string;
+  status: "open" | "closed";
+  /** What came of it, in the executor's words, once closed. */
+  outcome?: string;
+  /** The round of the main loop it was noted in. */
+  round: number;
 }
 
 /**
