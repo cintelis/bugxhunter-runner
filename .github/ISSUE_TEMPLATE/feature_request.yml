@@ -1,0 +1,29 @@
+name: Feature request
+description: Something BugXHunter should do, or do differently
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: The task or the problem, before the solution. What gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+      description: How it could work. If it changes what runs without approval, or what is stored, say so.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you have tried or considered instead
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: This is for authorised testing (your own systems, labs, CTFs, or a target whose owner has agreed).
+          required: true
