@@ -130,7 +130,7 @@ export function progressLabel(r: Pick<ReconState, "status" | "phase" | "rounds" 
  * One line on why a finished run shows no attack paths, or that the pass was cut short.
  * Null when there is nothing to explain: the pass ran, or the run is still going.
  */
-export function chainPassNote(r: Pick<ReconState, "status" | "chainPass" | "chains">): string | null {
+export function chainPassNote(r: Pick<ReconState, "status" | "chainPass" | "chains" | "error">): string | null {
   if (r.status !== "finished") return null;
   // A path can be recorded during the main loop, so "none were looked for" would be wrong then.
   const none = r.chains?.length ? "No further attack paths were looked for" : "Attack paths were not looked for";
@@ -144,7 +144,9 @@ export function chainPassNote(r: Pick<ReconState, "status" | "chainPass" | "chai
       ? "The findings were reviewed for further attack paths and no other combination was proposed."
       : "The findings were reviewed for attack paths and no combination was proposed.";
     case "rate-limited": return "The chain pass stopped: every model was rate-limited.";
-    case "error": return "The chain pass stopped early. What it had recorded is shown.";
+    case "error": return r.error
+      ? `The chain pass stopped early: ${r.error.replace(/[.\s]+$/, "")}. What it had recorded is shown.`
+      : "The chain pass stopped early. What it had recorded is shown.";
     default: return null; // a run from before the chain pass existed
   }
 }
