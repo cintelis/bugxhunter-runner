@@ -1,5 +1,25 @@
 // What the recon panel says about a run's attack paths, kept apart from the markup so it can be tested.
-import type { ReconChain, ReconMemoryTarget, ReconSessionInfo, ReconState } from "../../shared/agent";
+import type { ReconChain, ReconMemoryTarget, ReconRetest, ReconSessionInfo, ReconState } from "../../shared/agent";
+
+export const RETEST_LABEL: Record<ReconRetest["result"], string> = {
+  "still-reproducible": "still reproducible",
+  fixed: "fixed",
+  "cannot-confirm": "could not be confirmed",
+};
+
+/** A retest run in one line: "2 still reproducible, 1 fixed, 1 could not be confirmed". */
+export function retestSummary(retests: readonly ReconRetest[] | undefined): string {
+  const all = retests ?? [];
+  if (!all.length) return "nothing retested yet";
+  return (["still-reproducible", "fixed", "cannot-confirm"] as const)
+    .map((r) => [all.filter((t) => t.result === r).length, RETEST_LABEL[r]] as const)
+    .filter(([n]) => n > 0).map(([n, label]) => `${n} ${label}`).join(", ");
+}
+
+/** Why a run ended, where retest mode reads differently from a normal run. */
+export function retestStopReason(r: Pick<ReconState, "mode" | "stopped">): string | null {
+  return r.mode === "retest" && r.stopped === "done" ? "every remembered finding was retested" : null;
+}
 
 const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);

@@ -258,6 +258,10 @@ export interface ReconState {
   error?: string;
   startedAt: number;
   finishedAt?: number;
+  /** "retest": the run re-checked findings of earlier runs instead of exploring. Absent for a normal run. */
+  mode?: "retest";
+  /** Retest mode: one outcome per finding re-checked so far. */
+  retests?: ReconRetest[];
   /** The captured logged-in session the run was given, if any (counts only, never values). */
   session?: { capturedAt: number; cookies: number; authorization: boolean };
   /** What earlier runs on this target had verified, when the run started from it. */
@@ -268,6 +272,20 @@ export interface ReconState {
    * runner restarts first). `off`: there is no vault, so nothing is kept.
    */
   kept?: "saved" | "pending" | "off";
+}
+
+/** The outcome of re-checking one finding an earlier run verified (server/src/recon.ts). */
+export interface ReconRetest {
+  title: string;
+  severity: ReconFinding["severity"];
+  standardId?: string;
+  result: "still-reproducible" | "fixed" | "cannot-confirm";
+  /** The request or command and the response now. */
+  evidence?: string;
+  /** One line on why. */
+  note?: string;
+  /** When the finding was last verified before this retest (ms). */
+  lastVerified: number;
 }
 
 /** GET /api/agent/recon/session: the logged-in session held for a target, without any value. */

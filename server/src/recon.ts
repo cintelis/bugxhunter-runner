@@ -734,6 +734,23 @@ export interface ReconRecall {
   paths: PriorPath[];
 }
 
+/**
+ * The outcome of re-checking one finding an earlier run verified. The verifier rules;
+ * the code keeps "fixed" and "still-reproducible" only when the ruling carries evidence.
+ */
+export interface ReconRetest {
+  title: string;
+  severity: ReconFinding["severity"];
+  standardId?: string;
+  result: "still-reproducible" | "fixed" | "cannot-confirm";
+  /** The request or command and the response now. */
+  evidence?: string;
+  /** One line on why. */
+  note?: string;
+  /** When the finding was last verified before this retest (ms). */
+  lastVerified: number;
+}
+
 /** One step of an attack path: what was done, and the request and response that show it. */
 export interface ReconChainStep {
   action: string;
@@ -829,8 +846,8 @@ export const reconAgents = () => ({
   ),
   "recon-verify": subagent(
     modelFor("verify"),
-    "Adversarially verifies one candidate finding, or one attack path that builds on findings, against the declared environment and the standards catalogue, assigns severity, and flags config-dependent findings before they are promoted.",
-    "You VERIFY one candidate finding. Reject it unless there is concrete reproduction evidence (the request/command and the response that proves it). Assign severity with the project's rubric and cite the matching OWASP/API/WSTG id. CRITICAL: compare the finding against the declared environment fidelity — if it depends on a setting that differs from production (an auth flag off, a debug mode on, seed data), mark it config-dependent and say exactly what to re-test against production. Output exactly one fenced json block and nothing after it: {\"title\": \"short name of the finding\", \"verdict\": \"real\" | \"config-dependent\" | \"rejected\", \"severity\": \"low\" | \"medium\" | \"high\" | \"critical\", \"standard_id\": \"e.g. API1:2023\", \"repro\": \"the request or command and the response that proves it\", \"prod_caveat\": \"what to re-test against production, or an empty string\"}. When you are handed an ATTACK PATH (several steps that build on findings named F1, F2 and so on) instead of one finding, rule on the path as a whole. Reject it unless every step has its own request or command and response, and the evidence shows that what one step returned was used in the next: steps that each work but do not connect are not a path. A path that stops at a step that could not be shown is partial, never demonstrated. Rate severity on what the attacker ends up with, and apply the same environment check. For a path, output the block in this form instead: {\"kind\": \"chain\", \"title\": \"short name of the path\", \"verdict\": \"real\" | \"config-dependent\" | \"rejected\", \"severity\": \"low\" | \"medium\" | \"high\" | \"critical\", \"standard_id\": \"e.g. API1:2023\", \"impact\": \"what the attacker ends up with\", \"links\": [\"F1\", \"F3\"], \"steps\": [{\"action\": \"what was done\", \"evidence\": \"the request or command and the response\"}], \"status\": \"demonstrated\" | \"partial\", \"blocked_at\": the number of the step it stopped at, or null, \"blocked_why\": \"why it stopped, or an empty string\", \"prod_caveat\": \"what to re-test against production, or an empty string\"}.",
+    "Adversarially verifies one candidate finding, one attack path that builds on findings, or one retest of an earlier finding, against the declared environment and the standards catalogue, assigns severity, and flags config-dependent findings before they are promoted.",
+    "You VERIFY one candidate finding. Reject it unless there is concrete reproduction evidence (the request/command and the response that proves it). Assign severity with the project's rubric and cite the matching OWASP/API/WSTG id. CRITICAL: compare the finding against the declared environment fidelity — if it depends on a setting that differs from production (an auth flag off, a debug mode on, seed data), mark it config-dependent and say exactly what to re-test against production. Output exactly one fenced json block and nothing after it: {\"title\": \"short name of the finding\", \"verdict\": \"real\" | \"config-dependent\" | \"rejected\", \"severity\": \"low\" | \"medium\" | \"high\" | \"critical\", \"standard_id\": \"e.g. API1:2023\", \"repro\": \"the request or command and the response that proves it\", \"prod_caveat\": \"what to re-test against production, or an empty string\"}. When you are handed an ATTACK PATH (several steps that build on findings named F1, F2 and so on) instead of one finding, rule on the path as a whole. Reject it unless every step has its own request or command and response, and the evidence shows that what one step returned was used in the next: steps that each work but do not connect are not a path. A path that stops at a step that could not be shown is partial, never demonstrated. Rate severity on what the attacker ends up with, and apply the same environment check. For a path, output the block in this form instead: {\"kind\": \"chain\", \"title\": \"short name of the path\", \"verdict\": \"real\" | \"config-dependent\" | \"rejected\", \"severity\": \"low\" | \"medium\" | \"high\" | \"critical\", \"standard_id\": \"e.g. API1:2023\", \"impact\": \"what the attacker ends up with\", \"links\": [\"F1\", \"F3\"], \"steps\": [{\"action\": \"what was done\", \"evidence\": \"the request or command and the response\"}], \"status\": \"demonstrated\" | \"partial\", \"blocked_at\": the number of the step it stopped at, or null, \"blocked_why\": \"why it stopped, or an empty string\", \"prod_caveat\": \"what to re-test against production, or an empty string\"}. When you are handed a RETEST (a finding an earlier run verified, with what the same request returns now), rule on whether it still holds, and on nothing else. It is \"still-reproducible\" only if the response now proves the weakness as it did then. It is \"fixed\" only if the same request now gets a response that shows the weakness is gone (a refusal, a corrected value): an error, a timeout, a missing page or a logged-out answer is not a fix. Anything else is \"cannot-confirm\". For a retest, output the block in this form instead: {\"kind\": \"retest\", \"title\": \"the finding's title as given\", \"result\": \"still-reproducible\" | \"fixed\" | \"cannot-confirm\", \"evidence\": \"the request or command and the response now\", \"note\": \"one line on why\"}.",
     READ_ONLY,
   ),
   "recon-escalate": subagent(

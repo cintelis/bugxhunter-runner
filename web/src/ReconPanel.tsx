@@ -11,8 +11,11 @@ import { useEffect, useState } from "react";
 import { reconMemoryForget, reconMemoryGet, reconSessionForget, reconSessionGet, reconSessionPair } from "./agentApi";
 import { Dialog } from "./Dialog";
 import { formatTokens } from "./format";
-import { chainPassNote, keptNote, memoryNote, memorySummary, pathsUsing, progressLabel, sessionNote, sessionSummary, splitPaths, stoppedAt } from "./reconView";
-import type { ReconChain, ReconEnv, ReconFinding, ReconMemoryTarget, ReconPairing, ReconSessionInfo, ReconState } from "../../shared/agent";
+import {
+  chainPassNote, keptNote, memoryNote, memorySummary, pathsUsing, progressLabel, RETEST_LABEL, retestStopReason, retestSummary,
+  sessionNote, sessionSummary, splitPaths, stoppedAt,
+} from "./reconView";
+import type { ReconChain, ReconEnv, ReconFinding, ReconMemoryTarget, ReconPairing, ReconRetest, ReconSessionInfo, ReconState } from "../../shared/agent";
 
 export interface ReconRequest {
   scope: string;
@@ -24,6 +27,8 @@ export interface ReconRequest {
   useMemory: boolean;
   /** Whether to give the run the logged-in session captured for this target. */
   useSession: boolean;
+  /** "retest": re-check what is remembered about the target instead of exploring it. */
+  mode?: "retest";
 }
 
 const STOP_REASON: Record<NonNullable<ReconState["stopped"]>, string> = {
@@ -47,6 +52,7 @@ export function ReconDialog({ onStart, onClose }: { onStart: (r: ReconRequest) =
   const [chain, setChain] = useState(true);
   const [memory, setMemory] = useState<ReconMemoryTarget | null>(null);
   const [useMemory, setUseMemory] = useState(true);
+  const [retest, setRetest] = useState(false);
   const [session, setSession] = useState<ReconSessionInfo | null>(null);
   const [useSession, setUseSession] = useState(true);
   const [pairing, setPairing] = useState<ReconPairing | null>(null);
@@ -116,6 +122,7 @@ export function ReconDialog({ onStart, onClose }: { onStart: (r: ReconRequest) =
         chainPass: { enabled: chain },
         useMemory: Boolean(memory) && useMemory,
         useSession: Boolean(session) && useSession,
+        ...(retest && memory?.findings ? { mode: "retest" as const } : {}),
       });
       onClose();
     } catch (e) {
@@ -197,6 +204,15 @@ export function ReconDialog({ onStart, onClose }: { onStart: (r: ReconRequest) =
           </span>
         </label>
       )}
+      {memory && memory.findings > 0 && (
+        <label className="recon-consent recon-option">
+          <input type="checkbox" checked={retest} onChange={(e) => setRetest(e.target.checked)} />
+          <span>
+            Retest only: re-check the {memory.findings} remembered finding{memory.findings === 1 ? "" : "s"} and say which
+            still reproduce and which are fixed. Nothing new is explored, and no attack paths are looked for.
+          </span>
+        </label>
+      )}
       <label className="recon-consent recon-option">
         <input type="checkbox" checked={chain} onChange={(e) => setChain(e.target.checked)} />
         <span>
@@ -234,7 +250,7 @@ export function ReconStrip({ recon, onStop, onDismiss }: { recon: ReconState; on
         ? <button className="btn sm danger-outline" onClick={onStop}>stop</button>
         : (
           <>
-            <span className="recon-end">ended: {recon.stopped ? STOP_REASON[recon.stopped] : "finished"}</span>
+            <span className="recon-end">ended: {retestStopReason(recon) ?? (recon.stopped ? STOP_REASON[recon.stopped] : "finished")}</span>
             <button className="link-btn" onClick={onDismiss}>dismiss</button>
           </>
         )}
@@ -248,6 +264,7 @@ export function ReconStrip({ recon, onStop, onDismiss }: { recon: ReconState; on
  * the target: shown as plain text.
  */
 export function ReconFindings({ recon }: { recon: ReconState }) {
+  if (recon.mode === "retest") return <RetestResults recon={recon} />;
   if (recon.status === "running" && !recon.findings.length) return null;
   const { demonstrated, partial } = splitPaths(recon.chains);
   const chaining = recon.status === "running" && recon.phase === "chains";
@@ -283,6 +300,41 @@ export function ReconFindings({ recon }: { recon: ReconState }) {
       )}
       {note && <div className="hint recon-note">{note}</div>}
       {kept && <div className="hint recon-note">{kept}</div>}
+    </div>
+  );
+}
+
+/** A retest run: each remembered finding with the verifier's ruling on it now. */
+function RetestResults({ recon }: { recon: ReconState }) {
+  const retests = recon.retests ?? [];
+  if (recon.status === "running" && !retests.length) return null;
+  const loggedIn = sessionNote(recon);
+  const kept = keptNote(recon);
+  return (
+    <div className="recon-findings">
+      {loggedIn && <div className="hint recon-from">{loggedIn}</div>}
+      <div className="recon-section">
+        <div className="perm-title recon-title">Retest · {retestSummary(retests)} · {recon.env.kind}</div>
+        {recon.error && <div className="hint danger">{recon.error}</div>}
+        {retests.map((r, i) => <RetestCard key={i} r={r} />)}
+      </div>
+      {kept && <div className="hint recon-note">{kept}</div>}
+    </div>
+  );
+}
+
+function RetestCard({ r }: { r: ReconRetest }) {
+  return (
+    <div className={`recon-finding recon-retest ${r.result}`}>
+      <div className="recon-finding-head">
+        <span className={`badge retest-${r.result}`}>{RETEST_LABEL[r.result]}</span>
+        <span className={`badge sev-${r.severity}`}>{r.severity}</span>
+        <span className="recon-finding-title">{r.title}</span>
+        {r.standardId && <span className="badge">{r.standardId}</span>}
+        <span className="recon-in-paths">last verified {new Date(r.lastVerified).toISOString().slice(0, 10)}</span>
+      </div>
+      {r.note && <div className="hint">{r.note}</div>}
+      {r.evidence && <pre className="recon-repro">{r.evidence}</pre>}
     </div>
   );
 }

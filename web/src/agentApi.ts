@@ -213,6 +213,8 @@ export async function reconStart(body: {
   useMemory?: boolean;
   /** Whether to give the run the logged-in session captured for this target (on unless turned off). */
   useSession?: boolean;
+  /** "retest": re-check what is remembered about the target instead of exploring it. */
+  mode?: "retest";
 }): Promise<ReconState> {
   const r = await fetch("/api/agent/recon", { method: "POST", headers: json(), body: JSON.stringify(body) });
   if (!r.ok) throw new Error((await errMsg(r)) || `Could not start recon (${r.status})`);
