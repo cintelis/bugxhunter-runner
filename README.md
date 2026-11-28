@@ -595,8 +595,11 @@ obstacle:
    pairing code and a link to download the extension (`web/public/bxh-extension`). Install it
    once: unzip, open `chrome://extensions` in Chrome or Edge, turn on Developer mode, *Load
    unpacked*.
-2. Open the target in a tab and log in. If the app sends a bearer token, press *Start watching
-   this site* in the extension first, so it sees the `Authorization` header.
+2. Open the target in a tab and log in. If the app sends a token in a header as well as
+   cookies, press *Start watching this site* in the extension first, then reload a page that
+   needs the login. It then sees the `Authorization` header and custom login headers by name
+   (`X-Auth-Token`, `X-CSRF-Token`, `X-Api-Key` and the like). A run that says it is logged
+   out with cookies alone is the sign to do this.
 3. Paste the code into the extension and press *Send session to BugXHunter*. The code works
    once, for that target, for ten minutes.
 

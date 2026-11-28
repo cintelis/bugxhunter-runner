@@ -272,7 +272,7 @@ export interface ReconState {
   /** Retest mode: one outcome per finding re-checked so far. */
   retests?: ReconRetest[];
   /** The captured logged-in session the run was given, if any (counts only, never values). */
-  session?: { capturedAt: number; cookies: number; authorization: boolean };
+  session?: { capturedAt: number; cookies: number; authorization: boolean; headers?: string[] };
   /** What earlier runs on this target had verified, when the run started from it. */
   memory?: { runs: number; findings: number; paths: number; lastRun: number };
   /**
@@ -352,6 +352,8 @@ export interface ReconSessionInfo {
   cookies: number;
   /** Whether an Authorization header was captured too. */
   authorization: boolean;
+  /** Names of the custom login headers captured (x-auth-token, x-csrf-token, …). Never their values. */
+  headers?: string[];
   /** When the first cookie with an expiry runs out (ms). Absent when every cookie is a session cookie. */
   firstExpiry?: number;
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { buildPayload, pageOrigin, runnerOrigin, sentSummary } from "../public/bxh-extension/payload.js";
+import { buildPayload, isAuthHeader, isPairingCode, pageOrigin, runnerOrigin, seenSummary, sentSummary } from "../public/bxh-extension/payload.js";
 
 const EXT = path.join(__dirname, "..", "public", "bxh-extension");
 
@@ -34,6 +34,29 @@ describe("the extension's payload", () => {
   it("says what was sent", () => {
     expect(sentSummary({ cookies: 6, authorization: true, target: "app.example.com:443" })).toBe("Sent 6 cookies and the Authorization header for app.example.com:443.");
     expect(sentSummary({ cookies: 1, authorization: false, target: "t:80" })).toBe("Sent 1 cookie for t:80.");
+    expect(sentSummary({ cookies: 2, authorization: false, headers: ["x-authenticity-token"], target: "t:443" })).toBe("Sent 2 cookies and the x-authenticity-token header for t:443.");
+    expect(sentSummary({ cookies: 2, authorization: true, headers: ["x-csrf-token"], target: "t:443" })).toBe("Sent 2 cookies, the Authorization header and the x-csrf-token header for t:443.");
+  });
+
+  it("recognises login headers by name, and nothing else", () => {
+    for (const n of ["Authorization", "X-Authenticity-Token", "x-csrf-token", "X-XSRF-TOKEN", "x-api-key", "X-Auth", "x-session-id"]) expect(isAuthHeader(n)).toBe(true);
+    for (const n of ["cookie", "user-agent", "x-requested-with", "x-forwarded-for", "accept", "token", "", undefined]) expect(isAuthHeader(n)).toBe(false);
+  });
+
+  it("sends the custom headers seen for this origin, lower-cased, and never Authorization twice", () => {
+    const seen = { origin: "https://app.example.com", value: "Bearer t", headers: { "x-authenticity-token": "jwt.a.b", "Authorization": "dup", "x-requested-with": "XMLHttpRequest", "x-empty-token": "" } };
+    const body = buildPayload("https://app.example.com", [], seen);
+    expect(body.authorization).toBe("Bearer t");
+    expect(body.headers).toEqual([{ name: "x-authenticity-token", value: "jwt.a.b" }]);
+    expect(buildPayload("https://other.example.com", [], seen)).not.toHaveProperty("headers");
+    expect(seenSummary("https://app.example.com", seen)).toContain("Authorization, x-authenticity-token");
+    expect(seenSummary("https://other.example.com", seen)).toBe("");
+  });
+
+  it("tells a pairing code from dots copied out of a hidden field", () => {
+    expect(isPairingCode("x7lYST2t1g0QMH6w2KiYA51OxulILvLS")).toBe(true);
+    expect(isPairingCode("\u2022".repeat(32))).toBe(false);
+    expect(isPairingCode("short")).toBe(false);
   });
 });
 

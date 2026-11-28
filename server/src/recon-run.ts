@@ -401,7 +401,7 @@ export async function startRecon(o: ReconStart): Promise<ReconState> {
     status: "running", rounds: 0, maxRounds: harness.maxRounds!, tokens: 0, budgetTokens: harness.budgetTokens!,
     gate: { allowed: 0, asked: 0, denied: 0 }, findings: [], startedAt: Date.now(),
     ...(o.retest?.length ? { mode: "retest" as const, retests: [] } : {}),
-    ...(o.session ? { session: { capturedAt: o.session.capturedAt, cookies: o.session.cookies, authorization: o.session.authorization } } : {}),
+    ...(o.session ? { session: { capturedAt: o.session.capturedAt, cookies: o.session.cookies, authorization: o.session.authorization, ...(o.session.headers?.length ? { headers: o.session.headers } : {}) } } : {}),
     ...(o.prior ? { memory: { runs: o.prior.runs, findings: o.prior.findings.length, paths: o.prior.paths.length, lastRun: o.prior.lastRun } } : {}),
   };
   const run: Run = { state, runner };

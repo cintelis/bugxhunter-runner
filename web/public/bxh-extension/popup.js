@@ -1,5 +1,5 @@
 /* global chrome */
-import { buildPayload, pageOrigin, runnerOrigin, sentSummary } from "./payload.js";
+import { buildPayload, isPairingCode, pageOrigin, runnerOrigin, seenSummary, sentSummary } from "./payload.js";
 
 const $ = (id) => document.getElementById(id);
 const status = (text, kind = "") => { $("status").textContent = text; $("status").className = kind; };
@@ -14,7 +14,8 @@ $("runner").value = saved.runner ?? "http://localhost:8790";
 
 const { watching, seen } = await chrome.storage.session.get(["watching", "seen"]);
 if (origin && watching?.origin === origin) {
-  status(seen?.origin === origin ? "Watching: an Authorization header was seen. Send when you are logged in." : "Watching this site. Log in, then send.");
+  const got = seenSummary(origin, seen);
+  status(got ? `Watching (${got}). Send when you are logged in.` : "Watching this site: nothing seen yet. Reload a page that needs the login, then open this again.");
 }
 
 // permissions.request must be the first thing a click does, or the browser refuses it.
@@ -26,7 +27,7 @@ $("watch").addEventListener("click", async () => {
     if (!(await allow([origin]))) return status("Access to this site was not allowed, so it cannot be watched.", "bad");
     await chrome.storage.session.set({ watching: { origin, since: Date.now() } });
     await chrome.storage.session.remove("seen");
-    status("Watching this site for 15 minutes. Log in and open a page that needs the login, then send.");
+    status("Watching this site for 15 minutes. Log in, or reload a page that needs the login, then open this again and send.");
   } catch (e) {
     status(`Could not start watching: ${e.message}.${CLOSED}`, "bad");
   }
@@ -37,6 +38,7 @@ $("send").addEventListener("click", async () => {
   const code = $("code").value.trim();
   if (!runner) return status("Enter the runner's address, for example http://localhost:8790.", "bad");
   if (!code) return status("Paste the pairing code from BugXHunter's recon dialog.", "bad");
+  if (!isPairingCode(code)) return status("That is not a pairing code. Copy the code itself from BugXHunter's recon dialog (32 letters and digits) and paste it here.", "bad");
   try {
     if (!(await allow([origin, runner]))) return status("Access was not allowed, so nothing was sent.", "bad");
     $("send").disabled = true;

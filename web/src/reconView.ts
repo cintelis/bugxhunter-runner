@@ -71,9 +71,14 @@ export function memorySummary(m: Pick<ReconMemoryTarget, "runs" | "findings" | "
 const minute = (ms: number) => new Date(ms).toISOString().slice(0, 16).replace("T", " ") + " UTC";
 
 /** A captured session in a few words: "captured 2026-11-28 09:10 UTC: 6 cookies and the Authorization header". */
-export function sessionSummary(s: Pick<ReconSessionInfo, "capturedAt" | "cookies" | "authorization" | "firstExpiry">, now = Date.now()): string {
-  const parts = [count(s.cookies, "cookie")];
-  if (s.authorization) parts.push("the Authorization header");
+/** What a session holds, in words: "6 cookies, the Authorization header and the x-csrf-token header". */
+function sessionParts(s: { cookies: number; authorization: boolean; headers?: readonly string[] }): string {
+  const parts = [count(s.cookies, "cookie"), ...(s.authorization ? ["the Authorization header"] : []), ...(s.headers ?? []).map((h) => `the ${h} header`)];
+  return parts.length > 2 ? `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}` : parts.join(" and ");
+}
+
+export function sessionSummary(s: Pick<ReconSessionInfo, "capturedAt" | "cookies" | "authorization" | "headers" | "firstExpiry">, now = Date.now()): string {
+  const parts = [sessionParts(s)];
   const expiry = s.firstExpiry === undefined ? "" : s.firstExpiry <= now ? "; a cookie has expired, capture it again" : `; first cookie expires ${minute(s.firstExpiry)}`;
   return `captured ${minute(s.capturedAt)}: ${parts.join(" and ")}${expiry}`;
 }
@@ -81,9 +86,7 @@ export function sessionSummary(s: Pick<ReconSessionInfo, "capturedAt" | "cookies
 /** One line when the run was given a logged-in session. */
 export function sessionNote(r: Pick<ReconState, "session">): string | null {
   if (!r.session) return null;
-  const parts = [count(r.session.cookies, "cookie")];
-  if (r.session.authorization) parts.push("the Authorization header");
-  return `Tested with a logged-in session (${parts.join(" and ")}, captured ${minute(r.session.capturedAt)}).`;
+  return `Tested with a logged-in session (${sessionParts(r.session)}, captured ${minute(r.session.capturedAt)}).`;
 }
 
 /** One line when the run started from what earlier runs verified. */
