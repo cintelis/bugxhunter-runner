@@ -329,6 +329,7 @@ export function ReconFindings({ recon }: { recon: ReconState }) {
           {partial.map((c, i) => <ChainCard key={c.id ?? i} c={c} />)}
         </div>
       )}
+      <KnownList recon={recon} />
       <LeadList recon={recon} />
       {note && <div className="hint recon-note">{note}</div>}
       {kept && <div className="hint recon-note">{kept}</div>}
@@ -372,6 +373,32 @@ function LeadList({ recon }: { recon: ReconState }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/** What public databases list for the versions the run fingerprinted: leads to test, not findings. */
+function KnownList({ recon }: { recon: ReconState }) {
+  const components = recon.components ?? [];
+  if (!components.length) return null;
+  const known = recon.known ?? [];
+  return (
+    <div className="recon-section">
+      <div className="perm-title recon-title recon-title-lead">Known vulnerabilities · {known.length} listed for {components.length} fingerprinted {components.length === 1 ? "component" : "components"}</div>
+      <div className="hint">
+        Looked up during the run in OSV and NVD for: {components.map((c) => `${c.name} ${c.version}`).join(", ")}. A listing is about the version, not this target: it is a lead until a finding shows it applies.
+        {recon.uncheckedComponents?.length ? ` Could not be checked: ${recon.uncheckedComponents.join(", ")}.` : ""}
+      </div>
+      {known.length > 0 && (
+        <ul className="recon-leads">
+          {known.map((v) => (
+            <li key={`${v.id}:${v.component}`}>
+              <span className="badge recon-id">{v.id}</span> <span className={"badge sev-" + (v.severity ?? "none")}>{v.severity ?? "n/a"}</span>{" "}
+              {v.component} {v.version}{v.published ? ` · ${v.published}` : ""} · {v.summary}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

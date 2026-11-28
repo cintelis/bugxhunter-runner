@@ -64,6 +64,7 @@ services:
       # default recon-balanced with an Anthropic key, recon-open without) and optional
       # per-role models. The agent gets the same per-role values (below).
       RECON_PROFILE: ${RECON_PROFILE:-}
+      RECON_CVE_LOOKUP: ${RECON_CVE_LOOKUP:-}
       RECON_EXECUTOR_MODEL: ${RECON_EXECUTOR_MODEL:-}
       RECON_TRIAGE_MODEL: ${RECON_TRIAGE_MODEL:-}
       RECON_VERIFY_MODEL: ${RECON_VERIFY_MODEL:-}

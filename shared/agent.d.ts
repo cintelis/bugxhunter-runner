@@ -267,6 +267,11 @@ export interface ReconState {
   finishedAt?: number;
   /** What the executor noticed along the way and has not followed (open), and what came of the ones it has (closed). */
   leads?: ReconLead[];
+  /** Components the executor fingerprinted, and what OSV and NVD list for those versions (looked up during the run). */
+  components?: ReconComponent[];
+  known?: ReconKnownVuln[];
+  /** Components a database could not be asked about. */
+  uncheckedComponents?: string[];
   /** "retest": the run re-checked findings of earlier runs instead of exploring. Absent for a normal run. */
   mode?: "retest";
   /** Retest mode: one outcome per finding re-checked so far. */
@@ -318,6 +323,30 @@ export interface ReconBatchState {
 /** An approval a batch's worker is waiting on, with the target it is for. */
 export interface ReconBatchApproval extends PermissionRequest {
   target: string;
+}
+
+/** A component the executor identified on the target, with its version (server/src/recon-cve.ts). */
+export interface ReconComponent {
+  name: string;
+  version: string;
+  /** The package ecosystem, when the executor named one (npm, PyPI, Packagist, …). */
+  ecosystem?: string;
+}
+
+/**
+ * A vulnerability a public database lists for a fingerprinted component's version. It is
+ * about the version, not the target: a lead to test, never a finding by itself.
+ */
+export interface ReconKnownVuln {
+  /** The CVE id when there is one, else the database's own id (a GHSA id, for example). */
+  id: string;
+  component: string;
+  version: string;
+  source: "osv" | "nvd";
+  severity?: "low" | "medium" | "high" | "critical";
+  summary: string;
+  /** The day it was published (YYYY-MM-DD). */
+  published?: string;
 }
 
 /** Something the executor noticed and did not get to at once (server/src/recon.ts). */
