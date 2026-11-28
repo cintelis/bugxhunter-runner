@@ -779,25 +779,6 @@ export interface ReconRetest {
   proof?: "quoted" | "unmatched" | "unquoted";
 }
 
-/**
- * The outcome of re-checking one finding an earlier run verified. The verifier rules;
- * the code keeps "fixed" and "still-reproducible" only when the ruling carries evidence.
- */
-export interface ReconRetest {
-  title: string;
-  severity: ReconFinding["severity"];
-  standardId?: string;
-  result: "still-reproducible" | "fixed" | "cannot-confirm";
-  /** The request or command and the response now. */
-  evidence?: string;
-  /** One line on why. */
-  note?: string;
-  /** When the finding was last verified before this retest (ms). */
-  lastVerified: number;
-  /** How the ruling's quotes fared against this run's real output. */
-  proof?: "quoted" | "unmatched" | "unquoted";
-}
-
 /** One step of an attack path: what was done, and the request and response that show it. */
 export interface ReconChainStep {
   action: string;
