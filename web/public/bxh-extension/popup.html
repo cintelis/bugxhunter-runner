@@ -13,9 +13,9 @@
   <label for="code">Pairing code (from the recon dialog)</label>
   <input id="code" type="password" spellcheck="false" autocomplete="off">
   <ol>
-    <li><button id="watch" type="button">Start watching this site</button> Needed if the app sends a token in a header as well as cookies (Authorization, or a custom one such as X-Auth-Token). If a run says it is logged out, do this and send again.</li>
-    <li>Log in here, 2FA included, and open or reload a page that needs the login.</li>
-    <li><button id="send" type="button" class="primary">Send session to BugXHunter</button></li>
+    <li>Log in here, 2FA included, and open a page that needs the login.</li>
+    <li><button id="send" type="button" class="primary">Send session to BugXHunter</button> Reloads this tab once, to see the login headers the app sends (Authorization, or a custom one such as X-Auth-Token), then sends them with the cookies.</li>
+    <li><button id="watch" type="button">Start watching this site</button> Only if the app sends its token on a step a reload does not repeat: press this, do that step, then send.</li>
   </ol>
   <p id="status" role="status"></p>
   <p class="fine">Sends this site's cookies, and the login headers seen while watching, to the runner address above and nowhere else. Use a test account, on a target you are authorised to test.</p>

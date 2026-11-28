@@ -310,7 +310,7 @@ const FILTERS: Record<string, FilterSpec> = {
   rg: { // no --pre, -f, -g, -z, -L
     short: "iSsvcnNowxFPqa", shortVal: "emABC", operands: 1, patternFlags: ["-e", "--regexp"],
     long: ["--ignore-case", "--smart-case", "--case-sensitive", "--invert-match", "--count", "--line-number", "--no-line-number",
-      "--only-matching", "--word-regexp", "--line-regexp", "--fixed-strings", "--pcre2", "--quiet", "--text", ...COLOR],
+      "--no-filename", "--only-matching", "--word-regexp", "--line-regexp", "--fixed-strings", "--pcre2", "--quiet", "--text", ...COLOR],
     longVal: ["--regexp", "--max-count", "--after-context", "--before-context", "--context"],
   },
   head: HEAD,
@@ -378,11 +378,17 @@ export function classifyCommand(command: string, ctx: GateContext = {}): "allow"
   // Reject them all: the allowed subset then runs identically via argv or a shell.
   // (`|` is handled by splitting into stages; `||` leaves an empty stage -> ask.)
   // The one exception is a query string, the commonest thing a read carries: see queryCharsMasked.
-  if (/[\r\n\\$`;&<>(){}[\]*?!~]/.test(queryCharsMasked(command))) return "ask";
-  if (command.includes("||")) return "ask";
+  if (/[\r\n\\$`;&<>(){}[\]*?!~^]/.test(queryCharsMasked(command))) return "ask"; // ^ is cmd.exe's escape: `^"` there is a literal quote
+  // Printable ASCII, space and tab only: a shell splits words on space and tab, and anything
+  // else that looks like a space (a form feed, a no-break space) would be one word to it and two here.
+  if (/[^\x20-\x7e\t]/.test(command)) return "ask";
+  // cmd.exe expands %NAME% even inside double quotes. A % is allowed only as URL encoding.
+  if (/%(?![0-9A-Fa-f]{2})/.test(command)) return "ask";
 
-  const stages = command.split("|").map((s) => s.trim()).filter(Boolean);
-  if (!stages.length) return "ask";
+  const split = splitStages(command);
+  if (!split) return "ask";
+  const stages = split.map((s) => s.trim());
+  if (!stages.length || stages.some((s) => !s)) return "ask"; // an empty stage: `a || b`, a leading or trailing pipe
   for (let i = 0; i < stages.length; i++) {
     const argv = tokenize(stages[i]);
     if (!argv || !argv.length) return "ask";
@@ -403,13 +409,55 @@ export function classifyCommand(command: string, ctx: GateContext = {}): "allow"
  */
 function queryCharsMasked(command: string): string {
   let out = "", q: '"' | "'" | null = null;
-  for (const c of command) {
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
     if (q) {
       if (c === q) q = null;
-      else if (c === "?" || (c === "&" && q === '"')) { out += "_"; continue; }
+      else if (c === "?" || (q === '"' && DQ_LITERAL.includes(c))) { out += "_"; continue; }
+      else if (q === '"' && c === "\\" && i + 1 < command.length && !'"\\$`\r\n'.includes(command[i + 1])) {
+        // `\.` or `\d` in a pattern: inside double quotes a backslash before any other character
+        // is two literal characters to a POSIX shell and to cmd.exe alike. Before a quote, another
+        // backslash, `$` or a backtick it would change what the shell reads, so that still asks.
+        out += "__"; i++; continue;
+      }
     } else if (c === '"' || c === "'") q = c;
     out += c;
   }
+  return out;
+}
+
+/**
+ * Characters a shell reads as plain text inside DOUBLE quotes, in a POSIX shell and in
+ * cmd.exe both: what a search pattern is made of (`"<script[^>]*>"`, `"a|b"`, `"x{2,5}"`).
+ * Not `$`, a backtick or `!`, which a shell expands inside double quotes too. Single
+ * quotes get none of this: cmd.exe does not treat `'` as a quote.
+ */
+const DQ_LITERAL = "&<>(){}[]*|;~^";
+
+/**
+ * Split a command into its pipe stages, reading quotes as the shell does: a `|` inside
+ * double quotes is part of a pattern, not a pipe. Inside single quotes it would be a pipe
+ * to cmd.exe and text to a POSIX shell, so that is refused (null), as unbalanced quotes are.
+ */
+function splitStages(command: string): string[] | null {
+  const out: string[] = [];
+  let cur = "", q: '"' | "'" | null = null;
+  for (const c of command) {
+    if (q) {
+      if (c === q) q = null;
+      else if (c === "|" && q === "'") return null;
+      // A double quote inside single quotes is text to a POSIX shell and opens a quote in
+      // cmd.exe: from there on the two would disagree about what is quoted. Refused.
+      else if (c === '"' && q === "'") return null;
+      // Nor does cmd.exe keep a single-quoted string together: a space inside one would
+      // split it into several arguments there (a second URL, a flag, a file to read).
+      else if (q === "'" && /\s/.test(c)) return null;
+    } else if (c === '"' || c === "'") q = c;
+    else if (c === "|") { out.push(cur); cur = ""; continue; }
+    cur += c;
+  }
+  if (q) return null;
+  out.push(cur);
   return out;
 }
 
@@ -434,11 +482,38 @@ function stageAllow(argv: string[], isFirst: boolean, ctx: GateContext): "allow"
   const args = argv.slice(1);
   if (bin === "curl") return isFirst ? curlAllow(args, ctx) : "ask"; // a fetch is a source, never downstream
   if (bin === "nmap") return isFirst ? nmapAllow(args, ctx) : "ask";
-  // Filters auto-allow ONLY downstream of a source (reading piped stdin), never as
-  // a first stage (which would read a file) — so file reads are never auto-allowed.
-  if (Object.hasOwn(FILTERS, bin)) return isFirst ? "ask" : filterAllow(bin, args);
+  // Filters auto-allow downstream of a source (reading piped stdin). As a first stage a
+  // filter reads a file, and the one file that is allowed is a saved tool output.
+  if (Object.hasOwn(FILTERS, bin)) return isFirst ? savedOutputAllow(bin, args) : filterAllow(bin, args);
   return "ask";
 }
+
+/**
+ * Where OpenCode keeps a tool output that was too long to show whole: it tells the agent
+ * the file's path and the agent searches it. The name is `tool_` and a random id, in a
+ * folder named tool-output under OpenCode's data folder.
+ */
+const SAVED_OUTPUT = /^(?:\/[A-Za-z0-9._-]+)+\/\.local\/share\/opencode\/tool-output\/tool_[A-Za-z0-9]{8,64}$/;
+
+/** Is `arg` the path of a saved tool output, written out in full (no `..`, no `~`, no variable)? */
+export function isSavedOutput(arg: string): boolean {
+  return SAVED_OUTPUT.test(arg) && !arg.includes("/../") && !arg.includes("/./");
+}
+
+/**
+ * A read filter as the FIRST stage: allowed only to search one saved tool output, named as
+ * the last argument, with the filter's usual flag allowlist for everything before it. What
+ * is in that file is the output of a command this agent (or another on the same runner)
+ * already ran, so reading it sends nothing anywhere. Any other file still asks.
+ */
+function savedOutputAllow(bin: string, args: string[]): "allow" | "ask" {
+  if (!SAVED_READERS.has(bin) || args.length < 1) return "ask";
+  const file = args[args.length - 1];
+  if (!isSavedOutput(file)) return "ask";
+  return filterAllow(bin, args.slice(0, -1));
+}
+/** The filters that take a file to read as their last operand. `tr` and `column` read stdin only. */
+const SAVED_READERS = new Set(["grep", "egrep", "fgrep", "rg", "head", "tail", "cut", "sort", "uniq", "wc", "jq"]);
 
 /** curl is safe only as a GET/HEAD to exactly the in-scope origin, via a positive
  *  flag allowlist (unknown flag -> ask), no redirects, no file read/write. */
@@ -449,6 +524,9 @@ function curlAllow(args: string[], ctx: GateContext): "allow" | "ask" {
     || (ctx.cookieFile && a === `--cookie=${ctx.cookieFile}`) || (ctx.headerFile && a === `--header=@${ctx.headerFile}`));
   if (usesSession && args.some((a) => a === "--verbose" || (/^-[A-Za-z0-9#]+$/.test(a) && a.includes("v")))) return "ask";
   let url = false;
+  // A header that renames the host would reach another site behind the same address.
+  const hostHeader = (v: string) => /^\s*host\s*:/i.test(v);
+  const tooManyRetries = (v: string) => !/^[0-3]$/.test(v);
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "-X" || a === "--request") {
@@ -465,6 +543,8 @@ function curlAllow(args: string[], ctx: GateContext): "allow" | "ask" {
         if (v === undefined) return "ask";
         if (flag === "--header" && v.startsWith("@") && !isSessionFile(v.slice(1), ctx.headerFile)) return "ask"; // @file read
         if (flag === "--cookie" && !v.includes("=") && !isSessionFile(v, ctx.cookieFile)) return "ask";  // no "=" -> curl reads it as a cookie FILE
+        if (flag === "--header" && hostHeader(v)) return "ask";
+        if (flag === "--retry" && tooManyRetries(v)) return "ask";
         continue;
       }
       return "ask";
@@ -476,6 +556,8 @@ function curlAllow(args: string[], ctx: GateContext): "allow" | "ask" {
         if (v === undefined) return "ask";
         if (a === "-H" && v.startsWith("@") && !isSessionFile(v.slice(1), ctx.headerFile)) return "ask";
         if (a === "-b" && !v.includes("=") && !isSessionFile(v, ctx.cookieFile)) return "ask"; // no "=" -> a cookie FILE
+        if (a === "-H" && hostHeader(v)) return "ask";
+        if (a === "--retry" && tooManyRetries(v)) return "ask";
         continue;
       }
       // a cluster of safe no-value single flags, e.g. -sS, -sI
@@ -483,6 +565,11 @@ function curlAllow(args: string[], ctx: GateContext): "allow" | "ask" {
       return "ask";
     }
     if (!okUrl(a, ctx)) return "ask";
+    // curl expands {a,b} and [1-100] in a URL into many requests. Quoted, the shell leaves them to it.
+    if (/[{}[\]]/.test(a)) return "ask";
+    // A backslash or an @ is where URL parsers have disagreed about which host is meant.
+    if (/[\\@]/.test(a)) return "ask";
+    if (url) return "ask"; // one request per command
     url = true;
   }
   return url ? "allow" : "ask";
@@ -862,6 +949,14 @@ type Rule = "allow" | "ask" | "deny";
  * webfetch or websearch: they read untrusted target output.
  */
 const READ_ONLY: Record<string, Rule> = { bash: "deny", edit: "deny", task: "deny", webfetch: "deny", websearch: "deny" };
+/**
+ * The verifier: as the reviewers, except that its shell asks. The gate answers for it as
+ * it does for the executor (the runner applies the gate to a subagent's requests too), so
+ * it can send the candidate's own read-only request again and see the response itself.
+ * Anything else it tries waits for the person. It cannot edit, delegate or reach the web.
+ */
+const VERIFIER: Record<string, Rule> = { ...READ_ONLY, bash: "ask" };
+const REPRODUCE_RULE = "You have a shell for one purpose: to see the evidence yourself. Before you rule, send the candidate's own request again when it is a read (one plain curl to the in-scope target with the URL in double quotes, one request per command; a GET or HEAD runs at once, anything else waits for a person), and rule on the response you got, quoting from it. If the request changes state, needs something you were not given, or is declined, do not send it and do not rewrite it into something else: rule on the response you were shown and say that you did not reproduce it. Send nothing that is not in the candidate, and do not explore.";
 
 /** The executor: every shell command asks (the gate answers), file edits only in a "full" harness. */
 function executorPermission(): Record<string, Rule> {
@@ -900,8 +995,8 @@ export const reconAgents = () => ({
   "recon-verify": subagent(
     modelFor("verify"),
     "Adversarially verifies one candidate finding, one attack path that builds on findings, or one retest of an earlier finding, against the declared environment and the standards catalogue, assigns severity, and flags config-dependent findings before they are promoted.",
-    "You VERIFY one candidate finding. Reject it unless there is concrete reproduction evidence (the request/command and the response that proves it). Assign severity with the project's rubric and cite the matching OWASP/API/WSTG id. CRITICAL: compare the finding against the declared environment fidelity — if it depends on a setting that differs from production (an auth flag off, a debug mode on, seed data), mark it config-dependent and say exactly what to re-test against production. Output exactly one fenced json block and nothing after it: {\"title\": \"short name of the finding\", \"verdict\": \"real\" | \"config-dependent\" | \"rejected\", \"severity\": \"low\" | \"medium\" | \"high\" | \"critical\", \"standard_id\": \"e.g. API1:2023\", \"repro\": \"the request or command and the response that proves it\", \"quotes\": [\"one to three short excerpts of the response that prove it, copied character for character\"], \"prod_caveat\": \"what to re-test against production, or an empty string\"}. The quotes are checked by the program against what the commands of this run really returned, so copy them exactly from the response you were shown, never from memory or from a summary, and give an empty list if you were not shown the response itself. When you are handed an ATTACK PATH (several steps that build on findings named F1, F2 and so on) instead of one finding, rule on the path as a whole. Reject it unless every step has its own request or command and response, and the evidence shows that what one step returned was used in the next: steps that each work but do not connect are not a path. A path that stops at a step that could not be shown is partial, never demonstrated. Rate severity on what the attacker ends up with, and apply the same environment check. For a path, output the block in this form instead: {\"kind\": \"chain\", \"title\": \"short name of the path\", \"verdict\": \"real\" | \"config-dependent\" | \"rejected\", \"severity\": \"low\" | \"medium\" | \"high\" | \"critical\", \"standard_id\": \"e.g. API1:2023\", \"impact\": \"what the attacker ends up with\", \"links\": [\"F1\", \"F3\"], \"steps\": [{\"action\": \"what was done\", \"evidence\": \"the request or command and the response\"}], \"status\": \"demonstrated\" | \"partial\", \"blocked_at\": the number of the step it stopped at, or null, \"blocked_why\": \"why it stopped, or an empty string\", \"prod_caveat\": \"what to re-test against production, or an empty string\"}. When you are handed a RETEST (a finding an earlier run verified, with what the same request returns now), rule on whether it still holds, and on nothing else. It is \"still-reproducible\" only if the response now proves the weakness as it did then. It is \"fixed\" only if the same request now gets a response that shows the weakness is gone (a refusal, a corrected value): an error, a timeout, a missing page or a logged-out answer is not a fix. Anything else is \"cannot-confirm\". For a retest, output the block in this form instead: {\"kind\": \"retest\", \"title\": \"the finding's title as given\", \"result\": \"still-reproducible\" | \"fixed\" | \"cannot-confirm\", \"evidence\": \"the request or command and the response now\", \"quotes\": [\"one to three short excerpts of the response now, copied character for character\"], \"note\": \"one line on why\"}.",
-    READ_ONLY,
+    "You VERIFY one candidate finding. Reject it unless there is concrete reproduction evidence (the request/command and the response that proves it). " + REPRODUCE_RULE + " Assign severity with the project's rubric and cite the matching OWASP/API/WSTG id. CRITICAL: compare the finding against the declared environment fidelity — if it depends on a setting that differs from production (an auth flag off, a debug mode on, seed data), mark it config-dependent and say exactly what to re-test against production. Output exactly one fenced json block and nothing after it: {\"title\": \"short name of the finding\", \"verdict\": \"real\" | \"config-dependent\" | \"rejected\", \"severity\": \"low\" | \"medium\" | \"high\" | \"critical\", \"standard_id\": \"e.g. API1:2023\", \"repro\": \"the request or command and the response that proves it\", \"quotes\": [\"one to three short excerpts of the response that prove it, copied character for character\"], \"prod_caveat\": \"what to re-test against production, or an empty string\"}. The quotes are checked by the program against what the commands of this run really returned, so copy them exactly from the response you were shown, never from memory or from a summary, and give an empty list if you neither got nor were shown the response itself. When you are handed an ATTACK PATH (several steps that build on findings named F1, F2 and so on) instead of one finding, rule on the path as a whole. Reject it unless every step has its own request or command and response, and the evidence shows that what one step returned was used in the next: steps that each work but do not connect are not a path. A path that stops at a step that could not be shown is partial, never demonstrated. Rate severity on what the attacker ends up with, and apply the same environment check. For a path, output the block in this form instead: {\"kind\": \"chain\", \"title\": \"short name of the path\", \"verdict\": \"real\" | \"config-dependent\" | \"rejected\", \"severity\": \"low\" | \"medium\" | \"high\" | \"critical\", \"standard_id\": \"e.g. API1:2023\", \"impact\": \"what the attacker ends up with\", \"links\": [\"F1\", \"F3\"], \"steps\": [{\"action\": \"what was done\", \"evidence\": \"the request or command and the response\"}], \"status\": \"demonstrated\" | \"partial\", \"blocked_at\": the number of the step it stopped at, or null, \"blocked_why\": \"why it stopped, or an empty string\", \"prod_caveat\": \"what to re-test against production, or an empty string\"}. When you are handed a RETEST (a finding an earlier run verified, with what the same request returns now), rule on whether it still holds, and on nothing else. It is \"still-reproducible\" only if the response now proves the weakness as it did then. It is \"fixed\" only if the same request now gets a response that shows the weakness is gone (a refusal, a corrected value): an error, a timeout, a missing page or a logged-out answer is not a fix. Anything else is \"cannot-confirm\". For a retest, output the block in this form instead: {\"kind\": \"retest\", \"title\": \"the finding's title as given\", \"result\": \"still-reproducible\" | \"fixed\" | \"cannot-confirm\", \"evidence\": \"the request or command and the response now\", \"quotes\": [\"one to three short excerpts of the response now, copied character for character\"], \"note\": \"one line on why\"}.",
+    VERIFIER,
   ),
   "recon-escalate": subagent(
     modelFor("escalate"),

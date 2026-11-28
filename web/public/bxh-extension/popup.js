@@ -4,6 +4,19 @@ import { buildPayload, isPairingCode, pageOrigin, runnerOrigin, seenSummary, sen
 const $ = (id) => document.getElementById(id);
 const status = (text, kind = "") => { $("status").textContent = text; $("status").className = kind; };
 
+/**
+ * Wait for the reloaded page to make its requests: until a login header has been seen and a
+ * moment more for the rest, or `limit` ms when the app sends none (cookies are then all there is).
+ */
+async function waitForHeaders(origin, limit = 7000) {
+  const until = Date.now() + limit;
+  while (Date.now() < until) {
+    await new Promise((r) => setTimeout(r, 400));
+    const { seen } = await chrome.storage.session.get("seen");
+    if (seen?.origin === origin) { await new Promise((r) => setTimeout(r, 1200)); return; }
+  }
+}
+
 const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 const origin = pageOrigin(tab?.url ?? "");
 $("site").textContent = origin ?? "Open the target's page in this tab first.";
@@ -43,6 +56,16 @@ $("send").addEventListener("click", async () => {
     if (!(await allow([origin, runner]))) return status("Access was not allowed, so nothing was sent.", "bad");
     $("send").disabled = true;
     await chrome.storage.local.set({ runner });
+    // Not watching yet: watch now and reload the tab once, so the headers the app sends with
+    // a logged-in request are seen without a separate step that is easy to miss.
+    const now = await chrome.storage.session.get(["watching", "seen"]);
+    if (!(now.watching?.origin === origin && now.seen?.origin === origin)) {
+      await chrome.storage.session.set({ watching: { origin, since: Date.now() } });
+      if (now.seen?.origin !== origin) await chrome.storage.session.remove("seen");
+      status("Reloading this tab once to see the login headers the app sends…");
+      await chrome.tabs.reload(tab.id);
+      await waitForHeaders(origin);
+    }
     const cookies = await chrome.cookies.getAll({ url: tab.url });
     const { seen: header } = await chrome.storage.session.get("seen");
     const r = await fetch(`${runner}/api/capture/session`, {
