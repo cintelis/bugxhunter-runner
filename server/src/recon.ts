@@ -377,7 +377,8 @@ export function classifyCommand(command: string, ctx: GateContext = {}): "allow"
   // Shell metacharacters make a string's effect shell-dependent and unpredictable.
   // Reject them all: the allowed subset then runs identically via argv or a shell.
   // (`|` is handled by splitting into stages; `||` leaves an empty stage -> ask.)
-  if (/[\r\n\\$`;&<>(){}[\]*?!~]/.test(command)) return "ask";
+  // The one exception is a query string, the commonest thing a read carries: see queryCharsMasked.
+  if (/[\r\n\\$`;&<>(){}[\]*?!~]/.test(queryCharsMasked(command))) return "ask";
   if (command.includes("||")) return "ask";
 
   const stages = command.split("|").map((s) => s.trim()).filter(Boolean);
@@ -388,6 +389,28 @@ export function classifyCommand(command: string, ctx: GateContext = {}): "allow"
     if (stageAllow(argv, i === 0, ctx) === "ask") return "ask";
   }
   return "allow";
+}
+
+/**
+ * `command` with the two characters of a query string blanked where a shell reads them as
+ * plain text, so `curl "http://target/search?q=a&page=2"` is not held up for a person:
+ *  - `?` inside quotes of either kind. Unquoted it is a glob.
+ *  - `&` inside DOUBLE quotes only. Unquoted it backgrounds or chains; inside single quotes
+ *    it is literal to a POSIX shell but not to cmd.exe, which does not treat `'` as a quote.
+ * Everything else the metacharacter test refuses stays refused inside quotes too (`$`, a
+ * backtick, a backslash, `;`, `|`, brackets). Quotes are read over the whole command, as
+ * the shell reads them, so a character blanked here is one the shell will not act on.
+ */
+function queryCharsMasked(command: string): string {
+  let out = "", q: '"' | "'" | null = null;
+  for (const c of command) {
+    if (q) {
+      if (c === q) q = null;
+      else if (c === "?" || (c === "&" && q === '"')) { out += "_"; continue; }
+    } else if (c === '"' || c === "'") q = c;
+    out += c;
+  }
+  return out;
 }
 
 /** Split a stage into argv, honouring single/double quotes. null = unbalanced (ask). */

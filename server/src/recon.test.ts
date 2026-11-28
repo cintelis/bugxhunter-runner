@@ -196,6 +196,32 @@ describe("classifyCommand — BYPASS REGRESSIONS (from the Mythos review)", () =
     allow(F + "jq -c .data.items | head -c 400");
   });
 
+  it("a quoted query string does not hold a read up, and nothing else gets through with it", () => {
+    const allow = (c: string) => expect(classifyCommand(c, S), c).toBe("allow");
+    const ask = (c: string) => expect(classifyCommand(c, S), c).toBe("ask");
+    // What a live run was asking a person to approve, one request at a time.
+    allow('curl -s -i -m 10 "http://quantum-local/search?q=shoes"');
+    allow('curl -s -i -m 10 "http://quantum-local/api/admin/export?token=dbg-7f3a91c2&page=2"');
+    allow('curl -s "http://quantum-local/search?q=%3Ci%3Ezz9%22%27%3C%2Fi%3E" | head -n 20');
+    allow("curl -s 'http://quantum-local/search?q=shoes'");
+    allow('curl -s -H "X-Test: a?b&c" "http://quantum-local/x"');
+
+    ask("curl -s http://quantum-local/search?q=shoes");                    // unquoted: a glob
+    ask("curl -s http://quantum-local/a?x=1&y=2");                         // unquoted &: backgrounds the curl
+    ask("curl -s 'http://quantum-local/a?x=1&y=2'");                       // & in single quotes is not literal to cmd.exe
+    ask('curl -s "http://quantum-local/a?x=1" & calc');                    // & after the quotes close
+    ask('curl -s "http://quantum-local/a?x=1 & calc');                     // an unclosed quote
+    ask('curl -s "http://quantum-local/?d=$(env)&x=1"');                   // substitution, quoted or not
+    ask('curl -s "http://quantum-local/?a=`id`"');
+    ask('curl -s "http://quantum-local/a?x=1"; rm -rf /tmp/x');
+    ask('curl -s "http://quantum-local/a?x=[1-9]"');                       // a curl range
+    ask('curl -s "http://quantum-local/a?x={a,b}"');
+    ask('curl -s "http://evil.example/a?x=1&y=2"');                        // the scope check is untouched
+    ask('curl -s "http://quantum-local/a?x=1&y=2" | sh');
+    ask('curl -s "http://quantum-local/a?next=|" "& calc |"');             // quotes are read over the whole command
+    ask('curl -s -X POST "http://quantum-local/a?x=1&y=2"');
+  });
+
   it("round-3: curl -b without '=' is a cookie FILE; [ ] are glob / curl-range metacharacters", () => {
     ask("curl -s -b cookiejar http://quantum-local/x");
     ask("curl -s --cookie cookiejar http://quantum-local/x");
