@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   chainPassNote, keptNote, memoryNote, memorySummary, pathsUsing, progressLabel, proofBadge, retestStopReason, retestSummary,
-  sessionNote, sessionSummary, splitPaths, stoppedAt,
+  sessionNote, sessionSummary, splitLeads, splitPaths, stoppedAt,
 } from "./reconView";
 import type { ReconChain } from "../../shared/agent";
 
@@ -131,5 +131,12 @@ describe("proofBadge", () => {
     expect(proofBadge("unmatched")!.title).toContain("did not return");
     expect(proofBadge("unquoted")).toMatchObject({ text: "no quotes", kind: "none" });
     expect(proofBadge(undefined)).toBeNull();
+  });
+});
+
+describe("splitLeads", () => {
+  it("counts what is open and what was followed or closed", () => {
+    expect(splitLeads([{ status: "open" }, { status: "closed" }, { status: "open" }])).toEqual({ open: 2, closed: 1 });
+    expect(splitLeads(undefined)).toEqual({ open: 0, closed: 0 });
   });
 });

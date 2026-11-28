@@ -11,6 +11,13 @@ export function proofBadge(proof: "quoted" | "unmatched" | "unquoted" | undefine
   }
 }
 
+/** The leads a run still has open, and how many it closed. */
+export function splitLeads(leads: readonly { status: "open" | "closed" }[] | undefined): { open: number; closed: number } {
+  const all = leads ?? [];
+  const open = all.filter((l) => l.status === "open").length;
+  return { open, closed: all.length - open };
+}
+
 export const RETEST_LABEL: Record<ReconRetest["result"], string> = {
   "still-reproducible": "still reproducible",
   fixed: "fixed",

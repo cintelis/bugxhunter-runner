@@ -158,6 +158,12 @@ You never *lose* protection by staying in Monitor; Enforce only adds the network
     they go to the model provider. A read sent as a logged-in user can also have effects a
     logged-out one cannot (a `GET /logout`, a badly designed `GET` that changes state). Both
     are why the dialog says to use a test account.
+- **A lead is a note, and buys nothing.** The executor's `RECON-LEAD:` lines are read by the
+  program, clipped, capped (8 a turn, 40 a run) and given back to the same executor in later
+  prompts. They never become findings, never reach the verifier as evidence, and change no
+  permission: following one is an ordinary command through the gate. A page of the target
+  that prints "RECON-LEAD: …" could at most plant a note the executor then reads as its own,
+  which is the same exposure as any text of the target the executor already reads.
 - **Quotes are checked against the run's own output, not against a model's account of it.** The
   record is every `bash` tool result of the run and its subagents, taken from OpenCode's event
   stream by the runner. A model cannot write to it. It is held in memory for the run (the last

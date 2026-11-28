@@ -30,6 +30,7 @@ export const MAX_RUNS = 300;
 /** What one recall hands a new run: enough to start from, not the whole history. */
 const MAX_RECALLED_FINDINGS = 40;
 const MAX_RECALLED_PATHS = 10;
+const MAX_RECALLED_LEADS = 15;
 const MAX_PENDING = 20;
 const ID = /^[0-9]{13}-[a-f0-9]{12}$/;
 
@@ -161,8 +162,12 @@ export function recallFrom(runs: readonly ReconState[]): ReconRecall | undefined
     }
   }
   const rank = { critical: 3, high: 2, medium: 1, low: 0 } as const;
+  // Only the newest exploring run's open leads: an older run's were either followed since or are stale.
+  const lastExplored = newestFirst.find((r) => r.mode !== "retest");
+  const leads = (lastExplored?.leads ?? []).filter((l) => l.status === "open").map((l) => l.text).slice(0, MAX_RECALLED_LEADS);
   return {
     runs: runs.length,
+    ...(leads.length ? { leads } : {}),
     lastRun: newestFirst[0].finishedAt ?? newestFirst[0].startedAt,
     findings: [...findings.values()].sort((a, b) => rank[b.severity] - rank[a.severity] || b.seen - a.seen).slice(0, MAX_RECALLED_FINDINGS),
     // Demonstrated paths first: a partial one is only a lead.

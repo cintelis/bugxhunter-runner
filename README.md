@@ -463,6 +463,14 @@ Nothing is kept without a vault. If the vault is locked when a run finishes, the
 memory and is written at the next unlock; a restart before that loses it. The newest 300 runs
 are kept.
 
+**Leads.** The executor keeps a list of what it noticed and did not get to: an identifier, a
+hidden parameter, an error that leaks something. It writes a `RECON-LEAD:` line, the run numbers
+it (`L1`, `L2`, …), and each later round is given the open ones back, oldest first, to follow
+before anything new or to close with a reason. If the executor reports the surface exhausted
+while leads are open, it is sent back to them once. The panel lists the leads; they are the
+executor's notes and nothing in the list is a finding. What the newest run left open is handed
+to the next run on that target.
+
 **Evidence check.** The verifier is a model, and it only sees the executor's account of a
 response. So it must quote the response, and the runner looks each quote up in what the run's
 own shell commands really returned, which it reads from the agent's event stream and not from
